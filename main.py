@@ -7,7 +7,7 @@ import discord
 from discord import app_commands, PartialEmoji, Colour, Embed, Interaction, TextStyle
 from discord.ext import commands
 
-# ===== 환경 =====
+# ===== 환경 ====
 DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN", "") or "").strip()
 TARGET_GUILD_ID = 1419200424636055592
 DEFAULT_TTL_SECONDS = 1800
