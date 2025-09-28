@@ -1,12 +1,9 @@
 import os
-import asyncio
-from dotenv import load_dotenv
 import discord
 from discord import app_commands
 
-load_dotenv()
-TOKEN = os.getenv("TOKEN")  # 디스코드 봇 토큰
-GUILD_ID = os.getenv("GUILD_ID")  # 테스트 서버(길드) ID: 선택사항(빠른 동기화용)
+TOKEN = os.getenv("TOKEN")          # 디스코드 봇 토큰
+GUILD_ID = os.getenv("GUILD_ID")    # 테스트 서버 ID(선택, 즉시 동기화용)
 
 class MyClient(discord.Client):
     def __init__(self):
@@ -15,30 +12,32 @@ class MyClient(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        # 길드 지정하면 즉시(수 초 내) 동기화, 전역은 전파 수분 소요
-        if GUILD_ID:
-            guild = discord.Object(id=int(GUILD_ID))
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            print("길드 슬래시 명령 동기화 완료")
-        else:
-            await self.tree.sync()
-            print("전역 슬래시 명령 동기화 완료(전파에 수분 걸릴 수 있음)")
+        # hello 명령 보장
+        @self.tree.command(name="hello", description="간단 인사")
+        async def hello(interaction: discord.Interaction):
+            await interaction.response.send_message("안녕! 튜어오오오옹 ㅎㅎ")
+
+        try:
+            if GUILD_ID:
+                gid = int(GUILD_ID)
+                print(f"[sync] guild={gid}")
+                await self.tree.sync(guild=discord.Object(id=gid))
+                print("[sync] 길드 동기화 OK")
+            else:
+                print("[sync] global sync")
+                await self.tree.sync()
+                print("[sync] 전역 동기화 OK(전파 지연 가능)")
+        except Exception as e:
+            print(f"[sync][ERR] {type(e).__name__}: {e}", flush=True)
 
 client = MyClient()
 
-@client.tree.command(name="hello", description="간단한 인사하기")
-async def hello(interaction: discord.Interaction):
-    await interaction.response.send_message("안녕! 튜어오오오옹 ㅎㅎ")
-
 @client.event
 async def on_ready():
-    print(f"로그인 성공: {client.user} (ID: {client.user.id})")
-
-def main():
-    if not TOKEN:
-        raise RuntimeError("TOKEN이 .env에 없음")
-    client.run(TOKEN)
+    print(f"[ready] 로그인: {client.user} (ID: {client.user.id})")
 
 if __name__ == "__main__":
-    main()
+    if not TOKEN:
+        raise RuntimeError("TOKEN 비었음")
+    # Zeabur 로그 핸들러 충돌 방지
+    client.run(TOKEN, log_handler=None
