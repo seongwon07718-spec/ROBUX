@@ -7,7 +7,7 @@ import discord
 from discord import app_commands, PartialEmoji, Colour, Embed, Interaction, TextStyle
 from discord.ext import commands
 
-# 불필요한 음성 확장 로딩 차단(3.13 audioop 이슈 회피)
+# 음성 확장 비활성화(불필요한 audioop 이슈 차단)
 os.environ["DISCORD_NO_EXTENSIONS"] = "true"
 
 # ===== 환경 =====
@@ -18,7 +18,7 @@ DEFAULT_TTL_SECONDS = 1800
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("robux-bot-nodb")
 
-# ===== 이모지 =====
+# ===== 이모지(원래 쓰던 것 유지) =====
 E = {
     "thumbsuppp": PartialEmoji(name="thumbsuppp", id=1421336653389365289, animated=True),
     "info1": PartialEmoji(name="emoji1", id=1421336649656438906, animated=True),
@@ -44,12 +44,16 @@ COLOR_YELLOW = Colour(0xf1c40f)
 # ===== 인메모리 저장 =====
 class Store:
     def __init__(self):
-        self.config = {"panel_channel_id": None, "panel_message_id": None, "price_per_unit": 0}
+        self.config = {
+            "panel_channel_id": None,
+            "panel_message_id": None,
+            "price_per_unit": 0,
+        }
         self.stock = 0
-        self.recent_buyers = 0  # ‘구매자 : n명’ 표시용
-        self.weekly_sold = 0    # ‘이번주 총 n만큼 팔았습니다’ 표시용
+        self.recent_buyers = 0      # 구매자 수 표기
+        self.weekly_sold = 0        # 주간 판매량 표기
         self.bank = {"bank": None, "number": None, "holder": None, "expire_at": None}
-        self.logs = {"channel_id": None}
+        self.logs = {"channel_id": None, "purchase_log_enabled": False, "review_log_enabled": False}
         self.wallets: Dict[int, Dict[str, Any]] = {}
 
     def now_ts(self) -> int:
@@ -70,8 +74,8 @@ def fmt_mmss(expire_at: Optional[int]) -> str:
 
 # ===== 봇/인텐트 =====
 intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True  # DM 수량 입력 받으려면 필요
+intents.members = True             # 개발자 포털에서 SERVER MEMBERS INTENT ON
+intents.message_content = True     # MESSAGE CONTENT INTENT ON (DM 수량 받기용)
 
 class RobuxBot(commands.Bot):
     async def setup_hook(self):
@@ -95,7 +99,7 @@ bot = RobuxBot(command_prefix="!", intents=intents)
 async def on_ready():
     logger.info(f"로그인 성공: {bot.user} ({bot.user.id})")
 
-# ===== 패널 임베드(네가 준 문구 그대로) =====
+# ===== 패널 임베드(네가 준 원문 그대로) =====
 async def build_panel_embed() -> Embed:
     price = int(db.config["price_per_unit"] or 0)
     stock = db.stock
@@ -133,11 +137,21 @@ class PanelView(discord.ui.View):
             except: pass
         return True
 
-# ===== 관리자 체크 =====
+# ===== 공통 =====
 async def is_admin(inter: Interaction) -> bool:
     if not inter.user or not inter.guild: return False
     member = inter.guild.get_member(inter.user.id) or await inter.guild.fetch_member(inter.user.id)
     return member.guild_permissions.administrator
+
+async def update_panel_message(guild: discord.Guild):
+    ch_id = db.config["panel_channel_id"]; msg_id = db.config["panel_message_id"]
+    if not ch_id or not msg_id: return
+    try:
+        ch = guild.get_channel(ch_id) or await guild.fetch_channel(ch_id)
+        msg = await ch.fetch_message(msg_id)
+        await msg.edit(embed=await build_panel_embed(), view=PanelView())
+    except Exception as e:
+        logger.warning(f"패널 업데이트 실패: {e}")
 
 # ===== Cog =====
 class RobuxCog(commands.Cog):
@@ -232,8 +246,7 @@ class RobuxCog(commands.Cog):
             return
 
         order_id = f"RBX-{int(datetime.now(timezone.utc).timestamp()*1000)}"
-        # 판매량 집계(샘플): 구매 요청 들어오면 구매자 수 +1
-        db.recent_buyers += 1
+        db.recent_buyers += 1  # 구매자 수 집계(샘플)
 
         emb = Embed(
             description=(
@@ -302,47 +315,39 @@ class BuyModal(discord.ui.Modal, title="로벅스 구매"):
         except Exception:
             await interaction.followup.send("DM 전송 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.", ephemeral=True)
 
-# ===== 슬래시 명령어(표시 문구 복원) =====
-def admin_only_desc(text: str) -> str:
+# ===== 슬래시(이름/설명 원문 유지) =====
+def admin_msg(text: str) -> str:
     return f"-# {text} ( 관리자 전용 )"
 
-@bot.tree.command(name="재고설정", description="재고설정")
+@bot.tree.command(name="재고설정", description="-# 재고 설정하기 ( 관리자 전용 )")
 @app_commands.describe(수량="1 이상 정수", 방식="추가 또는 차감")
-@app_commands.choices(방식=[
-    app_commands.Choice(name="추가", value="추가"),
-    app_commands.Choice(name="차감", value="차감"),
-])
-async def cmd_stock(inter: Interaction, 수량: int, 방식: app_commands.Choice[str]):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("재고 설정하기"), ephemeral=True); return
+@app_commands.choices(방식=[app_commands.Choice(name="추가", value="추가"), app_commands.Choice(name="차감", value="차감")])
+async def 재고설정(inter: Interaction, 수량: int, 방식: app_commands.Choice[str]):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("재고 설정하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     if 수량 < 1: await inter.followup.send("수량은 1 이상 정수만 가능합니다.", ephemeral=True); return
-    try:
-        if 방식.value == "추가":
-            db.stock += 수량
-        else:
-            if db.stock < 수량: raise ValueError()
-            db.stock -= 수량
-    except ValueError:
-        await inter.followup.send("재고가 부족합니다.", ephemeral=True); return
-    await inter.followup.send(admin_only_desc("재고 설정하기"), ephemeral=True)
-    await (await inter.client.fetch_guild(inter.guild_id)).fetch_member(inter.user.id)  # no-op
-    try:
-        await inter.channel.send(embed=await build_panel_embed(), view=PanelView()) if not db.config["panel_message_id"] else None
-    except: pass
+    if 방식.value == "추가":
+        db.stock += 수량
+    else:
+        if db.stock < 수량: await inter.followup.send("재고가 부족합니다.", ephemeral=True); return
+        db.stock -= 수량
+    await inter.followup.send(admin_msg("재고 설정하기"), ephemeral=True)
+    await update_panel_message(inter.guild)
 
-@bot.tree.command(name="가격설정", description="가격설정")
+@bot.tree.command(name="가격설정", description="-# 가격 설정하기 ( 관리자 전용 )")
 @app_commands.describe(가격="정수(소수점 불가)")
-async def cmd_price(inter: Interaction, 가격: int):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("가격 설정하기"), ephemeral=True); return
+async def 가격설정(inter: Interaction, 가격: int):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("가격 설정하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     if 가격 < 0: await inter.followup.send("0 이상 정수만 가능합니다.", ephemeral=True); return
     db.config["price_per_unit"] = 가격
-    await inter.followup.send(admin_only_desc("가격 설정하기"), ephemeral=True)
+    await inter.followup.send(admin_msg("가격 설정하기"), ephemeral=True)
+    await update_panel_message(inter.guild)
 
-@bot.tree.command(name="유저조회", description="유저조회")
+@bot.tree.command(name="유저조회", description="-# 유저 조회하기 ( 관리자 전용 )")
 @app_commands.describe(유저="대상 유저")
-async def cmd_user(inter: Interaction, 유저: discord.User):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("유저 조회하기"), ephemeral=True); return
+async def 유저조회(inter: Interaction, 유저: discord.User):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("유저 조회하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     w = db.wallet(유저.id)
     emb = Embed(
@@ -356,78 +361,81 @@ async def cmd_user(inter: Interaction, 유저: discord.User):
     )
     await inter.followup.send(embed=emb, ephemeral=True)
 
-@bot.tree.command(name="잔액추가", description="잔액추가")
+@bot.tree.command(name="잔액추가", description="-# 잔액 추가하기 ( 관리자 전용 )")
 @app_commands.describe(유저="대상 유저", 금액="정수(1 이상)")
-async def cmd_add_balance(inter: Interaction, 유저: discord.User, 금액: int):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("잔액 추가하기"), ephemeral=True); return
+async def 잔액추가(inter: Interaction, 유저: discord.User, 금액: int):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("잔액 추가하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     if 금액 < 1: await inter.followup.send("1 이상 정수만 가능합니다.", ephemeral=True); return
     w = db.wallet(유저.id); w["balance"] += 금액; w["total"] += 금액
-    await inter.followup.send(admin_only_desc("잔액 추가하기"), ephemeral=True)
+    await inter.followup.send(admin_msg("잔액 추가하기"), ephemeral=True)
 
-@bot.tree.command(name="잔액차감", description="잔액차감")
+@bot.tree.command(name="잔액차감", description="-# 잔액 차감하기 ( 관리자 전용 )")
 @app_commands.describe(유저="대상 유저", 금액="정수(1 이상)")
-async def cmd_sub_balance(inter: Interaction, 유저: discord.User, 금액: int):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("잔액 차감하기"), ephemeral=True); return
+async def 잔액차감(inter: Interaction, 유저: discord.User, 금액: int):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("잔액 차감하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     w = db.wallet(유저.id)
     if 금액 < 1 or w["balance"] < 금액:
         await inter.followup.send("잔액이 부족하거나 금액이 잘못되었습니다.", ephemeral=True); return
     w["balance"] -= 금액
-    await inter.followup.send(admin_only_desc("잔액 차감하기"), ephemeral=True)
+    await inter.followup.send(admin_msg("잔액 차감하기"), ephemeral=True)
 
-@bot.tree.command(name="봇자판기", description="패널 보내기")
-async def cmd_panel(inter: Interaction):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("패널 보내기"), ephemeral=True); return
+@bot.tree.command(name="봇자판기", description="-# 패널 보내기 ( 관리자 전용 )")
+async def 봇자판기(inter: Interaction):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("패널 보내기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     msg = await inter.channel.send(embed=await build_panel_embed(), view=PanelView())
-    db.config["panel_channel_id"] = inter.channel.id; db.config["panel_message_id"] = msg.id
-    await inter.followup.send(admin_only_desc("패널 보내기"), ephemeral=True)
+    db.config["panel_channel_id"] = inter.channel.id
+    db.config["panel_message_id"] = msg.id
+    await inter.followup.send(admin_msg("패널 보내기"), ephemeral=True)
 
-@bot.tree.command(name="수익표시", description="총 수익 표시하기")
-async def cmd_revenue(inter: Interaction):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("총 수익 표시하기"), ephemeral=True); return
+@bot.tree.command(name="수익표시", description="-# 총 수익 표시하기 ( 관리자 전용 )")
+async def 수익표시(inter: Interaction):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("총 수익 표시하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
-    sold = db.weekly_sold
-    emb = Embed(description=f"이번주 총 `{sold}`만큼 팔았습니다\n-# 총 수익 표시하기 ( 관리자 전용 )", color=COLOR_GREY)
+    emb = Embed(
+        description=f"이번주 총 `{db.weekly_sold}`만큼 팔았습니다\n-# 총 수익 표시하기 ( 관리자 전용 )",
+        color=COLOR_GREY
+    )
     await inter.followup.send(embed=emb, ephemeral=True)
 
-@bot.tree.command(name="계좌수정", description="계좌수정")
+@bot.tree.command(name="계좌수정", description="-# 계좌수정 ( 관리자 전용 )")
 @app_commands.describe(은행명="은행명", 계좌번호="계좌번호", 예금주="예금주", 유효시간분="유효시간(분, 비우면 30분)")
-async def cmd_edit_account(inter: Interaction, 은행명: str, 계좌번호: str, 예금주: str, 유효시간분: Optional[int] = None):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("계좌수정"), ephemeral=True); return
+async def 계좌수정(inter: Interaction, 은행명: str, 계좌번호: str, 예금주: str, 유효시간분: Optional[int] = None):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("계좌수정"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     ttl = DEFAULT_TTL_SECONDS if not 유효시간분 or 유효시간분 <= 0 else 유효시간분 * 60
     expire = db.now_ts() + ttl
     db.bank.update({"bank": 은행명.strip(), "number": 계좌번호.strip(), "holder": 예금주.strip(), "expire_at": expire})
-    await inter.followup.send(admin_only_desc("계좌수정"), ephemeral=True)
+    await inter.followup.send(admin_msg("계좌수정"), ephemeral=True)
 
-@bot.tree.command(name="로그설정", description="로그 설정하기")
+@bot.tree.command(name="로그설정", description="-# 로그 설정하기 ( 관리자 전용 )")
 @app_commands.describe(관리자채널="로그 채널")
-async def cmd_log_setting(inter: Interaction, 관리자채널: discord.TextChannel):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("로그 설정하기"), ephemeral=True); return
+async def 로그설정(inter: Interaction, 관리자채널: discord.TextChannel):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("로그 설정하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
     db.logs["channel_id"] = 관리자채널.id
-    await inter.followup.send(admin_only_desc("로그 설정하기"), ephemeral=True)
+    await inter.followup.send(admin_msg("로그 설정하기"), ephemeral=True)
 
-@bot.tree.command(name="관리자설정", description="관리자 역할 설정하기")
+@bot.tree.command(name="관리자설정", description="-# 관리자 역할 설정하기 ( 관리자 전용 )")
 @app_commands.describe(역할="관리자 역할")
-async def cmd_admin_role(inter: Interaction, 역할: discord.Role):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("관리자 역할 설정하기"), ephemeral=True); return
+async def 관리자설정(inter: Interaction, 역할: discord.Role):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("관리자 역할 설정하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
-    # 메모: 인메모리이므로 실제 역할 저장/검증은 스킵. 필요 시 확장 가능.
-    await inter.followup.send(admin_only_desc("관리자 역할 설정하기"), ephemeral=True)
+    # 인메모리 샘플: 실제 역할 저장/검증 로직은 생략(필요 시 확장)
+    await inter.followup.send(admin_msg("관리자 역할 설정하기"), ephemeral=True)
 
-@bot.tree.command(name="결제수단", description="결제수단 설정하기")
+@bot.tree.command(name="결제수단", description="-# 결제수단 설정하기 ( 관리자 전용 )")
 @app_commands.describe(계좌="허용/거부", 코인="허용/거부", 문상="허용/거부")
 @app_commands.choices(계좌=[app_commands.Choice(name="허용", value="허용"), app_commands.Choice(name="거부", value="거부")])
 @app_commands.choices(코인=[app_commands.Choice(name="허용", value="허용"), app_commands.Choice(name="거부", value="거부")])
 @app_commands.choices(문상=[app_commands.Choice(name="허용", value="허용"), app_commands.Choice(name="거부", value="거부")])
-async def cmd_payment(inter: Interaction, 계좌: app_commands.Choice[str], 코인: app_commands.Choice[str], 문상: app_commands.Choice[str]):
-    if not await is_admin(inter): await inter.response.send_message(admin_only_desc("결제수단 설정하기"), ephemeral=True); return
+async def 결제수단(inter: Interaction, 계좌: app_commands.Choice[str], 코인: app_commands.Choice[str], 문상: app_commands.Choice[str]):
+    if not await is_admin(inter): await inter.response.send_message(admin_msg("결제수단 설정하기"), ephemeral=True); return
     await inter.response.defer(ephemeral=True, thinking=False)
-    # 인메모리 표기용이므로 저장 로직 생략 가능. 필요 시 store에 추가.
-    await inter.followup.send(admin_only_desc("결제수단 설정하기"), ephemeral=True)
+    # 필요하면 인메모리에 반영하도록 확장 가능
+    await inter.followup.send(admin_msg("결제수단 설정하기"), ephemeral=True)
 
 # ===== 실행 =====
 def main():
