@@ -1,475 +1,154 @@
-from __future__ import annotations
-import os, re, logging
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any
-
+import os
+import asyncio
 import discord
-from discord import app_commands, PartialEmoji, Colour, Embed, Interaction, TextStyle
+from discord import app_commands
 from discord.ext import commands
 
-# 음성 확장 끄기(audioop 이슈 차단)
-os.environ["DISCORD_NO_EXTENSIONS"] = "true"
+# ----- 기본 설정 -----
+INTENTS = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=INTENTS)
 
-# ===== 환경 =====
-DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN", "") or "").strip()
-TARGET_GUILD_ID = 1419200424636055592
-DEFAULT_TTL_SECONDS = 1800
+GUILD_ID = None  # 특정 길드만 테스트할 때 ID 넣기 (예: 123456789012345678)
+COLOR_GRAY = 0x2F3136  # 디스코드 다크 회색 톤
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("robux-bot-nodb")
+# ----- PartialEmoji 세팅 -----
+# 제목/정보 라인에 쓰는 애니메 이모지
+EMO_LIVE = discord.PartialEmoji.from_str("<a:upuoipipi:1421392209089007718>")
 
-# ===== 이모지(원래 쓰던 것 그대로) =====
-E = {
-    "thumbsuppp": PartialEmoji(name="thumbsuppp", id=1421336653389365289, animated=True),
-    "info1": PartialEmoji(name="emoji1", id=1421336649656438906, animated=True),
-    "upuoipipi": PartialEmoji(name="upuoipipi", id=1421392209089007718, animated=True),
-    "ticket": PartialEmoji(name="ticket", id=1421383450975404085, animated=False),
-    "buy_btn": PartialEmoji(name="emoji_18", id=1421388813288083486, animated=False),
-    "charge_btn": PartialEmoji(name="charge", id=1421383449347887157, animated=False),
-    "info_btn": PartialEmoji(name="info", id=1421383447515103302, animated=False),
-    "bank_book": PartialEmoji(name="book", id=1421336655545106572, animated=True),
-    "tiny_id": PartialEmoji(name="1306285145132892180", id=1421336642828111922, animated=False),
-    "sak": PartialEmoji(name="sakfnmasfagfamg", id=1421336645084512537, animated=True),
-    "warn_bell": PartialEmoji(name="YouTube_Bell", id=1421432009884172299, animated=True),
-    "ok": PartialEmoji(name="1209511710545813526", id=1421430914373779618, animated=True),
-    "no": PartialEmoji(name="1257004507125121105", id=1421430917049749506, animated=True),
-    "role_glass": PartialEmoji(name="glashss", id=1421392211248939079, animated=True),
-    "big_id": PartialEmoji(name="11845034938353746621", id=1421383445669613660, animated=True),
-}
-COLOR_GREY = Colour(0x2f3136)
-COLOR_GREEN = Colour(0x2ecc71)
-COLOR_RED = Colour(0xe74c3c)
-COLOR_YELLOW = Colour(0xf1c40f)
+# 버튼 아이콘들
+EMO_NOTICE = discord.PartialEmoji.from_str("<a:notification:1422183909013196880>")
+EMO_BUY = discord.PartialEmoji.from_str("<a:myst_cart:1422183911466733630>")
+EMO_CHARGE = discord.PartialEmoji.from_str("<a:11845034938353746621:1421383445669613660>")
+EMO_MYINFO = discord.PartialEmoji.from_str("<:1306285145132892180:1421336642828111922>")
 
-# ===== 인메모리 저장 =====
-class Store:
-    def __init__(self):
-        self.config = {"panel_channel_id": None, "panel_message_id": None, "price_per_unit": 0}
-        self.stock = 0
-        self.recent_buyers = 0   # 구매자 수
-        self.weekly_sold = 0     # 이번주 판매량
-        self.bank = {"bank": None, "number": None, "holder": None, "expire_at": None}
-        self.logs = {"channel_id": None}
-        self.wallets: Dict[int, Dict[str, Any]] = {}
+# ----- 실시간 데이터 placeholder 함수 -----
+# 나중에 DB/외부 API 연동해서 값 채워넣으면 됨
+async def get_realtime_data():
+    # 예시 값들
+    price = "예시"
+    stock = "예시"
+    sales = "예시"
+    return price, stock, sales
 
-    def now_ts(self) -> int:
-        return int(datetime.now(timezone.utc).timestamp())
+# ----- 뷰/버튼 구성 -----
+class ButtonPanelView(discord.ui.View):
+    def __init__(self, *, timeout: float | None = 120):
+        super().__init__(timeout=timeout)
+        # 회색 버튼은 ButtonStyle.secondary
+        self.add_item(discord.ui.Button(
+            label="공지사항",
+            style=discord.ButtonStyle.secondary,
+            emoji=EMO_NOTICE,
+            custom_id="btn_notice"
+        ))
+        self.add_item(discord.ui.Button(
+            label="구매",
+            style=discord.ButtonStyle.secondary,
+            emoji=EMO_BUY,
+            custom_id="btn_buy"
+        ))
+        self.add_item(discord.ui.Button(
+            label="충전",
+            style=discord.ButtonStyle.secondary,
+            emoji=EMO_CHARGE,
+            custom_id="btn_charge"
+        ))
+        self.add_item(discord.ui.Button(
+            label="내 정보",
+            style=discord.ButtonStyle.secondary,
+            emoji=EMO_MYINFO,
+            custom_id="btn_myinfo"
+        ))
 
-    def wallet(self, uid: int) -> Dict[str, Any]:
-        if uid not in self.wallets:
-            self.wallets[uid] = {"balance": 0, "total": 0, "rank": "일반"}
-        return self.wallets[uid]
+    # 버튼 콜백들
+    @discord.ui.button(label="공지사항", style=discord.ButtonStyle.secondary, emoji=EMO_NOTICE, custom_id="btn_notice_hidden", row=4)
+    async def hidden_notice(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 이건 보이지 않게 할 용도 아니고, 위에서 add_item로 이미 추가했으니 사용 안 함
+        pass
 
-db = Store()
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # 필요시 권한/역할 체크 넣기
+        return True
 
-def fmt_mmss(expire_at: Optional[int]) -> str:
-    if not expire_at: return "설정안됨"
-    remain = max(expire_at - db.now_ts(), 0)
-    m, s = divmod(remain, 60)
-    return f"{m:02d}분 {s:02d}초 남음" if remain > 0 else "만료됨"
+    async def on_timeout(self):
+        # 타임아웃 시 버튼 비활성화 하고 싶으면 여기서 처리
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
 
-# ===== 봇/인텐트 =====
-intents = discord.Intents.default()
-intents.members = True          # 개발자 포털에서 SERVER MEMBERS INTENT ON
-intents.message_content = True  # MESSAGE CONTENT INTENT ON(DM 수량)
+# 개별 버튼 핸들러는 on_interaction_create로 처리
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    # 슬래시 커맨드는 app_commands 라우터가 처리하니 여기선 custom_id만 체크
+    if interaction.type == discord.InteractionType.component and interaction.data:
+        cid = interaction.data.get("custom_id")
+        if cid == "btn_notice":
+            await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send("공지사항 패널로 이동할게. 여기에 최신 공지 불러오는 로직 붙이면 됨.", ephemeral=True)
+        elif cid == "btn_buy":
+            await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send("구매 플로우 시작! 상품 선택 → 수량 입력 → 결제 로직 연결해줘.", ephemeral=True)
+        elif cid == "btn_charge":
+            await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send("충전 메뉴로 이동. 잔액 충전/웹훅 결제/코드입력 등 붙이면 됨.", ephemeral=True)
+        elif cid == "btn_myinfo":
+            await interaction.response.defer(ephemeral=True)
+            # 여기서 유저별 '내 정보' 불러와서 임베드로 보여줘
+            embed = discord.Embed(
+                title="내 정보",
+                description="• 잔액: 예시\n• 누적 금액: 예시\n• 등급: 예시\n• 최근 주문: 예시",
+                color=COLOR_GRAY
+            )
+            embed.set_footer(text=f"요청자: {interaction.user}")
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
-class RobuxBot(commands.Bot):
-    async def setup_hook(self):
-        await self.add_cog(RobuxCog(self))
-        try:
-            tg = discord.Object(id=TARGET_GUILD_ID)
-            synced = await self.tree.sync(guild=tg)
-            logger.info(f"길드 싱크 완료({TARGET_GUILD_ID}): {len(synced)}개")
-        except Exception as e:
-            logger.warning(f"길드 싱크 실패: {e}")
-        try:
-            all_synced = await self.tree.sync()
-            logger.info(f"글로벌 싱크 완료: {len(all_synced)}개")
-        except Exception as e:
-            logger.warning(f"글로벌 싱크 실패: {e}")
-        logger.info("슬래시 동기화 완료(인메모리)")
+# ----- 슬래시 커맨드 -----
+class PanelCog(commands.Cog):
+    def __init__(self, bot_: commands.Bot):
+        self.bot = bot_
 
-bot = RobuxBot(command_prefix="!", intents=intents)
+    @app_commands.command(name="버튼패널", description="자동화 로벅스 버튼 패널을 불러옵니다.")
+    async def button_panel(self, interaction: discord.Interaction):
+        price, stock, sales = await get_realtime_data()
+        title = "자동화 로벅스"
+
+        # 설명부 텍스트
+        desc_lines = [
+            f"{EMO_LIVE} 실시간 가격 : `{price}`",
+            f"{EMO_LIVE} 실시간 재고 : `{stock}`",
+            f"{EMO_LIVE} 실시간 판매량 : `{sales}`",
+            "",
+            "아래 버튼을 선택하여 이용해주세요"
+        ]
+        description = "\n".join(desc_lines)
+
+        embed = discord.Embed(title=title, description=description, color=COLOR_GRAY)
+        view = ButtonPanelView(timeout=180)
+
+        await interaction.response.send_message(embed=embed, view=view)
+
+async def setup_hook():
+    await bot.add_cog(PanelCog(bot))
+    if GUILD_ID:
+        guild = discord.Object(id=GUILD_ID)
+        await bot.tree.sync(guild=guild)
+    else:
+        await bot.tree.sync()
 
 @bot.event
 async def on_ready():
-    logger.info(f"로그인 성공: {bot.user} ({bot.user.id})")
-
-# ===== 패널(네가 준 문구 그대로) =====
-async def build_panel_embed() -> Embed:
-    price = int(db.config["price_per_unit"] or 0)
-    stock = db.stock
-    buyers = db.recent_buyers
-    weekly = db.weekly_sold
-    desc = (
-        f"**{str(E['thumbsuppp'])}로벅스 가격**\n"
-        f"1당 `{price if price>0 else '예시'}`로벅스\n"
-        f"가격은 실시간으로 시세 맞게 변동됩니다\n"
-        f"ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ\n"
-        f"**{str(E['info1'])}로벅스 재고**\n"
-        f"`{stock if stock>0 else '예시'}` 로벅스\n"
-        f"재고는 1분마다 갱신됩니다\n"
-        f"ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ\n"
-        f"**{str(E['upuoipipi'])}로벅스 판매량**\n"
-        f"구매자 : `{buyers if buyers>0 else '예시'}`명\n"
-        f"이번주 총 `{weekly if weekly>0 else '예시'}`만큼 팔았습니다"
-    )
-    return Embed(title="로벅스 패널", description=desc, color=COLOR_GREY)
-
-# ===== 버튼 뷰(2x2 레이아웃) =====
-class PanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        # 1행
-        self.add_item(discord.ui.Button(label="공지사항", style=discord.ButtonStyle.secondary, emoji=E["ticket"], custom_id="btn_notice", row=0))
-        self.add_item(discord.ui.Button(label="로벅스 구매", style=discord.ButtonStyle.secondary, emoji=E["buy_btn"], custom_id="btn_buy", row=0))
-        # 2행
-        self.add_item(discord.ui.Button(label="충전", style=discord.ButtonStyle.secondary, emoji=E["charge_btn"], custom_id="btn_charge", row=1))
-        self.add_item(discord.ui.Button(label="내 정보", style=discord.ButtonStyle.secondary, emoji=E["info_btn"], custom_id="btn_myinfo", row=1))
-
-    async def interaction_check(self, interaction: Interaction) -> bool:
-        if not interaction.response.is_done():
-            try: await interaction.response.defer(ephemeral=True, thinking=False)
-            except: pass
-        return True
-
-# ===== 공통 =====
-async def is_admin(inter: Interaction) -> bool:
-    if not inter.user or not inter.guild: return False
-    member = inter.guild.get_member(inter.user.id) or await inter.guild.fetch_member(inter.user.id)
-    return member.guild_permissions.administrator
-
-async def update_panel_message(guild: discord.Guild):
-    ch_id = db.config["panel_channel_id"]; msg_id = db.config["panel_message_id"]
-    if not ch_id or not msg_id: return
+    print(f"Logged in as {bot.user} ({bot.user.id})")
     try:
-        ch = guild.get_channel(ch_id) or await guild.fetch_channel(ch_id)
-        msg = await ch.fetch_message(msg_id)
-        await msg.edit(embed=await build_panel_embed(), view=PanelView())
+        await setup_hook()
+        print("Slash commands synced.")
     except Exception as e:
-        logger.warning(f"패널 업데이트 실패: {e}")
+        print("Sync error:", e)
 
-def admin_intro(text: str) -> Embed:
-    return Embed(description=f"-# {text} ( 관리자 전용 )", color=COLOR_GREY)
-
-# ===== Cog =====
-class RobuxCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
-    @commands.Cog.listener()
-    async def on_interaction(self, inter: Interaction):
-        if inter.type != discord.InteractionType.component: return
-        cid = inter.data.get("custom_id")
-
-        if cid == "btn_notice":
-            emb = Embed(
-                description=(
-                    f"{str(E['sak'])}주의사항 ( 구매전 필독 부탁 )\n"
-                    f"- 로벅스 가격은 언제든지 변동될 수 있습니다\n"
-                    f"- 로벅스 재고는 1분마다 실시간으로 갱신됩니다\n"
-                    f"- 재고 없을 때는 작동 안 합니다 ( 충전 하지마세요 )\n"
-                    f"- 로벅스 재고 없는데 구매신청하면 돈 먹습니다"
-                ),
-                color=COLOR_GREY
-            )
-            await inter.followup.send(embed=emb, ephemeral=True); return
-
-        if cid == "btn_myinfo":
-            w = db.wallet(inter.user.id)
-            emb = Embed(
-                title=f"유저: @{inter.user.display_name}",
-                description=(
-                    f"{str(E['big_id'])} 남은 잔액 : `{w['balance']}`\n"
-                    f"{str(E['upuoipipi'])} 누적 금액 : `{w['total']}`\n"
-                    f"{str(E['role_glass'])} 역할 등급 : `{w['rank']}`\n"
-                    f"구매 내역: 총 `미구현`번"
-                ),
-                color=COLOR_GREY
-            )
-            await inter.followup.send(embed=emb, ephemeral=True); return
-
-        if cid == "btn_buy":
-            try:
-                await inter.response.send_modal(BuyModal())
-            except:
-                await inter.followup.send(embed=Embed(description="모달을 열 수 없어요. 잠시 후 다시 시도해주세요.", color=COLOR_RED), ephemeral=True)
-            return
-
-        if cid == "btn_charge":
-            new_exp = db.now_ts() + DEFAULT_TTL_SECONDS
-            db.bank["expire_at"] = new_exp
-            bank = db.bank.get("bank") or "미설정"
-            number = db.bank.get("number") or "미설정"
-            holder = db.bank.get("holder") or "미설정"
-            emb = Embed(
-                description=(
-                    f"{str(E['bank_book'])}은행명 : `{bank}`\n"
-                    f"{str(E['sak'])}계좌번호 : `{number}`\n"
-                    f"{str(E['tiny_id'])}예금주 : `{holder}`\n"
-                    f"{str(E['info1'])}유효시간 : `{fmt_mmss(new_exp)}`\n"
-                    f"-# 이 시간 내에 보내셔야합니다"
-                ),
-                color=COLOR_GREY
-            )
-            await inter.followup.send(embed=emb, ephemeral=True); return
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot: return
-        if not isinstance(message.channel, discord.DMChannel): return
-
-        m = re.search(r"\d+", (message.content or ""))
-        if not m:
-            try: await message.channel.send(embed=Embed(description="정확한 수량을 숫자만 입력해서 보내주세요.", color=COLOR_GREY))
-            except: pass
-            return
-
-        qty = int(m.group(0))
-        try: await message.channel.send(embed=Embed(description="조금만 기다려주세요.", color=COLOR_GREY))
-        except: pass
-
-        admin_ch_id = db.logs.get("channel_id")
-        if not admin_ch_id:
-            try: await message.channel.send(embed=Embed(description="관리자 채널이 아직 설정되지 않았어요.", color=COLOR_RED))
-            except: pass
-            return
-
-        admin_ch = None
-        for g in bot.guilds:
-            ch = g.get_channel(admin_ch_id) or (await g.fetch_channel(admin_ch_id) if g else None)
-            if ch: admin_ch = ch; break
-        if not admin_ch:
-            try: await message.channel.send(embed=Embed(description="관리자 채널을 찾을 수 없어요.", color=COLOR_RED))
-            except: pass
-            return
-
-        db.recent_buyers += 1  # 구매자 수 집계(샘플)
-
-        emb = Embed(
-            description=(
-                f"{str(E['sak'])}로벅스 구매량 : `{qty}`\n"
-                f"{str(E['sak'])}로블록스 이름 : `미기재`\n"
-                f"{str(E['sak'])}지급방식 : `미기재`"
-            ),
-            color=COLOR_GREY
-        )
-        view = discord.ui.View(timeout=None)
-
-        async def approve_cb(inter: Interaction):
-            if db.stock < qty:
-                await inter.followup.send(embed=Embed(description="재고가 부족합니다. 먼저 재고를 보충해주세요.", color=COLOR_RED), ephemeral=True); return
-            db.stock -= qty
-            db.weekly_sold += qty
-            try:
-                await message.author.send(embed=Embed(description="확인 완료되었습니다\n티켓 열고 대기해주세요", color=COLOR_GREEN))
-            except: pass
-            emb_g = Embed(description=emb.description, color=COLOR_GREEN)
-            for c in view.children:
-                if isinstance(c, discord.ui.Button): c.disabled = True
-            await admin_msg.edit(embed=emb_g, view=view)
-            await inter.followup.send(embed=Embed(description="승인 처리 완료", color=COLOR_GREEN), ephemeral=True)
-
-        async def deny_cb(inter: Interaction):
-            try:
-                await message.author.send(embed=Embed(description="거부되었습니다\n티켓으로 문의해주세요", color=COLOR_RED))
-            except: pass
-            emb_r = Embed(description=emb.description, color=COLOR_RED)
-            for c in view.children:
-                if isinstance(c, discord.ui.Button): c.disabled = True
-            await admin_msg.edit(embed=emb_r, view=view)
-            await inter.followup.send(embed=Embed(description="거부 처리 완료", color=COLOR_RED), ephemeral=True)
-
-        b1 = discord.ui.Button(label="승인", style=discord.ButtonStyle.success, emoji=E["ok"])
-        b2 = discord.ui.Button(label="거부", style=discord.ButtonStyle.danger, emoji=E["no"])
-        b1.callback = approve_cb; b2.callback = deny_cb
-        view.add_item(b1); view.add_item(b2)
-        admin_msg = await admin_ch.send(embed=emb, view=view)
-
-# ===== 모달 =====
-class BuyModal(discord.ui.Modal, title="로벅스 구매"):
-    def __init__(self):
-        super().__init__()
-        self.roblox_name = discord.ui.TextInput(label="로블록스 닉", placeholder="예) rbx_player", style=TextStyle.short, required=True, max_length=50)
-        self.method = discord.ui.TextInput(label="지급방식", placeholder="예) 그룹 지급 / 코드 지급", style=TextStyle.short, required=True, max_length=30)
-        self.add_item(self.roblox_name); self.add_item(self.method)
-
-    async def on_submit(self, interaction: Interaction):
-        try:
-            await interaction.response.send_message(
-                embed=Embed(description=f"{str(E['warn_bell'])}DM 확인해주세요!", color=COLOR_YELLOW),
-                ephemeral=True
-            )
-        except:
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=Embed(description="DM 확인해주세요!", color=COLOR_YELLOW), ephemeral=True)
-        try:
-            user = interaction.user
-            emb = Embed(
-                description=f"{str(E['sak'])}로벅스 수량을 적어 보내주세요\n-# 로벅스 수량 보내주시고 조금 대기하시면 관리자가 올 것입니다",
-                color=COLOR_GREY
-            )
-            await user.send(embed=emb)
-        except discord.Forbidden:
-            await interaction.followup.send(embed=Embed(description="DM이 닫혀 있어 안내를 보낼 수 없어요. DM을 열어주세요.", color=COLOR_RED), ephemeral=True)
-        except Exception:
-            await interaction.followup.send(embed=Embed(description="DM 전송 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.", color=COLOR_RED), ephemeral=True)
-
-# ===== 슬래시: 항상 “안내 임베드 먼저 → 처리 결과 임베드” =====
-@bot.tree.command(name="재고설정", description="-# 재고 설정하기 ( 관리자 전용 )")
-@app_commands.describe(수량="1 이상 정수", 방식="추가 또는 차감")
-@app_commands.choices(방식=[app_commands.Choice(name="추가", value="추가"), app_commands.Choice(name="차감", value="차감")])
-async def 재고설정(inter: Interaction, 수량: int, 방식: app_commands.Choice[str]):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("재고 설정하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("재고 설정하기"), ephemeral=True)
-    if 수량 < 1:
-        await inter.followup.send(embed=Embed(description="수량은 1 이상 정수만 가능합니다.", color=COLOR_RED), ephemeral=True); return
-    try:
-        if 방식.value == "추가":
-            db.stock += 수량
-            res = Embed(description=f"`{수량}` 로벅스가 추가되었습니다", color=COLOR_GREEN)
-        else:
-            if db.stock < 수량: raise ValueError()
-            db.stock -= 수량
-            res = Embed(description=f"`{수량}` 로벅스가 차감되었습니다", color=COLOR_RED)
-    except ValueError:
-        await inter.followup.send(embed=Embed(description="재고가 부족합니다.", color=COLOR_RED), ephemeral=True); return
-    await inter.followup.send(embed=res, ephemeral=True)
-    await update_panel_message(inter.guild)
-
-@bot.tree.command(name="가격설정", description="-# 가격 설정하기 ( 관리자 전용 )")
-@app_commands.describe(가격="정수(소수점 불가)")
-async def 가격설정(inter: Interaction, 가격: int):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("가격 설정하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("가격 설정하기"), ephemeral=True)
-    if 가격 < 0:
-        await inter.followup.send(embed=Embed(description="0 이상 정수만 가능합니다.", color=COLOR_RED), ephemeral=True); return
-    db.config["price_per_unit"] = 가격
-    await inter.followup.send(embed=Embed(description=f"1당 `{가격}`로 설정되었습니다", color=COLOR_GREY), ephemeral=True)
-    await update_panel_message(inter.guild)
-
-@bot.tree.command(name="유저조회", description="-# 유저 조회하기 ( 관리자 전용 )")
-@app_commands.describe(유저="대상 유저")
-async def 유저조회(inter: Interaction, 유저: discord.User):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("유저 조회하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("유저 조회하기"), ephemeral=True)
-    w = db.wallet(유저.id)
-    info = Embed(
-        title=f"유저: @{유저.display_name}",
-        description=(
-            f"{str(E['big_id'])} 남은 잔액 : `{w['balance']}`\n"
-            f"{str(E['upuoipipi'])} 누적 금액 : `{w['total']}`\n"
-            f"{str(E['role_glass'])} 역할 등급 : `{w['rank']}`"
-        ),
-        color=COLOR_GREY
-    )
-    await inter.followup.send(embed=info, ephemeral=True)
-
-@bot.tree.command(name="잔액추가", description="-# 잔액 추가하기 ( 관리자 전용 )")
-@app_commands.describe(유저="대상 유저", 금액="정수(1 이상)")
-async def 잔액추가(inter: Interaction, 유저: discord.User, 금액: int):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("잔액 추가하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("잔액 추가하기"), ephemeral=True)
-    if 금액 < 1:
-        await inter.followup.send(embed=Embed(description="1 이상 정수만 가능합니다.", color=COLOR_RED), ephemeral=True); return
-    w = db.wallet(유저.id); w["balance"] += 금액; w["total"] += 금액
-    await inter.followup.send(embed=Embed(description=f"`{금액}` 충전 완료", color=COLOR_GREEN), ephemeral=True)
-
-@bot.tree.command(name="잔액차감", description="-# 잔액 차감하기 ( 관리자 전용 )")
-@app_commands.describe(유저="대상 유저", 금액="정수(1 이상)")
-async def 잔액차감(inter: Interaction, 유저: discord.User, 금액: int):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("잔액 차감하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("잔액 차감하기"), ephemeral=True)
-    w = db.wallet(유저.id)
-    if 금액 < 1 or w["balance"] < 금액:
-        await inter.followup.send(embed=Embed(description="잔액이 부족하거나 금액이 잘못되었습니다.", color=COLOR_RED), ephemeral=True); return
-    w["balance"] -= 금액
-    await inter.followup.send(embed=Embed(description=f"`{금액}` 차감 완료", color=COLOR_RED), ephemeral=True)
-
-@bot.tree.command(name="봇자판기", description="-# 패널 보내기 ( 관리자 전용 )")
-async def 봇자판기(inter: Interaction):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("패널 보내기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("패널 보내기"), ephemeral=True)
-    msg = await inter.channel.send(embed=await build_panel_embed(), view=PanelView())
-    db.config["panel_channel_id"] = inter.channel.id
-    db.config["panel_message_id"] = msg.id
-    await inter.followup.send(embed=Embed(description="패널 전송 완료", color=COLOR_GREY), ephemeral=True)
-
-@bot.tree.command(name="수익표시", description="-# 총 수익 표시하기 ( 관리자 전용 )")
-async def 수익표시(inter: Interaction):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("총 수익 표시하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("총 수익 표시하기"), ephemeral=True)
-    sold = db.weekly_sold
-    await inter.followup.send(embed=Embed(description=f"이번주 총 `{sold}`만큼 팔았습니다", color=COLOR_GREY), ephemeral=True)
-
-@bot.tree.command(name="계좌수정", description="-# 계좌수정 ( 관리자 전용 )")
-@app_commands.describe(은행명="은행명", 계좌번호="계좌번호", 예금주="예금주", 유효시간분="유효시간(분, 비우면 30분)")
-async def 계좌수정(inter: Interaction, 은행명: str, 계좌번호: str, 예금주: str, 유효시간분: Optional[int] = None):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("계좌수정"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("계좌수정"), ephemeral=True)
-    ttl = DEFAULT_TTL_SECONDS if not 유효시간분 or 유효시간분 <= 0 else 유효시간분 * 60
-    expire = db.now_ts() + ttl
-    db.bank.update({"bank": 은행명.strip(), "number": 계좌번호.strip(), "holder": 예금주.strip(), "expire_at": expire})
-    await inter.followup.send(embed=Embed(description="계좌 정보가 적용되었습니다", color=COLOR_GREY), ephemeral=True)
-
-@bot.tree.command(name="로그설정", description="-# 로그 설정하기 ( 관리자 전용 )")
-@app_commands.describe(관리자채널="로그 채널")
-async def 로그설정(inter: Interaction, 관리자채널: discord.TextChannel):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("로그 설정하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("로그 설정하기"), ephemeral=True)
-    db.logs["channel_id"] = 관리자채널.id
-    await inter.followup.send(embed=Embed(description="로그 채널이 설정되었습니다", color=COLOR_GREY), ephemeral=True)
-
-@bot.tree.command(name="관리자설정", description="-# 관리자 역할 설정하기 ( 관리자 전용 )")
-@app_commands.describe(역할="관리자 역할")
-async def 관리자설정(inter: Interaction, 역할: discord.Role):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("관리자 역할 설정하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("관리자 역할 설정하기"), ephemeral=True)
-    # 인메모리 샘플: 실제 저장 로직은 필요 시 확장
-    await inter.followup.send(embed=Embed(description=f"관리자 역할 `{역할.name}` 표시 적용", color=COLOR_GREY), ephemeral=True)
-
-@bot.tree.command(name="결제수단", description="-# 결제수단 설정하기 ( 관리자 전용 )")
-@app_commands.describe(계좌="허용/거부", 코인="허용/거부", 문상="허용/거부")
-@app_commands.choices(계좌=[app_commands.Choice(name="허용", value="허용"), app_commands.Choice(name="거부", value="거부")])
-@app_commands.choices(코인=[app_commands.Choice(name="허용", value="허용"), app_commands.Choice(name="거부", value="거부")])
-@app_commands.choices(문상=[app_commands.Choice(name="허용", value="허용"), app_commands.Choice(name="거부", value="거부")])
-async def 결제수단(inter: Interaction, 계좌: app_commands.Choice[str], 코인: app_commands.Choice[str], 문상: app_commands.Choice[str]):
-    if not await is_admin(inter):
-        await inter.response.send_message(embed=admin_intro("결제수단 설정하기"), ephemeral=True); return
-    await inter.response.defer(ephemeral=True, thinking=False)
-    await inter.followup.send(embed=admin_intro("결제수단 설정하기"), ephemeral=True)
-    desc = (
-        f"계좌이체: `{계좌.value}`\n"
-        f"코인결제: `{코인.value}`\n"
-        f"문화상품권: `{문상.value}`"
-    )
-    await inter.followup.send(embed=Embed(description=desc, color=COLOR_GREY), ephemeral=True)
-
-# ===== 실행 =====
 def main():
-    if not DISCORD_TOKEN:
-        logger.error("DISCORD_TOKEN 비어 있음")
-    bot.run(DISCORD_TOKEN)
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        raise RuntimeError("환경변수 DISCORD_TOKEN을 설정해줘.")
+    bot.run(token)
 
 if __name__ == "__main__":
     main()
