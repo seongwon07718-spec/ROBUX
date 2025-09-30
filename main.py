@@ -10,11 +10,12 @@ GUILD_ID = 1419200424636055592
 # 회색 임베드 컬러
 GRAY = discord.Color.from_str("#808080")
 
-# 커스텀 이모지 (네가 제공한 것)
+# 커스텀 이모지
 EMOJI_NOTICE = "<:ticket:1422579515955085388>"
 EMOJI_CHARGE = "<:charge:1422579517679075448>"
 EMOJI_INFO   = "<:info:1422579514218905731>"
-EMOJI_BUY    = "<:charge:1422579519222714482>"
+# 구매 이모지 최신 교체본
+EMOJI_BUY    = "<a:11845034938353746621:1421383445669613660>"
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -81,7 +82,6 @@ class ButtonPanel(discord.ui.View):
         await interaction.response.send_message(f"{EMOJI_BUY} 구매 절차를 시작할게!", ephemeral=True)
 
     async def on_timeout(self):
-        # 타임아웃 시 버튼 비활성화
         for item in self.children:
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
@@ -91,7 +91,7 @@ class ButtonPanel(discord.ui.View):
 async def button_panel(interaction: discord.Interaction):
     embed = discord.Embed(
         title="윈드 OTT",
-        description="아래 원하시는 버튼을 눌러 이용해주세요!",
+        description="아래 버튼을 눌러 이용해주세요!",
         color=GRAY
     )
     view = ButtonPanel()
