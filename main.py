@@ -1,5 +1,3 @@
-# pip install -U discord.py
-
 import os
 import discord
 from discord import app_commands
@@ -11,7 +9,7 @@ GUILD_ID = 1419200424636055592
 # 회색 컬러
 GRAY = discord.Color.from_str("#808080")
 
-# 커스텀 이모지 (이전 흐름 유지)
+# 커스텀 이모지
 EMOJI_NOTICE = "<:ticket:1422579515955085388>"
 EMOJI_CHARGE = "<:charge:1422579517679075448>"
 EMOJI_INFO   = "<:info:1422579514218905731>"
@@ -20,11 +18,9 @@ EMOJI_BUY    = "<a:11845034938353746621:1421383445669613660>"
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
 # =========================
-# 기존 버튼 패널 (그대로 유지)
+# 컴포넌트: 거래내역 드롭다운
 # =========================
-
 class TransactionSelect(discord.ui.Select):
     def __init__(self, user: discord.User):
         options = [
@@ -47,6 +43,7 @@ class TransactionSelect(discord.ui.Select):
             return
 
         selection = self.values[0]
+
         def get_example_txns(mode: str):
             base = [
                 {"id": "A1032", "item": "프리미엄 구독 1개월", "amount": 5900, "status": "완료"},
@@ -56,14 +53,10 @@ class TransactionSelect(discord.ui.Select):
                 {"id": "A1019", "item": "포인트 2000",       "amount": 2000, "status": "완료"},
                 {"id": "A1015", "item": "포인트 3000",       "amount": 3000, "status": "완료"},
             ]
-            if mode == "last5":
-                return base[:5]
-            if mode == "days7":
-                return base[:3]
-            if mode == "days30":
-                return base[:5]
-            if mode == "days90":
-                return base
+            if mode == "last5":  return base[:5]
+            if mode == "days7":  return base[:3]
+            if mode == "days30": return base[:5]
+            if mode == "days90": return base
             return base[:5]
 
         txns = get_example_txns(selection)
@@ -74,13 +67,14 @@ class TransactionSelect(discord.ui.Select):
         embed = discord.Embed(title=title_map.get(selection, "거래내역"), description=desc, color=GRAY)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
 class MyInfoView(discord.ui.View):
     def __init__(self, user: discord.User):
         super().__init__(timeout=180)
         self.add_item(TransactionSelect(user))
 
-
+# =========================
+# 컴포넌트: 구매 카테고리 드롭다운
+# =========================
 class CategorySelect(discord.ui.Select):
     def __init__(self, user: discord.User):
         options = [
@@ -110,19 +104,20 @@ class CategorySelect(discord.ui.Select):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
 class BuyCategoryView(discord.ui.View):
     def __init__(self, user: discord.User):
         super().__init__(timeout=180)
         self.add_item(CategorySelect(user))
 
-
+# =========================
+# 메인 버튼 패널
+# =========================
 class ButtonPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
 
         self.notice_btn = discord.ui.Button(label="공지사항", style=discord.ButtonStyle.secondary, emoji=EMOJI_NOTICE, custom_id="panel_notice", row=0)
-        self.charge_btn = discord.ui.Button(label="충전", style=discord.ButtonStyle.secondary, emoji=EMOJI_CHARGE, custom_id="panel_charge", row=0)
+        self.charge_btn = discord.ui.Button(label="충전",   style=discord.ButtonStyle.secondary, emoji=EMOJI_CHARGE, custom_id="panel_charge", row=0)
         self.info_btn   = discord.ui.Button(label="내 정보", style=discord.ButtonStyle.secondary, emoji=EMOJI_INFO,   custom_id="panel_info",   row=1)
         self.buy_btn    = discord.ui.Button(label="구매",   style=discord.ButtonStyle.secondary, emoji=EMOJI_BUY,    custom_id="panel_buy",    row=1)
 
@@ -161,36 +156,38 @@ class ButtonPanel(discord.ui.View):
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
 
-
+# =========================
+# 슬래시 커맨드: 버튼패널
+# =========================
 @bot.tree.command(name="버튼패널", description="윈드 OTT 버튼 패널을 표시합니다.")
-async def button_panel(interaction: discord.Interaction):
+async def 버튼패널(interaction: discord.Interaction):
     embed = discord.Embed(title="윈드 OTT", description="아래 원하시는 버튼을 눌러 이용해주세요!", color=GRAY)
     view = ButtonPanel()
     await interaction.response.send_message(embed=embed, view=view)
 
-
 # =========================
 # 카테고리 설정 커맨드
 # =========================
+def is_admin():
+    async def predicate(interaction: discord.Interaction):
+        if interaction.user.guild_permissions.manage_guild:
+            return True
+        await interaction.response.send_message("관리자만 사용할 수 있어.", ephemeral=True)
+        return False
+    return app_commands.check(predicate)
 
 class ExistingCategorySelect(discord.ui.Select):
     def __init__(self, categories: list[discord.CategoryChannel], author: discord.User):
-        options = [
-            discord.SelectOption(label=cat.name, value=str(cat.id)) for cat in categories[:25]
-        ] or [discord.SelectOption(label="카테고리가 없습니다", value="none", description="먼저 새 카테고리를 만드세요")]
-        super().__init__(
-            placeholder="기존 카테고리를 선택하거나, 취소하고 새 이름으로 다시 실행하세요",
-            min_values=1, max_values=1,
-            options=options,
-            custom_id=f"exist_cat_{author.id}"
-        )
+        options = [discord.SelectOption(label=cat.name, value=str(cat.id)) for cat in categories[:25]]
+        if not options:
+            options = [discord.SelectOption(label="카테고리가 없습니다", value="none", description="먼저 새 카테고리를 만드세요")]
+        super().__init__(placeholder="기존 카테고리를 선택하세요", min_values=1, max_values=1, options=options, custom_id=f"exist_cat_{author.id}")
         self.author = author
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.author.id:
             await interaction.response.send_message("작성자만 선택할 수 있어.", ephemeral=True)
             return
-
         if self.values[0] == "none":
             await interaction.response.send_message("선택 가능한 카테고리가 없어요. 새 이름으로 다시 실행해줘.", ephemeral=True)
             return
@@ -202,35 +199,18 @@ class ExistingCategorySelect(discord.ui.Select):
             await interaction.response.send_message("유효하지 않은 카테고리야.", ephemeral=True)
             return
 
-        # 안내 채널 확보(없으면 생성)
         channel_name = "구매-안내"
         text_ch = discord.utils.get(category.text_channels, name=channel_name.replace(" ", "-"))
         if text_ch is None:
             text_ch = await guild.create_text_channel(channel_name, category=category, reason="구매 안내 채널 자동 생성")
 
-        embed = discord.Embed(
-            title="카테고리 설정 완료",
-            description=f"선택한 카테고리: {category.name}\n안내 채널: {text_ch.mention}",
-            color=GRAY
-        )
+        embed = discord.Embed(title="카테고리 설정 완료", description=f"선택한 카테고리: {category.name}\n안내 채널: {text_ch.mention}", color=GRAY)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 class ExistingCategoryView(discord.ui.View):
     def __init__(self, categories: list[discord.CategoryChannel], author: discord.User):
         super().__init__(timeout=180)
         self.add_item(ExistingCategorySelect(categories, author))
-
-
-def is_admin():
-    async def predicate(interaction: discord.Interaction):
-        # 관리자 권한 체크. 필요하면 특정 역할 ID 검사로 바꿔줄 수 있음.
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-        await interaction.response.send_message("관리자만 사용할 수 있어.", ephemeral=True)
-        return False
-    return app_commands.check(predicate)
-
 
 @app_commands.command(name="카테고리_설정", description="구매 안내가 표시될 카테고리를 설정합니다.")
 @is_admin()
@@ -238,7 +218,7 @@ def is_admin():
     새_카테고리_이름="새 카테고리를 만들려면 이름을 입력 (미입력 시 기존 카테고리 선택)",
     안내채널_이름="안내 채널 이름 (기본: 구매-안내)"
 )
-async def set_category(interaction: discord.Interaction, 새_카테고리_이름: str | None = None, 안내채널_이름: str | None = None):
+async def 카테고리_설정(interaction: discord.Interaction, 새_카테고리_이름: str | None = None, 안내채널_이름: str | None = None):
     guild = interaction.guild
     if not guild:
         await interaction.response.send_message("길드에서만 쓸 수 있어.", ephemeral=True)
@@ -247,54 +227,34 @@ async def set_category(interaction: discord.Interaction, 새_카테고리_이름
     channel_name = (안내채널_이름 or "구매-안내").strip()
 
     if 새_카테고리_이름:
-        # 새 카테고리 생성
         category = await guild.create_category(새_카테고리_이름.strip(), reason="카테고리 설정 커맨드로 생성")
-        # 안내 채널 생성(있으면 재사용)
         text_ch = discord.utils.get(category.text_channels, name=channel_name.replace(" ", "-"))
         if text_ch is None:
             text_ch = await guild.create_text_channel(channel_name, category=category, reason="구매 안내 채널 자동 생성")
 
-        embed = discord.Embed(
-            title="카테고리 설정 완료",
-            description=f"새 카테고리 생성: {category.name}\n안내 채널: {text_ch.mention}",
-            color=GRAY
-        )
+        embed = discord.Embed(title="카테고리 설정 완료", description=f"새 카테고리 생성: {category.name}\n안내 채널: {text_ch.mention}", color=GRAY)
         await interaction.response.send_message(embed=embed, ephemeral=True)
     else:
-        # 기존 카테고리 목록을 드롭다운으로 제공
         categories = [c for c in guild.categories]
         if not categories:
             await interaction.response.send_message("서버에 카테고리가 없어요. 새 이름을 입력해서 만들어줘.", ephemeral=True)
             return
 
-        embed = discord.Embed(
-            title="카테고리 선택",
-            description="구매 안내를 표시할 기존 카테고리를 골라줘.",
-            color=GRAY
-        )
+        embed = discord.Embed(title="카테고리 선택", description="구매 안내를 표시할 기존 카테고리를 골라줘.", color=GRAY)
         view = ExistingCategoryView(categories, interaction.user)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-
-# 트리에 등록
-bot.tree.add_command(set_category)
-
+# 트리에 한 번만 등록
+bot.tree.add_command(카테고리_설정)
 
 # =========================
 # on_ready 및 실행
 # =========================
-
-@bot.tree.command(name="버튼패널", description="윈드 OTT 버튼 패널을 표시합니다.")
-async def button_panel_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="윈드 OTT", description="아래 원하시는 버튼을 눌러 이용해주세요!", color=GRAY)
-    view = ButtonPanel()
-    await interaction.response.send_message(embed=embed, view=view)
-
 @bot.event
 async def on_ready():
     try:
         guild = discord.Object(id=GUILD_ID)
-        synced = await bot.tree.sync(guild=guild)
+        synced = await bot.tree.sync(guild=guild)  # 길드 전용 싱크 1회
         print(f"길드 슬래시 커맨드 동기화 완료({GUILD_ID}): {len(synced)}개")
     except Exception as e:
         print(f"동기화 오류: {e}")
