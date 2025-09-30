@@ -5,12 +5,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-GUILD_ID = 1419200424636055592  # 튜어오오오옹 서버 ID 적용
+GUILD_ID = 1419200424636055592  # 네 서버 ID
 
-# '뢰색' 톤의 청록 계열
+# '뢰색' 톤
 ROY_TEAL = discord.Color.from_str("#2AB2A6")
 
-# 커스텀 애니메이션 이모지
+# 커스텀 이모지 (서버에서 사용 가능한지 확인)
 EMOJI_NOTICE = "<a:book:1421336655545106572>"
 EMOJI_PRODUCT = "<a:sakfnmasfagfamg:1421336645084512537>"
 EMOJI_CHARGE = "<a:upuoipipi:1421392209089007718>"
@@ -20,71 +20,97 @@ EMOJI_INFO = "<a:list:1421336647303172107>"
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
 class ButtonPanel(discord.ui.View):
     def __init__(self):
+        # 3분 후 비활성
         super().__init__(timeout=180)
-        # 2x3 배열: 1행(공지사항, 제품, 충전), 2행(구매, 내 정보, 자리채움)
-        self.add_item(self.notice_button())
-        self.add_item(self.product_button())
-        self.add_item(self.charge_button())
-        self.add_item(self.buy_button())
-        self.add_item(self.info_button())
-        self.add_item(self.placeholder_button())
 
-    def notice_button(self):
-        return discord.ui.Button(
+        # 1행: 공지사항 | 제품 | 충전
+        self.notice_btn = discord.ui.Button(
             label="공지사항",
             style=discord.ButtonStyle.primary,
             emoji=EMOJI_NOTICE,
-            custom_id="panel_notice"
+            custom_id="panel_notice",
+            row=0
         )
-
-    def product_button(self):
-        return discord.ui.Button(
+        self.product_btn = discord.ui.Button(
             label="제품",
             style=discord.ButtonStyle.success,
             emoji=EMOJI_PRODUCT,
-            custom_id="panel_product"
+            custom_id="panel_product",
+            row=0
         )
-
-    def charge_button(self):
-        return discord.ui.Button(
+        self.charge_btn = discord.ui.Button(
             label="충전",
             style=discord.ButtonStyle.success,
             emoji=EMOJI_CHARGE,
-            custom_id="panel_charge"
+            custom_id="panel_charge",
+            row=0
         )
 
-    def buy_button(self):
-        return discord.ui.Button(
+        # 2행: 구매 | 내 정보 | 자리채움(비활성)
+        self.buy_btn = discord.ui.Button(
             label="구매",
             style=discord.ButtonStyle.primary,
             emoji=EMOJI_BUY,
-            custom_id="panel_buy"
+            custom_id="panel_buy",
+            row=1
         )
-
-    def info_button(self):
-        return discord.ui.Button(
+        self.info_btn = discord.ui.Button(
             label="내 정보",
             style=discord.ButtonStyle.primary,
             emoji=EMOJI_INFO,
-            custom_id="panel_info"
+            custom_id="panel_info",
+            row=1
         )
-
-    def placeholder_button(self):
-        return discord.ui.Button(
-            label=" ",
+        self.placeholder_btn = discord.ui.Button(
+            label="자리 채움",
             style=discord.ButtonStyle.secondary,
-            disabled=True
+            disabled=True,
+            custom_id="panel_placeholder",
+            row=1
         )
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return True
+        # View에 추가
+        self.add_item(self.notice_btn)
+        self.add_item(self.product_btn)
+        self.add_item(self.charge_btn)
+        self.add_item(self.buy_btn)
+        self.add_item(self.info_btn)
+        self.add_item(self.placeholder_btn)
 
-    async def on_timeout(self) -> None:
+        # 콜백 바인딩
+        self.notice_btn.callback = self.on_notice
+        self.product_btn.callback = self.on_product
+        self.charge_btn.callback = self.on_charge
+        self.buy_btn.callback = self.on_buy
+        self.info_btn.callback = self.on_info
+        # placeholder는 disabled라 콜백 필요 없음
+
+    # 콜백들
+    async def on_notice(self, interaction: discord.Interaction):
+        await interaction.response.send_message(f"{EMOJI_NOTICE} 공지사항을 확인해줘!", ephemeral=True)
+
+    async def on_product(self, interaction: discord.Interaction):
+        await interaction.response.send_message(f"{EMOJI_PRODUCT} 제품 목록을 불러왔어!", ephemeral=True)
+
+    async def on_charge(self, interaction: discord.Interaction):
+        await interaction.response.send_message(f"{EMOJI_CHARGE} 충전 페이지로 안내할게!", ephemeral=True)
+
+    async def on_buy(self, interaction: discord.Interaction):
+        await interaction.response.send_message(f"{EMOJI_BUY} 구매 절차를 시작할게!", ephemeral=True)
+
+    async def on_info(self, interaction: discord.Interaction):
+        user = interaction.user
+        await interaction.response.send_message(f"{EMOJI_INFO} {user.mention}님의 정보입니다.", ephemeral=True)
+
+    async def on_timeout(self):
+        # 타임아웃 시 비활성화 후 메시지 편집
         for item in self.children:
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
+
 
 @bot.tree.command(name="버튼패널", description="윈드 OTT 버튼 패널을 표시합니다.")
 async def button_panel(interaction: discord.Interaction):
@@ -94,38 +120,19 @@ async def button_panel(interaction: discord.Interaction):
         color=ROY_TEAL
     )
     view = ButtonPanel()
-
-    # 버튼 콜백 매핑
-    for item in view.children:
-        if isinstance(item, discord.ui.Button) and getattr(item, "custom_id", None):
-            async def make_callback(i: discord.Interaction, cid=item.custom_id):
-                if cid == "panel_notice":
-                    await i.response.send_message(f"{EMOJI_NOTICE} 공지사항을 확인해줘!", ephemeral=True)
-                elif cid == "panel_product":
-                    await i.response.send_message(f"{EMOJI_PRODUCT} 제품 목록을 불러왔어!", ephemeral=True)
-                elif cid == "panel_charge":
-                    await i.response.send_message(f"{EMOJI_CHARGE} 충전 페이지로 안내할게!", ephemeral=True)
-                elif cid == "panel_buy":
-                    await i.response.send_message(f"{EMOJI_BUY} 구매 절차를 시작할게!", ephemeral=True)
-                elif cid == "panel_info":
-                    user = i.user
-                    await i.response.send_message(f"{EMOJI_INFO} {user.mention}님의 정보입니다.", ephemeral=True)
-                else:
-                    await i.response.send_message("지원하지 않는 버튼이야.", ephemeral=True)
-            item.callback = make_callback
-
     await interaction.response.send_message(embed=embed, view=view)
+
 
 @bot.event
 async def on_ready():
     try:
-        # 길드 전용 동기화: 네 서버에만 바로 등록돼서 반영 빠름
         guild = discord.Object(id=GUILD_ID)
         synced = await bot.tree.sync(guild=guild)
         print(f"길드 슬래시 커맨드 동기화 완료({GUILD_ID}): {len(synced)}개")
     except Exception as e:
         print(f"동기화 오류: {e}")
     print(f"로그인: {bot.user} (준비 완료)")
+
 
 TOKEN = os.getenv("DISCORD_TOKEN", "여기에_토큰_넣기")
 bot.run(TOKEN)
