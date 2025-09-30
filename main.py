@@ -4,10 +4,10 @@ import os
 import discord
 from discord.ext import commands
 
-# 너의 서버 ID
+# 네 서버 ID
 GUILD_ID = 1419200424636055592
 
-# 회색 컬러
+# 회색 임베드 컬러
 GRAY = discord.Color.from_str("#808080")
 
 # 커스텀 이모지
@@ -65,7 +65,7 @@ class ButtonPanel(discord.ui.View):
         self.info_btn.callback = self.on_info
         self.buy_btn.callback = self.on_buy
 
-    # 공지사항: 회색 임베드 + 나만 보이게(ephemeral)
+    # 공지사항: 회색 임베드 + 나만 보이게
     async def on_notice(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="공지사항",
@@ -78,13 +78,24 @@ class ButtonPanel(discord.ui.View):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # 충전
     async def on_charge(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"{EMOJI_CHARGE} 충전 페이지로 안내할게!", ephemeral=True)
 
+    # 내 정보: 회색 임베드 + 나만 보이게, 예시 값 표시
     async def on_info(self, interaction: discord.Interaction):
-        user = interaction.user
-        await interaction.response.send_message(f"{EMOJI_INFO} {user.mention}님의 정보입니다.", ephemeral=True)
+        embed = discord.Embed(
+            title="내 정보",
+            description=(
+                "보유 금액 : `예시`원\n"
+                "누적 금액 : `예시`원\n"
+                "거래 횟수 : `예시`번"
+            ),
+            color=GRAY
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # 구매
     async def on_buy(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"{EMOJI_BUY} 구매 절차를 시작할게!", ephemeral=True)
 
