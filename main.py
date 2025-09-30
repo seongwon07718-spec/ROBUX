@@ -1,6 +1,5 @@
 import os
 import re
-import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -13,16 +12,16 @@ GUILD = discord.Object(id=GUILD_ID)
 GRAY = discord.Color.from_str("#808080")
 RED = discord.Color.red()
 
-# 버튼 이모지들 (이전 요구 반영)
+# 버튼 이모지들
 EMOJI_NOTICE = "<:ticket:1422579515955085388>"
-EMOJI_CHARGE = "<a:11845034938353746621:1421383445669613660>"  # 충전 버튼 이모지
+EMOJI_CHARGE = "<a:11845034938353746621:1421383445669613660>"   # 충전 버튼
 EMOJI_INFO   = "<:info:1422579514218905731>"
-EMOJI_BUY    = "<a:NitroPremium:1422605740530471065>"
+EMOJI_BUY    = "<a:NitroPremium:1422605740530471065>"           # 구매 버튼
 
 # 결제수단 이모지
-EMOJI_TOSS   = "<:TOSS:1421430302684745748>"
-EMOJI_COIN   = "<:emoji_68:1421430304706658347>"
-EMOJI_CULTURE= "<:culture:1421430797604229150>"
+EMOJI_TOSS    = "<:TOSS:1421430302684745748>"
+EMOJI_COIN    = "<:emoji_68:1421430304706658347>"
+EMOJI_CULTURE = "<:culture:1421430797604229150>"
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -50,21 +49,25 @@ def is_admin():
         return False
     return app_commands.check(predicate)
 
-# ===== 중앙 저장소: 구매 카테고리(메모리) =====
+# ===== 구매 카테고리 저장소(메모리) =====
 class PurchaseCategoryStore:
-    categories: list[dict] = []  # [{name, desc, emoji_raw, emoji_display, emoji_obj}]
+    # [{name, desc, emoji_raw, emoji_display, emoji_obj}]
+    categories: list[dict] = []
 
     @classmethod
     def set_category(cls, name: str, desc: str = "", emoji_text: str = ""):
         pemoji = parse_partial_emoji(emoji_text)
-        data = {
+        cls._upsert({
             "name": name,
             "desc": desc,
             "emoji_raw": emoji_text,
             "emoji_display": str(pemoji) if pemoji else (emoji_text if emoji_text else ""),
             "emoji_obj": pemoji
-        }
-        idx = next((i for i, c in enumerate(cls.categories) if c["name"] == name), -1)
+        })
+
+    @classmethod
+    def _upsert(cls, data: dict):
+        idx = next((i for i, c in enumerate(cls.categories) if c["name"] == data["name"]), -1)
         if idx >= 0:
             cls.categories[idx] = data
         else:
@@ -78,10 +81,9 @@ class PurchaseCategoryStore:
     def list_categories(cls):
         return list(cls.categories)
 
-# ===== 결제수단 상태 저장소 =====
-# True=지원, False=미지원
+# ===== 결제수단 지원 여부 저장소 =====
 class PaymentSupportStore:
-    # 초기엔 전부 미지원으로 비워둠
+    # 초기 전부 미지원
     support = {
         "bank": False,     # 계좌이체
         "coin": False,     # 코인충전
@@ -89,19 +91,16 @@ class PaymentSupportStore:
     }
 
     @classmethod
-    def set_support(cls, bank: bool | None = None, coin: bool | None = None, culture: bool | None = None):
-        if bank is not None:
-            cls.support["bank"] = bank
-        if coin is not None:
-            cls.support["coin"] = coin
-        if culture is not None:
-            cls.support["culture"] = culture
+    def set_support(cls, bank: bool, coin: bool, culture: bool):
+        cls.support["bank"] = bank
+        cls.support["coin"] = coin
+        cls.support["culture"] = culture
 
     @classmethod
     def is_supported(cls, key: str) -> bool:
         return bool(cls.support.get(key, False))
 
-# ===== 컴포넌트: 내 정보 거래내역 =====
+# ===== “내 정보” 거래내역 드롭다운 =====
 class TransactionSelect(discord.ui.Select):
     def __init__(self, user: discord.User):
         options = [
@@ -138,30 +137,33 @@ class TransactionSelect(discord.ui.Select):
         title_map = {"last5": "최근 거래 5건", "days7": "최근 7일 거래", "days30": "최근 30일 거래", "days90": "최근 90일 거래"}
         lines = [f"- [{t['id']}] {t['item']} | {t['amount']}원 | {t['status']}" for t in txns]
         desc = "\n".join(lines) if lines else "거래내역이 없습니다."
-        await interaction.response.send_message(embed=discord.Embed(title=title_map.get(mode, "거래내역"), description=desc, color=GRAY), ephemeral=True)
+        await interaction.response.send_message(
+            embed=discord.Embed(title=title_map.get(mode, "거래내역"), description=desc, color=GRAY),
+            ephemeral=True
+        )
 
 class MyInfoView(discord.ui.View):
     def __init__(self, user: discord.User):
         super().__init__(timeout=None)
         self.add_item(TransactionSelect(user))
 
-# ===== 컴포넌트: 구매 카테고리 드롭다운(이모지 아이콘 지원) =====
+# ===== 구매 카테고리 드롭다운(이모지 PartialEmoji 적용) =====
 class DynamicCategorySelect(discord.ui.Select):
     def __init__(self, user: discord.User):
         cats = PurchaseCategoryStore.list_categories()
         if cats:
             options = []
             for c in cats[:25]:
-                opt_kwargs = {
+                opt = {
                     "label": c["name"],
                     "value": c["name"],
                     "description": (c["desc"][:80] if c["desc"] else None)
                 }
                 if c["emoji_obj"] is not None:
-                    opt_kwargs["emoji"] = c["emoji_obj"]
+                    opt["emoji"] = c["emoji_obj"]      # 커스텀 이모지
                 elif c["emoji_raw"]:
-                    opt_kwargs["emoji"] = c["emoji_raw"]
-                options.append(discord.SelectOption(**opt_kwargs))
+                    opt["emoji"] = c["emoji_raw"]      # 유니코드 이모지
+                options.append(discord.SelectOption(**opt))
             placeholder = "카테고리를 선택하세요"
         else:
             options = [discord.SelectOption(label="등록된 카테고리가 없습니다", value="__none__", description="관리자가 /카테고리_설정으로 추가하세요")]
@@ -177,14 +179,17 @@ class DynamicCategorySelect(discord.ui.Select):
         if val == "__none__":
             await interaction.response.send_message("지금은 선택할 카테고리가 없어요. 잠시 후 다시 시도해줘.", ephemeral=True)
             return
-        await interaction.response.send_message(embed=discord.Embed(title=f"카테고리 선택됨: {val}", description="이 카테고리의 상품을 곧 보여줄게.", color=GRAY), ephemeral=True)
+        await interaction.response.send_message(
+            embed=discord.Embed(title=f"카테고리 선택됨: {val}", description="이 카테고리의 상품을 곧 보여줄게.", color=GRAY),
+            ephemeral=True
+        )
 
 class BuyCategoryView(discord.ui.View):
     def __init__(self, user: discord.User):
         super().__init__(timeout=None)
         self.add_item(DynamicCategorySelect(user))
 
-# ===== 결제수단 모달 =====
+# ===== 결제 모달 =====
 class PaymentModal(discord.ui.Modal, title="충전 신청"):
     amount_input = discord.ui.TextInput(label="충전할 금액", placeholder="예) 10000", required=True, max_length=12)
     depositor_input = discord.ui.TextInput(label="입금자명", placeholder="예) 홍길동", required=True, max_length=20)
@@ -203,53 +208,25 @@ class PaymentModal(discord.ui.Modal, title="충전 신청"):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ===== 결제수단 패널 뷰 =====
+# ===== 결제수단 선택 뷰 =====
 class PaymentMethodView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        # 계좌이체
-        self.bank_btn = discord.ui.Button(
-            label="계좌이체",
-            style=discord.ButtonStyle.secondary,
-            emoji=EMOJI_TOSS,
-            custom_id="pay_bank",
-            row=0
-        )
-        # 코인충전
-        self.coin_btn = discord.ui.Button(
-            label="코인충전",
-            style=discord.ButtonStyle.secondary,
-            emoji=EMOJI_COIN,
-            custom_id="pay_coin",
-            row=0
-        )
-        # 문상충전
-        self.culture_btn = discord.ui.Button(
-            label="문상충전",
-            style=discord.ButtonStyle.secondary,
-            emoji=EMOJI_CULTURE,
-            custom_id="pay_culture",
-            row=0
-        )
+        self.bank_btn = discord.ui.Button(label="계좌이체", style=discord.ButtonStyle.secondary, emoji=EMOJI_TOSS,    custom_id="pay_bank",    row=0)
+        self.coin_btn = discord.ui.Button(label="코인충전", style=discord.ButtonStyle.secondary, emoji=EMOJI_COIN,    custom_id="pay_coin",    row=0)
+        self.cult_btn = discord.ui.Button(label="문상충전", style=discord.ButtonStyle.secondary, emoji=EMOJI_CULTURE, custom_id="pay_culture", row=0)
 
-        self.add_item(self.bank_btn)
-        self.add_item(self.coin_btn)
-        self.add_item(self.culture_btn)
-
-        self.bank_btn.callback = self.on_bank
-        self.coin_btn.callback = self.on_coin
-        self.culture_btn.callback = self.on_culture
+        self.add_item(self.bank_btn); self.bank_btn.callback = self.on_bank
+        self.add_item(self.coin_btn); self.coin_btn.callback = self.on_coin
+        self.add_item(self.cult_btn); self.cult_btn.callback = self.on_culture
 
     async def _handle(self, interaction: discord.Interaction, key: str, pretty: str):
         if not PaymentSupportStore.is_supported(key):
-            embed = discord.Embed(
-                title="실패",
-                description="현재 미지원",
-                color=RED
+            await interaction.response.send_message(
+                embed=discord.Embed(title="실패", description="현재 미지원", color=RED),
+                ephemeral=True
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-        # 지원 상태면 모달
         await interaction.response.send_modal(PaymentModal(method_label=pretty))
 
     async def on_bank(self, interaction: discord.Interaction):
@@ -286,41 +263,31 @@ class ButtonPanel(discord.ui.View):
         )
 
     async def on_charge(self, interaction: discord.Interaction):
-        # 결제수단 패널 띄우기
-        embed = discord.Embed(
-            title="결제수단 선택하기",
-            description="원하시는 결제수단 버튼을 클릭해주세요",
-            color=GRAY
+        await interaction.response.send_message(
+            embed=discord.Embed(title="결제수단 선택하기", description="원하시는 결제수단 버튼을 클릭해주세요", color=GRAY),
+            view=PaymentMethodView(),
+            ephemeral=True
         )
-        await interaction.response.send_message(embed=embed, view=PaymentMethodView(), ephemeral=True)
 
     async def on_info(self, interaction: discord.Interaction):
         await interaction.response.send_message(
-            embed=discord.Embed(
-                title="내 정보",
-                description="보유 금액 : `예시`원\n누적 금액 : `예시`원\n거래 횟수 : `예시`번",
-                color=GRAY
-            ),
+            embed=discord.Embed(title="내 정보", description="보유 금액 : `예시`원\n누적 금액 : `예시`원\n거래 횟수 : `예시`번", color=GRAY),
             view=MyInfoView(interaction.user),
             ephemeral=True
         )
 
     async def on_buy(self, interaction: discord.Interaction):
         await interaction.response.send_message(
-            embed=discord.Embed(
-                title="카테고리 선택하기",
-                description="구매할 카테고리를 선택해주세요",
-                color=GRAY
-            ),
+            embed=discord.Embed(title="카테고리 선택하기", description="구매할 카테고리를 선택해주세요", color=GRAY),
             view=BuyCategoryView(interaction.user),
             ephemeral=True
         )
 
 # ===== 카테고리 설정 모달 =====
 class CategorySetupModal(discord.ui.Modal, title="카테고리 설정"):
-    name_input = discord.ui.TextInput(label="카테고리 이름", placeholder="예) 니트로", required=True, max_length=60)
-    desc_input = discord.ui.TextInput(label="카테고리 설명", style=discord.TextStyle.paragraph, placeholder="예) 디스코드 니트로 구매하기", required=False, max_length=200)
-    emoji_input = discord.ui.TextInput(label="카테고리 이모지", placeholder="예) 😀 또는 <:name:id> 또는 <a:name:id>", required=False, max_length=100)
+    name_input  = discord.ui.TextInput(label="카테고리 이름",  placeholder="예) 니트로",              required=True,  max_length=60)
+    desc_input  = discord.ui.TextInput(label="카테고리 설명",  style=discord.TextStyle.paragraph, placeholder="예) 디스코드 니트로 구매하기", required=False, max_length=200)
+    emoji_input = discord.ui.TextInput(label="카테고리 이모지", placeholder="예) 😀 혹은 <:name:id> / <a:name:id>",   required=False, max_length=100)
 
     def __init__(self, author: discord.User):
         super().__init__()
@@ -330,7 +297,6 @@ class CategorySetupModal(discord.ui.Modal, title="카테고리 설정"):
         if interaction.user.id != self.author.id:
             await interaction.response.send_message("작성자만 제출할 수 있어.", ephemeral=True)
             return
-
         name = str(self.name_input.value).strip()
         desc = str(self.desc_input.value).strip() if self.desc_input.value else ""
         emoji_text = str(self.emoji_input.value).strip() if self.emoji_input.value else ""
@@ -340,7 +306,6 @@ class CategorySetupModal(discord.ui.Modal, title="카테고리 설정"):
         pemoji = parse_partial_emoji(emoji_text)
         preview_emoji = str(pemoji) if pemoji else emoji_text
         preview = f"{(preview_emoji + ' ') if emoji_text else ''}{name}\n{desc}" if (desc or emoji_text) else name
-
         await interaction.response.send_message(
             embed=discord.Embed(title="구매 카테고리 등록 완료", description=preview, color=GRAY),
             ephemeral=True
@@ -381,16 +346,16 @@ class ControlCog(commands.Cog):
             def __init__(self, categories, author):
                 options = []
                 for c in categories[:25]:
-                    opt_kwargs = {
+                    opt = {
                         "label": c["name"],
                         "value": c["name"],
                         "description": (c["desc"][:80] if c["desc"] else None)
                     }
                     if c["emoji_obj"] is not None:
-                        opt_kwargs["emoji"] = c["emoji_obj"]
+                        opt["emoji"] = c["emoji_obj"]
                     elif c["emoji_raw"]:
-                        opt_kwargs["emoji"] = c["emoji_raw"]
-                    options.append(discord.SelectOption(**opt_kwargs))
+                        opt["emoji"] = c["emoji_raw"]
+                    options.append(discord.SelectOption(**opt))
                 super().__init__(placeholder="삭제할 ‘구매 카테고리’를 선택하세요", min_values=1, max_values=1, options=options, custom_id=f"buycat_del_{author.id}")
                 self.author = author
 
@@ -412,25 +377,20 @@ class ControlCog(commands.Cog):
             view=view, ephemeral=True
         )
 
-    # /결제수단_설정
+    # /결제수단_설정 — Choice 인자는 데코레이터로 정의
     @app_commands.command(name="결제수단_설정", description="결제수단 지원 여부를 설정합니다.")
     @app_commands.guilds(GUILD)
     @is_admin()
-    @app_commands.describe(
-        계좌이체="지원 또는 미지원",
-        코인충전="지원 또는 미지원",
-        문상충전="지원 또는 미지원"
+    @app_commands.describe(계좌이체="지원/미지원", 코인충전="지원/미지원", 문상충전="지원/미지원")
+    @app_commands.choices(
+        계좌이체=[app_commands.Choice(name="지원", value="지원"), app_commands.Choice(name="미지원", value="미지원")],
+        코인충전=[app_commands.Choice(name="지원", value="지원"), app_commands.Choice(name="미지원", value="미지원")],
+        문상충전=[app_commands.Choice(name="지원", value="지원"), app_commands.Choice(name="미지원", value="미지원")]
     )
-    async def 결제수단_설정(
-        self,
-        interaction: discord.Interaction,
-        계좌이체: app_commands.Choice[str],
-        코인충전: app_commands.Choice[str],
-        문상충전: app_commands.Choice[str]
-    ):
-        # Choice는 미리 바인딩해야 하므로 동적으로 생성하는 대신 choices 데코레이터 사용
-        await interaction.response.defer(ephemeral=True)
-        # 값 적용
+    async def 결제수단_설정(self, interaction: discord.Interaction,
+                        계좌이체: app_commands.Choice[str],
+                        코인충전: app_commands.Choice[str],
+                        문상충전: app_commands.Choice[str]):
         PaymentSupportStore.set_support(
             bank=(계좌이체.value == "지원"),
             coin=(코인충전.value == "지원"),
@@ -441,29 +401,10 @@ class ControlCog(commands.Cog):
             f"{EMOJI_COIN} 코인충전: {코인충전.value}\n"
             f"{EMOJI_CULTURE} 문상충전: {문상충전.value}"
         )
-        await interaction.followup.send(embed=discord.Embed(title="결제수단 설정 완료", description=desc, color=GRAY), ephemeral=True)
-
-# 지원/미지원 choices 등록
-ControlCog.결제수단_설정.autocomplete = None
-ControlCog.결제수단_설정.choices = None
-ControlCog.결제수단_설정.__func__.__globals__  # noop to keep reference
-
-# 런타임에 choices 지정
-@app_commands.choices(계좌이체=[
-    app_commands.Choice(name="지원", value="지원"),
-    app_commands.Choice(name="미지원", value="미지원"),
-])
-@app_commands.choices(코인충전=[
-    app_commands.Choice(name="지원", value="지원"),
-    app_commands.Choice(name="미지원", value="미지원"),
-])
-@app_commands.choices(문상충전=[
-    app_commands.Choice(name="지원", value="지원"),
-    app_commands.Choice(name="미지원", value="미지원"),
-])
-def _patch_choices(fn):
-    return fn
-ControlCog.결제수단_설정 = _patch_choices(ControlCog.결제수단_설정)
+        await interaction.response.send_message(
+            embed=discord.Embed(title="결제수단 설정 완료", description=desc, color=GRAY),
+            ephemeral=True
+        )
 
 # ===== 등록/동기화 =====
 async def guild_sync(bot_: commands.Bot):
@@ -482,6 +423,5 @@ async def setup_hook():
 async def on_ready():
     print(f"로그인: {bot.user} (준비 완료)")
 
-# ===== 실행 =====
 TOKEN = os.getenv("DISCORD_TOKEN", "여기에_토큰_넣기")
 bot.run(TOKEN)
