@@ -1,10 +1,11 @@
 import os
 import re
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-# 길드 설정
+# 네 서버 ID
 GUILD_ID = 1419200424636055592
 GUILD = discord.Object(id=GUILD_ID)
 
@@ -61,11 +62,7 @@ class TransactionSelect(discord.ui.Select):
                 {"id": "A1019", "item": "포인트 2000",       "amount": 2000, "status": "완료"},
                 {"id": "A1015", "item": "포인트 3000",       "amount": 3000, "status": "완료"},
             ]
-            if mode == "last5":  return base[:5]
-            if mode == "days7":  return base[:3]
-            if mode == "days30": return base[:5]
-            if mode == "days90": return base
-            return base[:5]
+            return base[:5] if mode in ("last5", "days30") else base[:3] if mode == "days7" else base
 
         selection = self.values[0]
         txns = get_example_txns(selection)
@@ -158,7 +155,7 @@ def is_admin():
         return False
     return app_commands.check(predicate)
 
-# ========== /버튼패널 (길드 스코프만, 중복방지) ==========
+# ========== /버튼패널 (길드 스코프만) ==========
 @bot.tree.command(name="버튼패널", description="윈드 OTT 버튼 패널을 표시합니다.")
 @app_commands.guilds(GUILD)
 async def 버튼패널(interaction: discord.Interaction):
@@ -166,7 +163,7 @@ async def 버튼패널(interaction: discord.Interaction):
     view = ButtonPanel()
     await interaction.response.send_message(embed=embed, view=view)
 
-# ========== /카테고리_설정 (모달 즉시 표시: 구매 카테고리) ==========
+# ========== /카테고리_설정 (모달 즉시) ==========
 class CategorySetupModal(discord.ui.Modal, title="카테고리 설정"):
     name_input = discord.ui.TextInput(label="카테고리 이름", placeholder="예) 구매센터", required=True, max_length=100)
     desc_input = discord.ui.TextInput(label="카테고리 설명", style=discord.TextStyle.paragraph, placeholder="예) 구매 관련 안내/공지", required=False, max_length=400)
@@ -225,7 +222,7 @@ async def 카테고리_설정(interaction: discord.Interaction, 안내채널_이
     channel_name = (안내채널_이름 or "구매-안내").strip()
     await interaction.response.send_modal(CategorySetupModal(author=interaction.user, channel_name=channel_name))
 
-# ========== /카테고리_삭제 (구매 카테고리 삭제) ==========
+# ========== /카테고리_삭제 ==========
 class CategoryDeleteSelect(discord.ui.Select):
     def __init__(self, categories: list[discord.CategoryChannel], author: discord.User):
         options = [discord.SelectOption(label=cat.name, value=str(cat.id)) for cat in categories[:25]] \
@@ -248,7 +245,6 @@ class CategoryDeleteSelect(discord.ui.Select):
             await interaction.response.send_message("유효하지 않은 카테고리야.", ephemeral=True)
             return
 
-        # 하위 채널 먼저 삭제
         for ch in list(category.channels):
             try:
                 await ch.delete(reason="카테고리 삭제에 따른 하위 채널 정리")
@@ -282,11 +278,11 @@ async def 카테고리_삭제(interaction: discord.Interaction):
     view = CategoryDeleteView(categories, interaction.user)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# ========== on_ready: 글로벌 커맨드 정리 + 길드 싱크(중복 제거) ==========
+# ========== on_ready: 글로벌 커맨드 정리 + 길드 싱크 ==========
 @bot.event
 async def on_ready():
     try:
-        # 1) 과거 글로벌 커맨드 제거(버튼패널 중복 방지)
+        # 예전 글로벌 커맨드 제거(버튼패널 중복 방지)
         try:
             await bot.tree.sync()
             bot.tree.clear_commands(guild=None)
@@ -295,7 +291,7 @@ async def on_ready():
         except Exception as e:
             print(f"글로벌 초기화 스킵: {e}")
 
-        # 2) 길드 스코프만 동기화
+        # 길드 스코프만 동기화
         synced = await bot.tree.sync(guild=GUILD)
         print(f"길드 슬래시 커맨드 동기화 완료({GUILD_ID}): {len(synced)}개")
     except Exception as e:
