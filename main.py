@@ -1,3 +1,5 @@
+# pip install -U discord.py
+
 import os
 import re
 import asyncio
@@ -12,9 +14,9 @@ GRAY = discord.Color.from_str("#808080")
 
 # 버튼 이모지들
 EMOJI_NOTICE = "<:ticket:1422579515955085388>"
-EMOJI_CHARGE = "<a:11845034938353746621:1421383445669613660>"  # 요청대로 충전 이모지 교체
+EMOJI_CHARGE = "<a:11845034938353746621:1421383445669613660>"  # 충전 이모지(요청 반영)
 EMOJI_INFO   = "<:info:1422579514218905731>"
-EMOJI_BUY    = "<a:NitroPremium:1422605740530471065>"
+EMOJI_BUY    = "<a:NitroPremium:1422605740530471065>"          # 구매 이모지
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -44,16 +46,20 @@ def is_admin():
 
 # ===== 중앙 저장소: 구매 카테고리(메모리) =====
 class PurchaseCategoryStore:
-    # 시작은 비어 있음
-    categories: list[dict] = []
+    categories: list[dict] = []  # [{name, desc, emoji_raw, emoji_display}]
 
     @classmethod
     def set_category(cls, name: str, desc: str = "", emoji_text: str = ""):
-        # 중복 이름이면 갱신, 아니면 추가
-        idx = next((i for i, c in enumerate(cls.categories) if c["name"] == name), -1)
+        # PartialEmoji 파싱 후, 표시용 문자열 보존
         pemoji = parse_partial_emoji(emoji_text)
         emoji_display = str(pemoji) if pemoji else (emoji_text if emoji_text else "")
-        data = {"name": name, "desc": desc, "emoji": emoji_display}
+        data = {
+            "name": name,
+            "desc": desc,
+            "emoji_raw": emoji_text,
+            "emoji_display": emoji_display
+        }
+        idx = next((i for i, c in enumerate(cls.categories) if c["name"] == name), -1)
         if idx >= 0:
             cls.categories[idx] = data
         else:
@@ -115,10 +121,18 @@ class DynamicCategorySelect(discord.ui.Select):
     def __init__(self, user: discord.User):
         cats = PurchaseCategoryStore.list_categories()
         if cats:
-            options = [discord.SelectOption(label=f"{c['name']}", value=c['name'], description=(c['desc'][:80] if c['desc'] else None)) for c in cats[:25]]
+            # 여기서 이모지를 라벨에 앞에 붙여 표시!
+            options = []
+            for c in cats[:25]:
+                emoji_prefix = f"{c['emoji_display']} " if c['emoji_display'] else ""
+                label = f"{emoji_prefix}{c['name']}"
+                options.append(discord.SelectOption(
+                    label=label,
+                    value=c['name'],
+                    description=(c['desc'][:80] if c['desc'] else None)
+                ))
             placeholder = "카테고리를 선택하세요"
         else:
-            # 비어 있으면 선택 못 하게 더미 옵션
             options = [discord.SelectOption(label="등록된 카테고리가 없습니다", value="__none__", description="관리자가 /카테고리_설정으로 추가하세요")]
             placeholder = "카테고리가 없습니다"
         super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options, custom_id=f"buy_cat_dynamic_{user.id}")
@@ -166,9 +180,9 @@ class ButtonPanel(discord.ui.View):
 
 # ===== 카테고리 설정 모달 =====
 class CategorySetupModal(discord.ui.Modal, title="카테고리 설정"):
-    name_input = discord.ui.TextInput(label="카테고리 이름", placeholder="예) OTT 이용권", required=True, max_length=60)
-    desc_input = discord.ui.TextInput(label="카테고리 설명", style=discord.TextStyle.paragraph, placeholder="예) OTT 관련 상품 카테고리", required=False, max_length=200)
-    emoji_input = discord.ui.TextInput(label="카테고리 이모지", placeholder="예) 😀 또는 <:name:id> 또는 <a:name:id>", required=False, max_length=100)
+    name_input = discord.ui.TextInput(label="카테고리 이름", placeholder="예) 니트로", required=True, max_length=60)
+    desc_input = discord.ui.TextInput(label="카테고리 설명", style=discord.TextStyle.paragraph, placeholder="예) 디스코드 니트로 구매하기", required=False, max_length=200)
+    emoji_input = discord.ui.TextInput(label="카테고리 이모지", placeholder="예) EMOJI_0 또는 <:name:id> 또는 <a:name:id>", required=False, max_length=100)
 
     def __init__(self, author: discord.User):
         super().__init__()
@@ -185,28 +199,26 @@ class CategorySetupModal(discord.ui.Modal, title="카테고리 설정"):
 
         PurchaseCategoryStore.set_category(name=name, desc=desc, emoji_text=emoji_text)
 
-        preview = f"{emoji_text + ' ' if emoji_text else ''}{name}\n{desc}" if (desc or emoji_text) else name
+        preview_emoji = parse_partial_emoji(emoji_text)
+        preview = f"{(str(preview_emoji) if preview_emoji else emoji_text) + ' ' if emoji_text else ''}{name}\n{desc}" if (desc or emoji_text) else name
         await interaction.response.send_message(embed=discord.Embed(title="구매 카테고리 등록 완료", description=preview, color=GRAY), ephemeral=True)
 
-# ===== Cog 구조 =====
+# ===== Cog =====
 class ControlCog(commands.Cog):
     def __init__(self, bot_: commands.Bot):
         self.bot = bot_
 
-    # /버튼패널
     @app_commands.command(name="버튼패널", description="윈드 OTT 버튼 패널을 표시합니다.")
     @app_commands.guilds(GUILD)
     async def 버튼패널(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=discord.Embed(title="윈드 OTT", description="아래 원하시는 버튼을 눌러 이용해주세요!", color=GRAY), view=ButtonPanel())
 
-    # /카테고리_설정: 바로 모달
     @app_commands.command(name="카테고리_설정", description="구매 카테고리를 추가/수정합니다.")
     @app_commands.guilds(GUILD)
     @is_admin()
     async def 카테고리_설정(self, interaction: discord.Interaction):
         await interaction.response.send_modal(CategorySetupModal(author=interaction.user))
 
-    # /카테고리_삭제: 현재 등록된 ‘구매 카테고리’만
     @app_commands.command(name="카테고리_삭제", description="구매 카테고리를 삭제합니다.")
     @app_commands.guilds(GUILD)
     @is_admin()
@@ -218,7 +230,16 @@ class ControlCog(commands.Cog):
 
         class CatDeleteSelect(discord.ui.Select):
             def __init__(self, categories, author):
-                options = [discord.SelectOption(label=(c['name']), value=c['name'], description=(c['desc'][:80] if c['desc'] else None)) for c in categories[:25]]
+                # 라벨에도 등록된 이모지 반영해서 보여줌
+                options = []
+                for c in categories[:25]:
+                    emoji_prefix = f"{c['emoji_display']} " if c['emoji_display'] else ""
+                    label = f"{emoji_prefix}{c['name']}"
+                    options.append(discord.SelectOption(
+                        label=label,
+                        value=c['name'],
+                        description=(c['desc'][:80] if c['desc'] else None)
+                    ))
                 super().__init__(placeholder="삭제할 ‘구매 카테고리’를 선택하세요", min_values=1, max_values=1, options=options, custom_id=f"buycat_del_{author.id}")
                 self.author = author
 
@@ -234,7 +255,7 @@ class ControlCog(commands.Cog):
         view.add_item(CatDeleteSelect(cats, interaction.user))
         await interaction.response.send_message(embed=discord.Embed(title="구매 카테고리 삭제", description="삭제할 카테고리를 선택하세요.", color=GRAY), view=view, ephemeral=True)
 
-# ===== setup_hook에서 깔끔 등록/동기화 =====
+# ===== 등록/동기화 =====
 async def guild_sync(bot_: commands.Bot):
     try:
         synced = await bot_.tree.sync(guild=GUILD)
