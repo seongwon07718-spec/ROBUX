@@ -4,17 +4,16 @@ import os
 import discord
 from discord.ext import commands
 
-# 네 서버 ID
+# 너의 서버 ID
 GUILD_ID = 1419200424636055592
 
-# 회색 임베드 컬러
+# 회색 컬러
 GRAY = discord.Color.from_str("#808080")
 
 # 커스텀 이모지
 EMOJI_NOTICE = "<:ticket:1422579515955085388>"
 EMOJI_CHARGE = "<:charge:1422579517679075448>"
 EMOJI_INFO   = "<:info:1422579514218905731>"
-# 구매 이모지 최신 교체본
 EMOJI_BUY    = "<a:11845034938353746621:1421383445669613660>"
 
 intents = discord.Intents.default()
@@ -25,10 +24,10 @@ class ButtonPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
 
-        # 2x2 배열: row=0(1행), row=1(2행)
+        # 2x2 버튼 구성 (모두 회색 스타일)
         self.notice_btn = discord.ui.Button(
             label="공지사항",
-            style=discord.ButtonStyle.secondary,  # 회색
+            style=discord.ButtonStyle.secondary,
             emoji=EMOJI_NOTICE,
             custom_id="panel_notice",
             row=0
@@ -55,7 +54,6 @@ class ButtonPanel(discord.ui.View):
             row=1
         )
 
-        # View에 버튼 추가
         self.add_item(self.notice_btn)
         self.add_item(self.charge_btn)
         self.add_item(self.info_btn)
@@ -67,9 +65,18 @@ class ButtonPanel(discord.ui.View):
         self.info_btn.callback = self.on_info
         self.buy_btn.callback = self.on_buy
 
-    # 콜백
+    # 공지사항: 회색 임베드 + 나만 보이게(ephemeral)
     async def on_notice(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"{EMOJI_NOTICE} 공지사항을 확인해줘!", ephemeral=True)
+        embed = discord.Embed(
+            title="공지사항",
+            description=(
+                "서버규칙 필독 부탁드립니다\n"
+                "구매후 이용후기는 필수입니다\n"
+                "자충 오류시 티켓 열어주세요"
+            ),
+            color=GRAY
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def on_charge(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"{EMOJI_CHARGE} 충전 페이지로 안내할게!", ephemeral=True)
@@ -91,7 +98,7 @@ class ButtonPanel(discord.ui.View):
 async def button_panel(interaction: discord.Interaction):
     embed = discord.Embed(
         title="윈드 OTT",
-        description="아래 버튼을 눌러 이용해주세요!",
+        description="아래 원하시는 버튼을 눌러 이용해주세요!",
         color=GRAY
     )
     view = ButtonPanel()
