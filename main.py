@@ -42,7 +42,8 @@ def _default_db():
         "balances": {},
         "orders": {},
         "account": {"bank": "", "number": "", "holder": ""},
-        "bans": {}
+        "bans": {},
+        "reviews": {}  # {guildId:{userId:[productName,...]}}
     }
 
 def db_load():
@@ -71,8 +72,10 @@ def db_load():
         data["account"] = {"bank": "", "number": "", "holder": ""}
     if not isinstance(data.get("bans"), dict):
         data["bans"] = {}
+    if not isinstance(data.get("reviews"), dict):
+        data["reviews"] = {}
 
-    # orders 깊은 보정 (길드 dict → 유저 dict → 리스트)
+    # orders 깊은 보정
     fixed_orders = {}
     for gid, users in data["orders"].items():
         if isinstance(users, list):
@@ -126,6 +129,19 @@ def db_load():
         fixed_bans[str(gid)] = bb
     data["bans"] = fixed_bans
 
+    # reviews 보정
+    fixed_reviews = {}
+    for gid, users in data["reviews"].items():
+        rr = {}
+        if isinstance(users, dict):
+            for uid, arr in users.items():
+                if isinstance(arr, list):
+                    rr[str(uid)] = [str(x) for x in arr]
+                else:
+                    rr[str(uid)] = []
+        fixed_reviews[str(gid)] = rr
+    data["reviews"] = fixed_reviews
+
     # account 문자열화
     for k in ("bank", "number", "holder"):
         data["account"][k] = str(data["account"].get(k, ""))
@@ -140,7 +156,6 @@ DB = db_load()
 
 # ===== 유틸 =====
 CUSTOM_EMOJI_RE = re.compile(r'^<(?P<anim>a?):(?P<name>[A-Za-z0-9_]+):(?P<id>\d+)>$')
-
 def parse_partial_emoji(text: str) -> discord.PartialEmoji | None:
     if not text: return None
     m = CUSTOM_EMOJI_RE.match(text.strip())
@@ -279,29 +294,56 @@ def emb_purchase_dm(product: str, qty: int, price: int, detail_text: str, stock_
     e = discord.Embed(title="구매 성공", description=f"제품 이름 : {product}\n구매 개수 : {qty}개\n차감 금액 : {total}원\n{line}\n구매한 제품\n{items_block}", color=GRAY)
     e.set_footer(text="구매 시간"); e.timestamp = discord.utils.utcnow(); return e
 
-# ===== 후기/수량 모달 / 구매 플로우 =====
+# ===== 후기/구매 플로우 =====
 class ReviewModal(discord.ui.Modal, title="구매 후기 작성"):
     product_input = discord.ui.TextInput(label="구매 제품", required=True, max_length=60)
     stars_input = discord.ui.TextInput(label="별점(1~5)", required=True, max_length=1)
     content_input = discord.ui.TextInput(label="후기 내용", style=discord.TextStyle.paragraph, required=True, max_length=500)
     def __init__(self, owner_id: int, product_name: str, category: str):
-        super().__init__(); self.owner_id = owner_id; self.category = category; self.product_input.default = product_name
+        super().__init__(); self.owner_id = owner_id; self.category = category; self.product_name = product_name; self.product_input.default = product_name
     async def on_submit(self, it: discord.Interaction):
         try:
             if it.user.id != self.owner_id:
                 await it.response.send_message("작성자만 제출할 수 있어.", ephemeral=True); return
+
+            gid = str(it.guild.id)
+            uid = str(it.user.id)
+
+            # 1회 제한 체크
+            DB["reviews"].setdefault(gid, {})
+            DB["reviews"][gid].setdefault(uid, [])
+            if self.product_name in DB["reviews"][gid][uid]:
+                await it.response.send_message("이미 이 제품에 대한 후기를 작성하셨어.", ephemeral=True)
+                return
+
             product = str(self.product_input.value).strip()
             s = str(self.stars_input.value).strip()
             content = str(self.content_input.value).strip()
+
             if not s.isdigit():
                 await it.response.send_message("별점은 1~5 사이 숫자만 입력해줘.", ephemeral=True); return
             stars = int(s)
             if stars < 1 or stars > 5:
                 await it.response.send_message("별점은 1~5 사이여야 해.", ephemeral=True); return
+
             p = prod_get(product, self.category)
-            if p: p["ratings"].append(stars); db_save()
-            await send_log_embed(it.guild, "review", emb_review(product, stars, content))
-            await it.response.send_message("후기 고마워! 채널에 공유됐어.", ephemeral=True)
+            if p:
+                p.setdefault("ratings", [])
+                p["ratings"].append(stars)
+                db_save()
+
+            # 후기 로그 채널 전송(실패해도 유저 응답은 성공)
+            try:
+                await send_log_embed(it.guild, "review", emb_review(product, stars, content))
+            except Exception:
+                pass
+
+            # 1회 제한 기록
+            if self.product_name not in DB["reviews"][gid][uid]:
+                DB["reviews"][gid][uid].append(self.product_name)
+                db_save()
+
+            await it.response.send_message("후기 고마워! 채널에도 공유해둘게.", ephemeral=True)
         except Exception:
             if not it.response.is_done():
                 try: await it.response.send_message("후기 접수 완료!", ephemeral=True)
@@ -540,7 +582,7 @@ class ButtonPanel(discord.ui.View):
         n.callback = _notice; c.callback = _charge; i.callback = _info; b.callback = _buy
         self.add_item(n); self.add_item(c); self.add_item(i); self.add_item(b)
 
-# ===== 카테고리/제품/재고/로그 모달·뷰 =====
+# ===== 카테고리/제품/재고/로그 모달·뷰 (위에서 클래스 정의, 아래 COG에서 사용) =====
 class LogChannelIdModal(discord.ui.Modal, title="로그 채널 설정"):
     channel_id_input = discord.ui.TextInput(label="채널 ID", required=True, max_length=25)
     def __init__(self, owner_id: int, log_key: str):
@@ -665,7 +707,7 @@ class ProductDeleteView(discord.ui.View):
     def __init__(self, owner_id: int):
         super().__init__(timeout=None); self.add_item(ProductDeleteSelect(owner_id))
 
-# ===== COG / 슬래시 등록 =====
+# ===== COG / 등록 =====
 class ControlCog(commands.Cog):
     def __init__(self, bot_: commands.Bot):
         self.bot = bot_
