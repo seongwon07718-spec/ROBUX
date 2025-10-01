@@ -30,9 +30,11 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ===== 유틸 =====
 CUSTOM_EMOJI_RE = re.compile(r"^<(?P<anim>a?):(?P<name>[a-zA-Z0-9_]+):(?P<id>\d+)>$")
 def parse_partial_emoji(text: str) -> discord.PartialEmoji | None:
-    if not text: return None
+    if not text:
+        return None
     m = CUSTOM_EMOJI_RE.match(text.strip())
-    if not m: return None
+    if not m:
+        return None
     return discord.PartialEmoji(name=m.group("name"), id=int(m.group("id")), animated=(m.group("anim")=="a"))
 
 def is_admin():
@@ -48,7 +50,7 @@ def is_admin():
 
 def star_bar(avg: float) -> str:
     n = max(0, min(int(round(avg)), 10))
-    return "⭐️"*n if n>0 else "⭐️"
+    return "⭐️"*n if n > 0 else "⭐️"
 
 # ===== 저장소: 카테고리 =====
 class PurchaseCategoryStore:
@@ -82,7 +84,7 @@ class ProductStore:
             "name": name,
             "category": category,
             "price": int(max(0, price)),
-            "stock": 0,
+            "stock": 0,  # 재고 입력칸 제거 → 0부터
             "emoji_raw": emoji_text,
             "emoji_obj": p,
             "ratings": [],
@@ -99,7 +101,7 @@ class ProductStore:
         return [p for p in cls.products if p["category"]==category]
     @classmethod
     def get(cls, name: str, category: str)->dict|None:
-        return next((p for p in cls.products if p{"name"}==name and p{"category"}==category), None)
+        return next((p for p in cls.products if p["name"]==name and p["category"]==category), None)
     @classmethod
     def rating_avg(cls, product: dict)->float:
         return round(statistics.mean(product["ratings"]), 1) if product["ratings"] else 0.0
@@ -149,41 +151,32 @@ class BalanceStore:
         cls._ensure(gid); return cls.balances[gid].get(uid, 0)
     @classmethod
     def add(cls, gid:int, uid:int, amount:int)->tuple[int,int,int]:
-        cls._ensure(gid); prev = cls.get(gid, uid); amt = max(0, amount); after = prev + amt
-        cls.balances[gid][uid] = after; return prev, amt, after
+        cls._ensure(gid); prev=cls.get(gid, uid); amt=max(0, amount); after=prev+amt
+        cls.balances[gid][uid]=after; return prev, amt, after
     @classmethod
     def sub(cls, gid:int, uid:int, amount:int)->tuple[int,int,int]:
-        cls._ensure(gid); prev = cls.get(gid, uid); amt = max(0, amount); after = prev - amt
-        cls.balances[gid][uid] = after; return prev, amt, after
+        cls._ensure(gid); prev=cls.get(gid, uid); amt=max(0, amount); after=prev-amt
+        cls.balances[gid][uid]=after; return prev, amt, after
 
 # ===== 임베드 빌더 =====
 def usage_embed(user: discord.User, product: str, qty: int)->discord.Embed:
-    desc = f"{user.mention}님이 {product} {qty}개 구매 감사합니다💝\n후기 작성 부탁드립니다"
-    e = discord.Embed(description=desc, color=GRAY)
-    e.set_footer(text="구매 시간"); e.timestamp = discord.utils.utcnow(); return e
-
+    desc=f"{user.mention}님이 {product} {qty}개 구매 감사합니다💝\n후기 작성 부탁드립니다"
+    e=discord.Embed(description=desc, color=GRAY); e.set_footer(text="구매 시간"); e.timestamp=discord.utils.utcnow(); return e
 def review_embed(product: str, stars: int, content: str)->discord.Embed:
-    stars_text = "⭐️"*max(0, min(stars, 10))
-    line = "ㅡ"*18
-    desc = f"**구매 제품** {product}\n**별점** {stars_text}\n{line}\n{content}\n{line}\n이용해주셔서 감사합니다."
-    e = discord.Embed(title="구매후기", description=desc, color=GRAY)
-    e.set_footer(text="작성 시간"); e.timestamp = discord.utils.utcnow(); return e
-
+    stars_text="⭐️"*max(0, min(stars, 10)); line="ㅡ"*18
+    desc=f"**구매 제품** {product}\n**별점** {stars_text}\n{line}\n{content}\n{line}\n이용해주셔서 감사합니다."
+    e=discord.Embed(title="구매후기", description=desc, color=GRAY); e.set_footer(text="작성 시간"); e.timestamp=discord.utils.utcnow(); return e
 def product_desc(p: dict)->str:
-    avg = ProductStore.rating_avg(p)
-    return f"{p['price']}원 | 재고{p['stock']}개 | 평점{star_bar(avg)}"
-
+    avg=ProductStore.rating_avg(p); return f"{p['price']}원 | 재고{p['stock']}개 | 평점{star_bar(avg)}"
 def purchase_dm_embed(product: str, qty: int, price: int, detail_text: str)->discord.Embed:
-    total = int(price)*int(qty)
-    line = "ㅡ"*18
-    desc = f"제품 이름 : {product}\n구매 개수 : {qty}개\n차감 금액 : {total}원\n{line}\n구매한 제품\n{detail_text}"
-    e = discord.Embed(title="구매 성공", description=desc, color=GRAY)
-    e.set_footer(text="구매 시간"); e.timestamp = discord.utils.utcnow(); return e
+    total=int(price)*int(qty); line="ㅡ"*18
+    desc=f"제품 이름 : {product}\n구매 개수 : {qty}개\n차감 금액 : {total}원\n{line}\n구매한 제품\n{detail_text}"
+    e=discord.Embed(title="구매 성공", description=desc, color=GRAY); e.set_footer(text="구매 시간"); e.timestamp=discord.utils.utcnow(); return e
 
 # ===== 구매 플로우 =====
 class QuantityModal(discord.ui.Modal, title="수량 입력"):
     qty_input = discord.ui.TextInput(label="구매 수량", required=True, max_length=6)
-    def __init__(self, owner_id: int, category: str, product_name: str):
+    def __init__(self, owner_id:int, category:str, product_name:str):
         super().__init__(); self.owner_id=owner_id; self.category=category; self.product_name=product_name
     async def on_submit(self, it: discord.Interaction):
         if it.user.id!=self.owner_id:
@@ -192,19 +185,17 @@ class QuantityModal(discord.ui.Modal, title="수량 입력"):
         if not s.isdigit() or int(s)<=0:
             await it.response.send_message("수량은 1 이상의 숫자여야 해.", ephemeral=True); return
         qty=int(s)
-        prod = ProductStore.get(self.product_name, self.category)
+        prod=ProductStore.get(self.product_name, self.category)
         if not prod:
             await it.response.send_message("유효하지 않은 제품입니다.", ephemeral=True); return
-        if prod["stock"] < qty:
+        if prod["stock"]<qty:
             await it.response.send_message("재고가 부족합니다.", ephemeral=True); return
 
-        prod["stock"] -= qty
-        prod["sold_count"] += qty
-
+        prod["stock"]-=qty; prod["sold_count"]+=qty
         await send_log_embed(it.guild, "usage", usage_embed(it.user, self.product_name, qty))
 
         try:
-            dm = await it.user.create_dm()
+            dm=await it.user.create_dm()
             await dm.send(embed=purchase_dm_embed(self.product_name, qty, prod["price"], product_desc(prod)),
                           view=ReviewOpenView(self.product_name, self.category, it.user.id))
         except Exception:
@@ -216,9 +207,8 @@ class ReviewModal(discord.ui.Modal, title="구매 후기 작성"):
     product_input = discord.ui.TextInput(label="구매 제품", required=True, max_length=60)
     stars_input   = discord.ui.TextInput(label="별점(1~10)", required=True, max_length=2)
     content_input = discord.ui.TextInput(label="후기 내용", style=discord.TextStyle.paragraph, required=True, max_length=500)
-    def __init__(self, owner_id: int, product_name: str, category: str):
-        super().__init__(); self.owner_id=owner_id; self.category=category
-        self.product_input.default = product_name
+    def __init__(self, owner_id:int, product_name:str, category:str):
+        super().__init__(); self.owner_id=owner_id; self.category=category; self.product_input.default=product_name
     async def on_submit(self, it: discord.Interaction):
         if it.user.id!=self.owner_id:
             await it.response.send_message("작성자만 제출할 수 있어.", ephemeral=True); return
@@ -230,18 +220,15 @@ class ReviewModal(discord.ui.Modal, title="구매 후기 작성"):
         stars=int(stars_s)
         if stars<1 or stars>10:
             await it.response.send_message("별점은 1~10 사이여야 해.", ephemeral=True); return
-        prod = ProductStore.get(product, self.category)
+        prod=ProductStore.get(product, self.category)
         if prod: prod["ratings"].append(stars)
         await send_log_embed(it.guild, "review", review_embed(product, stars, content))
         await it.response.send_message("후기 고마워! 채널에 공유됐어.", ephemeral=True)
 
 class ReviewOpenView(discord.ui.View):
-    def __init__(self, product_name: str, category: str, owner_id: int):
-        super().__init__(timeout=None)
-        self.product_name=product_name; self.category=category; self.owner_id=owner_id
-        btn=discord.ui.Button(label="후기 작성하기", style=discord.ButtonStyle.secondary)
-        btn.callback=self.open_review
-        self.add_item(btn)
+    def __init__(self, product_name:str, category:str, owner_id:int):
+        super().__init__(timeout=None); self.product_name=product_name; self.category=category; self.owner_id=owner_id
+        btn=discord.ui.Button(label="후기 작성하기", style=discord.ButtonStyle.secondary); btn.callback=self.open_review; self.add_item(btn)
     async def open_review(self, it: discord.Interaction):
         if it.user.id!=self.owner_id:
             await it.response.send_message("작성자만 사용할 수 있어.", ephemeral=True); return
@@ -378,9 +365,9 @@ class LogRootView(discord.ui.View):
         super().__init__(timeout=None); self.add_item(LogRootSelect(owner_id))
 
 # ===== 잔액 설정 명령 =====
-def build_balance_embed(title: str, lines: list[str], color: discord.Color) -> discord.Embed:
-    e = discord.Embed(title=title, description="\n".join(lines), color=color)
-    e.set_footer(text="변경 시간"); e.timestamp = discord.utils.utcnow(); return e
+def build_balance_embed(title:str, lines:list[str], color:discord.Color)->discord.Embed:
+    e=discord.Embed(title=title, description="\n".join(lines), color=color)
+    e.set_footer(text="변경 시간"); e.timestamp=discord.utils.utcnow(); return e
 
 # ===== 슬래시 커맨드 =====
 class ControlCog(commands.Cog):
@@ -414,8 +401,7 @@ class ControlCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @is_admin()
     @app_commands.describe(유저="대상 유저", 금액="정수 금액", 여부="추가 또는 차감")
-    @app_commands.choices(여부=[app_commands.Choice(name="추가", value="추가"),
-                           app_commands.Choice(name="차감", value="차감")])
+    @app_commands.choices(여부=[app_commands.Choice(name="추가", value="추가"), app_commands.Choice(name="차감", value="차감")])
     async def 잔액_설정(self, it: discord.Interaction,
                     유저: discord.Member,
                     금액: int,
@@ -423,13 +409,13 @@ class ControlCog(commands.Cog):
         if 금액 < 0:
             await it.response.send_message("금액은 음수가 될 수 없어.", ephemeral=True); return
         gid=it.guild.id; uid=유저.id
-        if 여부.value == "차감":
+        if 여부.value=="차감":
             prev, amt, after = BalanceStore.sub(gid, uid, 금액)
-            e = build_balance_embed(f"{유저} 금액 차감", [f"원래 금액 : {prev}", f"차감 할 금액 : {amt}", f"차감 후 금액 : {after}"], RED)
+            e=build_balance_embed(f"{유저} 금액 차감", [f"원래 금액 : {prev}", f"차감 할 금액 : {amt}", f"차감 후 금액 : {after}"], RED)
             await it.response.send_message(embed=e, ephemeral=True)
         else:
             prev, amt, after = BalanceStore.add(gid, uid, 금액)
-            e = build_balance_embed(f"{유저} 금액 추가", [f"원래 금액 : {prev}", f"추가 할 금액 : {amt}", f"추가 후 금액 : {after}"], GREEN)
+            e=build_balance_embed(f"{유저} 금액 추가", [f"원래 금액 : {prev}", f"추가 할 금액 : {amt}", f"추가 후 금액 : {after}"], GREEN)
             await it.response.send_message(embed=e, ephemeral=True)
 
 # ===== 등록/싱크 =====
