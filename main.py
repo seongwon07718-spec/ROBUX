@@ -53,10 +53,10 @@ def db_load():
         for k,v in base.items():
             if k not in data: data[k]=v
         # 하위 키 누락 보정
-        data.setdefault("account", {"bank":"","number":"","holder":""})
-        data.setdefault("bans", {})
-        data.setdefault("balances", {})
-        data.setdefault("orders", {})
+        data["account"]=data.get("account", {"bank":"","number":"","holder":""})
+        data["bans"]=data.get("bans", {})
+        data["balances"]=data.get("balances", {})
+        data["orders"]=data.get("orders", {})
         return data
     except Exception:
         return _default_db()
@@ -136,18 +136,28 @@ def product_desc_line(p: dict) -> str:
     avg = round(statistics.mean(ratings), 1) if ratings else None
     return f"{p['price']}원 | 재고{p['stock']}개 | 평점{star_bar_or_none(avg)}"
 
-def orders_get(gid:int, uid:int): return DB["orders"].get(str(gid), {}).get(str(uid), [])
+def orders_get(gid:int, uid:int): 
+    return DB["orders"].get(str(gid), {}).get(str(uid), [])
+
 def orders_add(gid:int, uid:int, product:str, qty:int):
     DB["orders"].setdefault(str(gid), {}).setdefault(str(uid), []).append(
         {"product":product, "qty":qty, "ts":int(time.time())}
     )
     db_save()
 
-def bal_get(gid:int, uid:int) -> int: return DB["balances"].get(str(gid), {}).get(str(uid), 0)
+def bal_get(gid:int, uid:int) -> int: 
+    return DB["balances"].get(str(gid), {}).get(str(uid), 0)
+
 def bal_set(gid:int, uid:int, val:int):
-    DB["balances"].setdefault(str(gid), {}); DB["balances"][str(gid)][str(uid)] = val; db_save()
-def bal_add(gid:int, uid:int, amt:int): bal_set(gid, uid, bal_get(gid, uid)+max(0,amt))
-def bal_sub(gid:int, uid:int, amt:int): bal_set(gid, uid, bal_get(gid, uid)-max(0,amt))
+    DB["balances"].setdefault(str(gid), {})
+    DB["balances"][str(gid)][str(uid)] = val
+    db_save()
+
+def bal_add(gid:int, uid:int, amt:int): 
+    bal_set(gid, uid, bal_get(gid, uid)+max(0,amt))
+
+def bal_sub(gid:int, uid:int, amt:int): 
+    bal_set(gid, uid, bal_get(gid, uid)-max(0,amt))
 
 # ===== 로그 전송(가드) =====
 async def send_log_embed(guild: discord.Guild | None, key: str, embed: discord.Embed):
@@ -512,6 +522,53 @@ class ControlCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @is_admin()
     async def 재고_설정(self, it: discord.Interaction):
+        # 지역 클래스: 스코프 보장(이름 미정의 방지)
+        class StockProductSelect(discord.ui.Select):
+            def __init__(self, owner_id:int):
+                prods=prod_list_all()
+                if prods:
+                    opts=[]
+                    for p in prods[:25]:
+                        opt={"label":f"{p['name']} ({p['category']})",
+                             "value":f"{p['name']}||{p['category']}",
+                             "description":product_desc_line(p)}
+                        if p.get("emoji_raw"): opt["emoji"]=parse_partial_emoji(p["emoji_raw"]) or p["emoji_raw"]
+                        opts.append(discord.SelectOption(**opt))
+                else:
+                    opts=[discord.SelectOption(label="등록된 제품이 없습니다", value="__none__")]
+                super().__init__(placeholder="재고를 설정할 제품을 선택하세요", min_values=1, max_values=1, options=opts, custom_id=f"stock_prod_{owner_id}")
+                self.owner_id=owner_id
+            async def callback(self, inter:discord.Interaction):
+                if inter.user.id!=self.owner_id:
+                    await inter.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
+                val=self.values[0]
+                if val=="__none__":
+                    await inter.response.send_message("먼저 제품을 추가해주세요.", ephemeral=True); return
+                name,cat = val.split("||",1)
+                await inter.response.send_modal(StockAddModal(self.owner_id, name, cat))
+
+        class StockRootView(discord.ui.View):
+            def __init__(self, owner_id:int):
+                super().__init__(timeout=None)
+                class _Sel(discord.ui.Select):
+                    def __init__(self, owner_id:int):
+                        super().__init__(placeholder="재고 설정하기", min_values=1, max_values=1,
+                                         options=[discord.SelectOption(label="재고 설정", value="set")],
+                                         custom_id=f"stock_root_{owner_id}")
+                        self.owner_id=owner_id
+                    async def callback(self, inter:discord.Interaction):
+                        if inter.user.id!=self.owner_id:
+                            await inter.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
+                        embed=discord.Embed(title="제품 선택", description="재고를 설정할 제품을 선택해주세요", color=GRAY)
+                        view=discord.ui.View(timeout=None); view.add_item(StockProductSelect(self.owner_id))
+                        try:
+                            await inter.response.edit_message(embed=embed, view=view)
+                        except discord.InteractionResponded:
+                            try:
+                                await inter.followup.edit_message(message_id=inter.message.id, embed=embed, view=view)
+                            except Exception: pass
+                self.add_item(_Sel(owner_id))
+
         await it.response.send_message(embed=discord.Embed(title="재고 설정하기", description="재고 설정해주세요", color=GRAY), view=StockRootView(it.user.id), ephemeral=True)
 
     @app_commands.command(name="로그_설정", description="구매로그/구매후기/관리자로그 채널을 설정합니다.")
@@ -539,7 +596,8 @@ class ControlCog(commands.Cog):
     @app_commands.guilds(GUILD)
     @is_admin()
     @app_commands.describe(유저="대상 유저", 금액="정수 금액", 여부="추가/차감")
-    @app_commands.choices(여부=[app_commands.Choice(name="추가", value="추가"), app_commands.Choice(name="차감", value="차감")])
+    @app_commands.choices(여부=[app_commands.Choice(name="추가", value="추가"),
+                               app_commands.Choice(name="차감", value="차감")])
     async def 잔액_설정(self, it: discord.Interaction, 유저: discord.Member, 금액: int, 여부: app_commands.Choice[str]):
         if 금액<0: await it.response.send_message("금액은 음수가 될 수 없어.", ephemeral=True); return
         gid=it.guild.id; uid=유저.id; prev=bal_get(gid, uid)
@@ -548,13 +606,11 @@ class ControlCog(commands.Cog):
             e=discord.Embed(title=f"{유저} 금액 차감", description=f"원래 금액 : {prev}\n차감 할 금액 : {금액}\n차감 후 금액 : {after}", color=RED)
             e.set_footer(text="변경 시간"); e.timestamp=discord.utils.utcnow()
             await it.response.send_message(embed=e, ephemeral=True)
-            await send_log_text(it.guild, "admin", f"[잔액 차감] {유저} | -{금액} → {after}")
         else:
             bal_add(gid, uid, 금액); after=bal_get(gid, uid)
             e=discord.Embed(title=f"{유저} 금액 추가", description=f"원래 금액 : {prev}\n추가 할 금액 : {금액}\n추가 후 금액 : {after}", color=GREEN)
             e.set_footer(text="변경 시간"); e.timestamp=discord.utils.utcnow()
             await it.response.send_message(embed=e, ephemeral=True)
-            await send_log_text(it.guild, "admin", f"[잔액 추가] {유저} | +{금액} → {after}")
 
     @app_commands.command(name="결제수단_설정", description="결제수단 지원 여부를 설정합니다.")
     @app_commands.guilds(GUILD)
@@ -583,7 +639,6 @@ class ControlCog(commands.Cog):
     async def 계좌번호_설정(self, it: discord.Interaction):
         await it.response.send_modal(AccountSetupModal(it.user.id))
 
-    # 유저 차단/해제: 공개 임베드(보안채널 전송 제거)
     @app_commands.command(name="유저_설정", description="유저 차단/차단풀기")
     @app_commands.guilds(GUILD)
     @is_admin()
@@ -604,7 +659,6 @@ class ControlCog(commands.Cog):
             await it.channel.send(embed=e)
             await it.response.send_message("처리 완료", ephemeral=True)
 
-    # 유저 조회: 회색 임베드, 에페멀
     @app_commands.command(name="유저_조회", description="유저 보유/누적 금액 조회")
     @app_commands.guilds(GUILD)
     @is_admin()
