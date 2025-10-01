@@ -223,7 +223,7 @@ class QuantityModal(discord.ui.Modal, title="수량 입력"):
         order_add(it.guild.id, it.user.id, self.product_name, len(taken))
         await it.response.send_message(embed=discord.Embed(title="구매 완료", description=f"{self.product_name} 구매가 처리됐습니다. DM을 확인해주세요.", color=GRAY), ephemeral=True)
 
-# ===== 구매 셀렉트/플로우 =====
+# ===== 구매 셀렉트/플로우(카테고리→제품: 같은 에페멀에서 edit_message) =====
 class ProductSelect(discord.ui.Select):
     def __init__(self, owner_id:int, category:str):
         prods = prod_list_by_cat(category)
@@ -264,8 +264,13 @@ class CategorySelectForBuy(discord.ui.Select):
     async def callback(self, it:discord.Interaction):
         if it.user.id!=self.owner_id: await it.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
         if self.values[0]=="__none__": await it.response.send_message("먼저 카테고리를 추가해주세요.", ephemeral=True); return
-        embed=discord.Embed(title="제품 선택하기", description=f"{self.values[0]} 카테고리의 제품을 선택해주세요", color=GRAY)
-        await it.response.send_message(embed=embed, view=BuyFlowView(self.owner_id, self.values[0]), ephemeral=True)
+        # 임베드 2개 방지: 기존 에페멀 메시지를 '제품 선택하기'로 교체(edit_message)
+        embed = discord.Embed(title="제품 선택하기", description=f"{self.values[0]} 카테고리의 제품을 선택해주세요", color=GRAY)
+        view  = BuyFlowView(self.owner_id, self.values[0])
+        try:
+            await it.response.edit_message(embed=embed, view=view)
+        except discord.InteractionResponded:
+            await it.followup.edit_message(message_id=it.message.id, embed=embed, view=view)
 
 class CategorySelectForBuyView(discord.ui.View):
     def __init__(self, owner_id:int):
@@ -436,79 +441,6 @@ class ProductDeleteSelect(discord.ui.Select):
 class ProductDeleteView(discord.ui.View):
     def __init__(self, owner_id:int):
         super().__init__(timeout=None); self.add_item(ProductDeleteSelect(owner_id))
-
-# ===== 루트 뷰 =====
-class CategoryRootSelect(discord.ui.Select):
-    def __init__(self, owner_id:int):
-        options=[discord.SelectOption(label="카테고리 추가", value="add"),
-                 discord.SelectOption(label="카테고리 삭제", value="del")]
-        super().__init__(placeholder="카테고리 설정하기", min_values=1, max_values=1, options=options, custom_id=f"cat_root_{owner_id}")
-        self.owner_id=owner_id
-    async def callback(self, inter:discord.Interaction):
-        if inter.user.id!=self.owner_id: await inter.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
-        if self.values[0]=="add": await inter.response.send_modal(CategorySetupModal(self.owner_id))
-        else: await inter.response.send_message(embed=discord.Embed(title="카테고리 삭제", description="삭제할 카테고리를 선택하세요.", color=GRAY), view=CategoryDeleteView(self.owner_id), ephemeral=True)
-
-class ProductRootSelect(discord.ui.Select):
-    def __init__(self, owner_id:int):
-        options=[discord.SelectOption(label="제품 추가", value="add"),
-                 discord.SelectOption(label="제품 삭제", value="del")]
-        super().__init__(placeholder="제품 설정하기", min_values=1, max_values=1, options=options, custom_id=f"prod_root_{owner_id}")
-        self.owner_id=owner_id
-    async def callback(self, inter:discord.Interaction):
-        if inter.user.id!=self.owner_id: await inter.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
-        if self.values[0]=="add": await inter.response.send_modal(ProductSetupModal(self.owner_id))
-        else: await inter.response.send_message(embed=discord.Embed(title="제품 삭제", description="삭제할 제품을 선택하세요.", color=GRAY), view=ProductDeleteView(self.owner_id), ephemeral=True)
-
-class LogRootView(discord.ui.View):
-    def __init__(self, owner_id:int):
-        super().__init__(timeout=None)
-        class _Sel(discord.ui.Select):
-            def __init__(self, owner_id:int):
-                options=[discord.SelectOption(label="구매로그 설정", value="purchase"),
-                         discord.SelectOption(label="구매후기 설정", value="review"),
-                         discord.SelectOption(label="관리자로그 설정", value="admin")]
-                super().__init__(placeholder="설정할 로그 유형을 선택하세요", min_values=1, max_values=1, options=options, custom_id=f"log_root_{owner_id}")
-                self.owner_id=owner_id
-            async def callback(self, it):
-                if it.user.id!=self.owner_id: await it.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
-                await it.response.send_modal(LogChannelIdModal(self.owner_id, self.values[0]))
-        self.add_item(_Sel(owner_id))
-
-class StockRootView(discord.ui.View):
-    def __init__(self, owner_id:int):
-        super().__init__(timeout=None)
-        class _Sel(discord.ui.Select):
-            def __init__(self, owner_id:int):
-                super().__init__(placeholder="재고 설정하기", min_values=1, max_values=1,
-                                 options=[discord.SelectOption(label="재고 설정", value="set")],
-                                 custom_id=f"stock_root_{owner_id}")
-                self.owner_id=owner_id
-            async def callback(self, it):
-                if it.user.id!=self.owner_id: await it.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
-                v=discord.ui.View(timeout=None); v.add_item(StockProductSelect(self.owner_id))
-                await it.response.send_message(embed=discord.Embed(title="제품 선택", description="재고를 설정할 제품을 선택해주세요", color=GRAY), view=v, ephemeral=True)
-        self.add_item(_Sel(owner_id))
-
-class StockProductSelect(discord.ui.Select):
-    def __init__(self, owner_id:int):
-        prods=prod_list_all()
-        if prods:
-            opts=[]
-            for p in prods[:25]:
-                opt={"label":f"{p['name']} ({p['category']})", "value":f"{p['name']}||{p['category']}", "description":product_desc_line(p)}
-                if p.get("emoji_raw"):
-                    em=parse_partial_emoji(p["emoji_raw"]) or p["emoji_raw"]; opt["emoji"]=em
-                opts.append(discord.SelectOption(**opt))
-        else:
-            opts=[discord.SelectOption(label="등록된 제품이 없습니다", value="__none__")]
-        super().__init__(placeholder="재고를 설정할 제품을 선택하세요", min_values=1, max_values=1, options=opts, custom_id=f"stock_prod_{owner_id}")
-        self.owner_id=owner_id
-    async def callback(self, it):
-        if it.user.id!=self.owner_id: await it.response.send_message("이 드롭다운은 작성자만 사용할 수 있어.", ephemeral=True); return
-        if self.values[0]=="__none__": await it.response.send_message("먼저 제품을 추가해주세요.", ephemeral=True); return
-        name,cat = self.values[0].split("||",1)
-        await it.response.send_modal(StockAddModal(self.owner_id, name, cat))
 
 # ===== 슬래시 커맨드 등록 Cog =====
 class ControlCog(commands.Cog):
