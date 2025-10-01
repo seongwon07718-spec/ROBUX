@@ -41,25 +41,29 @@ def _default_db():
         "balances": {},        # {guildId:{userId:int}}
         "orders":   {},        # {guildId:{userId:[{product,qty,ts}]}}
         "account":  {"bank":"", "number":"", "holder":""},
-        "bans":     {}         # {guildId:{userId: true}}
+        "bans":     {}         # {guildId:{userId:true}}
     }
 
 def db_load():
     if not os.path.exists(DB_PATH): return _default_db()
     try:
-        with open(DB_PATH, "r", encoding="utf-8") as f: data=json.load(f)
-        # 누락 필드 자동 보정
+        with open(DB_PATH, "r", encoding="utf-8") as f:
+            data=json.load(f)
         base=_default_db()
         for k,v in base.items():
             if k not in data: data[k]=v
-        if "account" not in data: data["account"]={"bank":"","number":"","holder":""}
-        if "bans" not in data: data["bans"]={}
+        # 하위 키 누락 보정
+        data.setdefault("account", {"bank":"","number":"","holder":""})
+        data.setdefault("bans", {})
+        data.setdefault("balances", {})
+        data.setdefault("orders", {})
         return data
     except Exception:
         return _default_db()
 
 def db_save():
-    with open(DB_PATH, "w", encoding="utf-8") as f: json.dump(DB, f, ensure_ascii=False, indent=2)
+    with open(DB_PATH, "w", encoding="utf-8") as f:
+        json.dump(DB, f, ensure_ascii=False, indent=2)
 
 DB = db_load()
 
@@ -348,7 +352,6 @@ class PaymentModal(discord.ui.Modal, title="충전 신청"):
                 amount=str(self.amount_input.value).strip()
                 desc=f"**은행명** `{bank}`\n**계좌번호** `{number}`\n**예금주** `{holder}`\n**입금 금액** `{amount}`\n-# 5분 이내로 입금 부탁드립니다."
                 await it.response.send_message(embed=discord.Embed(title="계좌이체", description=desc, color=GRAY), ephemeral=True)
-                await send_log_text(it.guild, "admin", f"[충전 신청] {it.user} | 계좌이체 | {amount}원 | 입금자:{str(self.depositor_input.value).strip()}")
             else:
                 await it.response.send_message(embed=discord.Embed(title="충전 신청 접수", description=f"결제수단: {self.method_label}\n금액: {str(self.amount_input.value).strip()}원\n입금자명: {str(self.depositor_input.value).strip()}", color=GRAY), ephemeral=True)
         except Exception:
@@ -429,8 +432,7 @@ class ButtonPanel(discord.ui.View):
         i=discord.ui.Button(label="내 정보", style=discord.ButtonStyle.secondary, emoji=EMOJI_INFO,   row=1)
         b=discord.ui.Button(label="구매",   style=discord.ButtonStyle.secondary, emoji=EMOJI_BUY,    row=1)
         async def _notice(it): await it.response.send_message(embed=discord.Embed(title="공지사항", description="서버규칙 필독 부탁드립니다\n구매후 이용후기는 필수입니다\n자충 오류시 티켓 열어주세요", color=GRAY), ephemeral=True)
-        async def _charge(it): 
-            # 차단 유저는 충전도 불가
+        async def _charge(it):
             if ban_is_blocked(it.guild.id, it.user.id):
                 await it.response.send_message(embed=discord.Embed(title="이용 불가", description="차단 상태입니다. /유저_설정으로 해제하세요.", color=RED), ephemeral=True); return
             await it.response.send_message(embed=discord.Embed(title="결제수단 선택하기", description="원하시는 결제수단 버튼을 클릭해주세요", color=GRAY), view=PaymentMethodView(), ephemeral=True)
@@ -581,34 +583,41 @@ class ControlCog(commands.Cog):
     async def 계좌번호_설정(self, it: discord.Interaction):
         await it.response.send_modal(AccountSetupModal(it.user.id))
 
-    # 신규: /유저_설정 (차단/차단풀기)
-    @app_commands.command(name="유저_설정", description="유저 차단/차단풀기 설정")
+    # 유저 차단/해제: 공개 임베드(보안채널 전송 제거)
+    @app_commands.command(name="유저_설정", description="유저 차단/차단풀기")
     @app_commands.guilds(GUILD)
     @is_admin()
     @app_commands.describe(유저="대상 유저", 여부="차단하기/차단풀기")
-    @app_commands.choices(여부=[app_commands.Choice(name="차단하기", value="ban"), app_commands.Choice(name="차단풀기", value="unban")])
+    @app_commands.choices(여부=[app_commands.Choice(name="차단하기", value="ban"),
+                               app_commands.Choice(name="차단풀기", value="unban")])
     async def 유저_설정(self, it: discord.Interaction, 유저: discord.Member, 여부: app_commands.Choice[str]):
         gid=str(it.guild.id); uid=str(유저.id)
         DB["bans"].setdefault(gid, {})
         if 여부.value=="ban":
             DB["bans"][gid][uid]=True; db_save()
             e=discord.Embed(title="차단하기", description=f"{유저}님은 자판기 이용 불가능합니다\n-# 차단해제는 /유저_설정", color=RED)
-            # 모두 보이게(공개) → 슬래시 커맨드는 기본 공개가 어려워 임시로 관리자로그 텍스트+현재 채널 메시지로 대체
-            try:
-                await it.channel.send(embed=e)
-            except Exception:
-                pass
-            await send_log_text(it.guild, "admin", f"[차단] {유저}가 차단되었습니다.")
+            await it.channel.send(embed=e)
             await it.response.send_message("처리 완료", ephemeral=True)
         else:
-            if uid in DB["bans"].get(gid, {}): DB["bans"][gid].pop(uid, None); db_save()
+            DB["bans"][gid].pop(uid, None); db_save()
             e=discord.Embed(title="차단풀기", description=f"{유저}님은 다시 자판기 이용 가능합니다\n-# 차단하기는 /유저_설정", color=GREEN)
-            try:
-                await it.channel.send(embed=e)
-            except Exception:
-                pass
-            await send_log_text(it.guild, "admin", f"[차단해제] {유저} 차단이 해제되었습니다.")
+            await it.channel.send(embed=e)
             await it.response.send_message("처리 완료", ephemeral=True)
+
+    # 유저 조회: 회색 임베드, 에페멀
+    @app_commands.command(name="유저_조회", description="유저 보유/누적 금액 조회")
+    @app_commands.guilds(GUILD)
+    @is_admin()
+    async def 유저_조회(self, it: discord.Interaction, 유저: discord.Member):
+        gid=it.guild.id; uid=유저.id
+        balance=bal_get(gid, uid)
+        ords=orders_get(gid, uid)
+        total_spent=0
+        for o in ords:
+            p=next((pp for pp in DB["products"] if pp["name"]==o["product"]), None)
+            if p: total_spent+=p["price"]*o["qty"]
+        e=discord.Embed(title=f"{유저}정보", description=f"보유 금액 : `{balance}`\n누적 금액 : `{total_spent}`", color=GRAY)
+        await it.response.send_message(embed=e, ephemeral=True)
 
 # ===== 등록/싱크 =====
 async def guild_sync(b: commands.Bot):
