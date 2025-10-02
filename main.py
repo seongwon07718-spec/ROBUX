@@ -14,21 +14,21 @@ RED = discord.Color.red()
 GREEN = discord.Color.green()
 ORANGE = discord.Color.orange()
 
-# 커스텀 이모지 RAW 문자열(PartialEmoji로 파싱해 사용)
+# 이모지
 EMOJI_NOTICE = "<:Announcement:1422906665249800274>"
 EMOJI_CHARGE = "<a:11845034938353746621:1421383445669613660>"
 EMOJI_INFO = "<:info:1422579514218905731>"
-EMOJI_BUY = "<a:myst_cart:1422183911466733630>"  # 구매 버튼 교체
+EMOJI_BUY = "<:charge:1422579519222714482>"  # 요청대로 교체
 EMOJI_TOSS = "<:TOSS:1421430302684745748>"
 EMOJI_COIN = "<:emoji_68:1421430304706658347>"
 EMOJI_CULTURE = "<:culture:1421430797604229150>"
-EMOJI_TICKET = "<:ticket:1389546740054626304>"   # 내 정보 버튼
+EMOJI_TICKET = "<:ticket:1389546740054626304>"
 
 intents = discord.Intents.default()
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== 파일 DB =====
+# ===== DB =====
 DB_PATH = "data.json"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "KBRIDGE_9f8a1c2b0e4a4a7f")
 _db_lock = threading.Lock()
@@ -45,7 +45,7 @@ def _default_db():
         "payments": {"bank": False, "coin": False, "culture": False},
         "balances": {},
         "points": {},
-        "orders": {},  # 무제한 누적
+        "orders": {},  # 전건 무제한 누적
         "account": {"bank": "", "number": "", "holder": ""},
         "bans": {},
         "reviews": {},
@@ -62,33 +62,21 @@ def db_load():
         return _default_db()
     base = _default_db()
     for k, v in base.items():
-        if k not in data:
-            data[k] = v
-    for k in ("balances","points","orders","bans","reviews","logs","payments","account","topups"):
-        data.setdefault(k, base[k])
-    data["topups"].setdefault("requests", [])
-    data["topups"].setdefault("receipts", [])
-    # 정수화
-    fixed_bal, fixed_pts = {}, {}
-    for gid, users in data["balances"].items():
-        b={}
-        if isinstance(users, dict):
-            for uid, val in users.items():
-                try: b[str(uid)] = int(val)
-                except: b[str(uid)] = 0
-        fixed_bal[str(gid)] = b
-    for gid, users in data["points"].items():
-        p={}
-        if isinstance(users, dict):
-            for uid, val in users.items():
-                try: p[str(uid)] = int(val)
-                except: p[str(uid)] = 0
-        fixed_pts[str(gid)] = p
-    data["balances"] = fixed_bal
-    data["points"] = fixed_pts
-    # account
+        data.setdefault(k, v)
+    # 정수 보정
+    def _intmap(d):
+        out={}
+        if isinstance(d, dict):
+            for k,v in d.items():
+                try: out[str(k)] = int(v)
+                except: out[str(k)] = 0
+        return out
+    data["balances"] = {str(g): _intmap(u) for g,u in data.get("balances", {}).items()}
+    data["points"]   = {str(g): _intmap(u) for g,u in data.get("points",   {}).items()}
     for k in ("bank","number","holder"):
         data["account"][k] = str(data["account"].get(k,""))
+    data["topups"].setdefault("requests", [])
+    data["topups"].setdefault("receipts", [])
     return data
 
 def db_save():
@@ -113,31 +101,12 @@ def safe_emoji(raw: str | None):
     pe = parse_partial_emoji(raw or "")
     return pe if pe else None
 
-def small_author(embed: discord.Embed, user: discord.abc.User):
-    try:
-        embed.set_author(name=str(user), icon_url=user.display_avatar.url)
-    except: pass
-
-def small_footer_bot(embed: discord.Embed):
-    try:
-        embed.set_footer(text=str(bot.user), icon_url=bot.user.display_avatar.url)
-    except: pass
-    embed.timestamp = discord.utils.utcnow()
-
-def is_admin():
-    async def predicate(interaction: discord.Interaction):
-        if interaction.user.guild_permissions.manage_guild:
-            return True
-        await interaction.response.send_message("관리자만 사용할 수 있어.", ephemeral=True)
-        return False
-    return app_commands.check(predicate)
+def _now(): return int(time.time())
 
 def star_bar(avg: float | None) -> str:
     if avg is None: return "평점 없음"
     n = max(1, min(int(round(avg)), 5))
     return "⭐️"*n
-
-def _now(): return int(time.time())
 
 def ban_is_blocked(gid: int, uid: int) -> bool:
     return bool(DB["bans"].get(str(gid), {}).get(str(uid), False))
@@ -147,22 +116,20 @@ def bal_get(gid: int, uid: int) -> int:
 
 def bal_set(gid: int, uid: int, val: int):
     DB["balances"].setdefault(str(gid), {})
-    DB["balances"][str(gid)][str(uid)] = int(val)
-    db_save()
-
-def pt_get(gid: int, uid: int) -> int:
-    return DB["points"].get(str(gid), {}).get(str(uid), 0)
-
-def pt_set(gid: int, uid: int, val: int):
-    DB["points"].setdefault(str(gid), {})
-    DB["points"][str(gid)][str(uid)] = int(val)
-    db_save()
+    DB["balances"][str(gid)][str(uid)] = int(val); db_save()
 
 def bal_add(gid: int, uid: int, amt: int):
     bal_set(gid, uid, bal_get(gid, uid) + max(0, int(amt)))
 
 def bal_sub(gid: int, uid: int, amt: int):
     bal_set(gid, uid, bal_get(gid, uid) - max(0, int(amt)))
+
+def pt_get(gid: int, uid: int) -> int:
+    return DB["points"].get(str(gid), {}).get(str(uid), 0)
+
+def pt_set(gid: int, uid: int, val: int):
+    DB["points"].setdefault(str(gid), {})
+    DB["points"][str(gid)][str(uid)] = int(val); db_save()
 
 def orders_get(gid: int, uid: int):
     return DB.get("orders", {}).get(str(gid), {}).get(str(uid), [])
@@ -201,7 +168,15 @@ def product_desc_line(p: dict) -> str:
     avg = round(statistics.mean(ratings), 1) if ratings else None
     return f"{p['price']}원 | 재고{p['stock']}개 | 평점{star_bar(avg)}"
 
-# ===== 로그/임베드(컴포넌트 v2 스타일) =====
+# ===== 공통 임베드 스타일 v2 =====
+def set_footer_bot(embed: discord.Embed):
+    try:
+        embed.set_footer(text=str(bot.user), icon_url=bot.user.display_avatar.url)
+    except:
+        embed.set_footer(text=str(bot.user))
+    embed.timestamp = discord.utils.utcnow()
+
+# ===== 로그 전송 =====
 async def send_log_embed(guild: discord.Guild | None, key: str, embed: discord.Embed):
     if guild is None: return False
     cfg = DB["logs"].get(key) or {}
@@ -222,12 +197,12 @@ async def send_log_text(guild: discord.Guild | None, key: str, text: str):
         await ch.send(text); return True
     except: return False
 
+# ===== 구매로그/후기/DM 임베드 =====
 def emb_purchase_log(user: discord.User, product: str, qty: int):
     e = discord.Embed(title="구매로그",
                       description=f"{user.mention}님 {product} {qty}개\n구매 감사합니다 후기 작성 부탁드립니다:gift_heart:",
                       color=GRAY)
-    small_author(e, user)
-    small_footer_bot(e)
+    set_footer_bot(e)
     return e
 
 def emb_review_full(user: discord.User, product: str, stars: int, content: str):
@@ -237,12 +212,10 @@ def emb_review_full(user: discord.User, product: str, stars: int, content: str):
     e = discord.Embed(title="구매 후기",
                       description=f"**구매제품** : {product}\n**별점** : {stars_text}\n{line}\n{content}\n{line}",
                       color=GRAY)
-    small_author(e, user)
-    small_footer_bot(e)
+    set_footer_bot(e)
     return e
 
 def emb_purchase_dm(product: str, qty: int, price: int, items: list[str]):
-    total = int(price) * int(qty)
     line = "ㅡ"*18
     visible = items[:20]
     rest = len(items) - len(visible)
@@ -251,10 +224,10 @@ def emb_purchase_dm(product: str, qty: int, price: int, items: list[str]):
     e = discord.Embed(title="구매 성공",
                       description=f"제품 이름 : {product}\n구매 개수 : {qty}\n차감 금액 : {price}\n{line}\n{block}",
                       color=GREEN)
-    small_footer_bot(e)
+    set_footer_bot(e)
     return e
 
-# ===== 자동충전(문자 파싱/5분 타임아웃/중복 방지) =====
+# ===== 자동충전(카뱅 파서) =====
 TOPUP_TIMEOUT_SEC = 5*60
 
 RE_AMOUNT = [re.compile(r"입금\s*([0-9][0-9,]*)\s*원")]
@@ -358,14 +331,7 @@ async def handle_deposit(guild: discord.Guild, amount: int, depositor: str):
         await send_log_text(guild, "admin", f"[자동충전] {amount}원, 입금자={depositor} 매칭 대기")
         return False, "queued"
 
-async def schedule_delete_after_inter(inter: discord.Interaction, message_id: int, delay=TOPUP_TIMEOUT_SEC):
-    await asyncio.sleep(delay)
-    try:
-        msg = await inter.channel.fetch_message(message_id)
-        await msg.delete()
-    except: pass
-
-# ===== UI/모달/구매 플로우 =====
+# ===== 구매/후기/결제 UI =====
 class ReviewModal(discord.ui.Modal, title="구매 후기 작성"):
     product_input = discord.ui.TextInput(label="구매 제품", required=True, max_length=60)
     stars_input = discord.ui.TextInput(label="별점(1~5)", required=True, max_length=1)
@@ -401,6 +367,7 @@ class QuantityModal(discord.ui.Modal, title="수량 입력"):
             await it.response.send_message("유효하지 않은 제품입니다.", ephemeral=True); return
         if p["stock"]<qty:
             embed_no=discord.Embed(title="재고 부족", description=f"{self.product_name} 재고가 부족합니다.", color=ORANGE)
+            set_footer_bot(embed_no)
             try: await it.response.edit_message(embed=embed_no, view=None)
             except discord.InteractionResponded:
                 try: await it.followup.edit_message(message_id=self.origin_msg_id, embed=embed_no, view=None)
@@ -418,6 +385,7 @@ class QuantityModal(discord.ui.Modal, title="수량 입력"):
         try: await send_log_embed(it.guild, "purchase", emb_purchase_log(it.user, self.product_name, qty))
         except: pass
         embed_ok=discord.Embed(title="구매 완료", description=f"{self.product_name} 구매가 완료되었습니다. DM을 확인해주세요.", color=GREEN)
+        set_footer_bot(embed_ok)
         try: await it.response.edit_message(embed=embed_ok, view=None)
         except discord.InteractionResponded:
             try: await it.followup.edit_message(message_id=self.origin_msg_id, embed=embed_ok, view=None)
@@ -430,8 +398,8 @@ class ProductSelect(discord.ui.Select):
             opts=[]
             for p in prods[:25]:
                 opt={"label":p["name"], "value":p["name"], "description":product_desc_line(p)}
-                e=safe_emoji(p.get("emoji_raw"))
-                if e: opt["emoji"]=e
+                em=safe_emoji(p.get("emoji_raw"))
+                if em: opt["emoji"]=em
                 opts.append(discord.SelectOption(**opt))
         else:
             opts=[discord.SelectOption(label="해당 카테고리에 제품이 없습니다", value="__none__")]
@@ -456,8 +424,8 @@ class CategorySelectForBuy(discord.ui.Select):
             opts=[]
             for c in cats[:25]:
                 opt={"label":c["name"], "value":c["name"], "description":(c.get("desc")[:80] if c.get("desc") else None)}
-                e=safe_emoji(c.get("emoji_raw"))
-                if e: opt["emoji"]=e
+                em=safe_emoji(c.get("emoji_raw"))
+                if em: opt["emoji"]=em
                 opts.append(discord.SelectOption(**opt))
         else:
             opts=[discord.SelectOption(label="등록된 카테고리가 없습니다", value="__none__")]
@@ -470,6 +438,7 @@ class CategorySelectForBuy(discord.ui.Select):
         if val=="__none__":
             await it.response.send_message("먼저 카테고리를 추가해주세요.", ephemeral=True); return
         embed=discord.Embed(title="제품 선택하기", description=f"{val} 카테고리의 제품을 선택해주세요", color=GRAY)
+        set_footer_bot(embed)
         view=BuyFlowView(self.owner_id, val, self.origin_msg_id)
         try: await it.response.edit_message(embed=embed, view=view)
         except discord.InteractionResponded:
@@ -480,7 +449,7 @@ class CategorySelectForBuyView(discord.ui.View):
     def __init__(self, owner_id:int, origin_msg_id:int):
         super().__init__(timeout=None); self.add_item(CategorySelectForBuy(owner_id, origin_msg_id))
 
-# ===== 결제(충전 신청 모달/버튼 표시 제어) =====
+# ===== 결제(충전신청) =====
 class PaymentModal(discord.ui.Modal, title="충전 신청"):
     amount_input = discord.ui.TextInput(label="충전할 금액", required=True, max_length=12)
     depositor_input = discord.ui.TextInput(label="입금자명", required=True, max_length=20)
@@ -504,9 +473,9 @@ class PaymentModal(discord.ui.Modal, title="충전 신청"):
         amount_txt=f"{amt_raw}원" if amt_raw else "0원"
         desc = f"은행명 : {bank}\n예금주 : {holder}\n계좌번호 : `{number}`\n보내야할 금액 : {amount_txt}"
         e = discord.Embed(title="충전신청", description=desc, color=GREEN)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, ephemeral=True)
-        # DM으로 동일안내 5분 후 삭제
+        # DM 안내 5분 뒤 삭제
         try:
             dm = await it.user.create_dm()
             msg = await dm.send(embed=discord.Embed(title="충전신청", description=desc, color=GREEN))
@@ -520,7 +489,7 @@ class PaymentModal(discord.ui.Modal, title="충전 신청"):
 class PaymentMethodView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        items = []
+        items=[]
         if DB["payments"].get("bank", False):
             items.append(discord.ui.Button(label="계좌이체", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_TOSS)))
         if DB["payments"].get("coin", False):
@@ -532,15 +501,17 @@ class PaymentMethodView(discord.ui.View):
                 if label=="계좌이체":
                     await i.response.send_modal(PaymentModal(i.user.id))
                 else:
-                    await i.response.send_message(embed=discord.Embed(title="실패", description="현재 미지원", color=RED), ephemeral=True)
-            b.callback = _cb
+                    e=discord.Embed(title="실패", description="현재 미지원", color=RED)
+                    set_footer_bot(e)
+                    await i.response.send_message(embed=e, ephemeral=True)
+            b.callback=_cb
             self.add_item(b)
 
-# ===== 내 정보(임베드/프로필/드롭다운) =====
+# ===== 내 정보(썸네일에 유저 프사, 드롭다운 5개) =====
 class RecentOrdersSelect(discord.ui.Select):
     def __init__(self, owner_id:int, orders:list[dict]):
         opts=[]
-        for o in orders[-5:][::-1]:  # 화면엔 5개만
+        for o in orders[-5:][::-1]:
             ts = time.strftime('%Y-%m-%d %H:%M', time.localtime(o['ts']))
             opts.append(discord.SelectOption(label=f"{o['product']} x{o['qty']}", description=ts, value=f"{o['product']}||{o['qty']}||{o['ts']}"))
         if not opts:
@@ -556,7 +527,7 @@ class RecentOrdersSelect(discord.ui.Select):
         name, qty, ts = val.split("||")
         ts_str = time.strftime('%Y-%m-%d %H:%M', time.localtime(int(ts)))
         e = discord.Embed(title="구매 상세", description=f"- 제품: {name}\n- 수량: {qty}\n- 시간: {ts_str}", color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, ephemeral=True)
 
 class MyInfoView(discord.ui.View):
@@ -570,41 +541,57 @@ class ButtonPanel(discord.ui.View):
         n=discord.ui.Button(label="공지사항", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_NOTICE), row=0)
         c=discord.ui.Button(label="충전", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_CHARGE), row=0)
         i=discord.ui.Button(label="내 정보", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_TICKET), row=1)
-        b=discord.ui.Button(label="구매", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_BUY), row=1)
+        b=discord.ui.Button(label="구매", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_BUTY if False else EMOJI_BUY), row=1)
+
         async def _notice(it):
             e = discord.Embed(title="공지사항", description="서버규칙 필독 부탁드립니다\n자충 오류시 티켓 열어주세요", color=GRAY)
-            small_author(e, it.user); small_footer_bot(e)
+            set_footer_bot(e)
             await it.response.send_message(embed=e, ephemeral=True)
+
         async def _charge(it):
             if ban_is_blocked(it.guild.id, it.user.id):
                 e=discord.Embed(title="이용 불가", description="차단 상태입니다. /유저_설정으로 해제하세요.", color=RED)
-                small_author(e, it.user); await it.response.send_message(embed=e, ephemeral=True); return
+                set_footer_bot(e)
+                await it.response.send_message(embed=e, ephemeral=True); return
             view = PaymentMethodView()
             if len(view.children)==0:
                 e = discord.Embed(title="결제수단 선택하기", description="현재 지원되는 결제수단이 없습니다.", color=ORANGE)
-                small_author(e, it.user); await it.response.send_message(embed=e, ephemeral=True)
+                set_footer_bot(e)
+                await it.response.send_message(embed=e, ephemeral=True)
             else:
                 e = discord.Embed(title="결제수단 선택하기", description="원하시는 결제수단 버튼을 클릭해주세요", color=GRAY)
-                small_author(e, it.user)
+                set_footer_bot(e)
                 await it.response.send_message(embed=e, view=view, ephemeral=True)
+
         async def _info(it):
             gid=it.guild.id; uid=it.user.id
-            bal=bal_get(gid, uid); ords=orders_get(gid, uid); pts=pt_get(gid, uid)
-            spent=sum((next((pp["price"]*o["qty"] for pp in DB["products"] if pp["name"]==o["product"]), 0) for o in ords))
+            ords=orders_get(gid, uid)
+            # 누적 금액/거래횟수 전건 기준
+            spent = 0
+            for o in ords:
+                p=next((pp for pp in DB["products"] if pp["name"]==o["product"]), None)
+                if p: spent += p["price"]*o["qty"]
+            bal=bal_get(gid, uid); pts=pt_get(gid, uid)
             line = "ㅡ"*18
             desc = f"보유 금액 : {bal}\n누적 금액 : {spent}\n포인트 : {pts}\n거래 횟수 : {len(ords)}\n{line}\n역할등급 : 아직 없습니다\n역할혜택 : 아직 없습니다"
             e = discord.Embed(title="내 정보", description=desc, color=GRAY)
-            small_author(e, it.user)
+            # 썸네일에 유저 프사 노출
+            try: e.set_thumbnail(url=it.user.display_avatar.url)
+            except: pass
+            set_footer_bot(e)
             await it.response.send_message(embed=e, view=MyInfoView(uid, ords), ephemeral=True)
+
         async def _buy(it):
             if ban_is_blocked(it.guild.id, it.user.id):
                 e=discord.Embed(title="이용 불가", description="차단 상태입니다. /유저_설정으로 해제하세요.", color=RED)
-                small_author(e, it.user); await it.response.send_message(embed=e, ephemeral=True); return
+                set_footer_bot(e)
+                await it.response.send_message(embed=e, ephemeral=True); return
             e = discord.Embed(title="카테고리 선택하기", description="구매할 카테고리를 선택해주세요", color=GRAY)
-            small_author(e, it.user)
+            set_footer_bot(e)
             await it.response.send_message(embed=e, ephemeral=True)
             msg=await it.original_response()
             await msg.edit(view=CategorySelectForBuyView(it.user.id, msg.id))
+
         n.callback=_notice; c.callback=_charge; i.callback=_info; b.callback=_buy
         self.add_item(n); self.add_item(c); self.add_item(i); self.add_item(b)
 
@@ -617,8 +604,8 @@ class CategoryDeleteView(discord.ui.View):
                 cats=DB["categories"]; opts=[]
                 for c in cats[:25]:
                     opt={"label":c["name"], "value":c["name"], "description":(c.get("desc")[:80] if c.get("desc") else None)}
-                    e=safe_emoji(c.get("emoji_raw"))
-                    if e: opt["emoji"]=e
+                    em=safe_emoji(c.get("emoji_raw")); 
+                    if em: opt["emoji"]=em
                     opts.append(discord.SelectOption(**opt))
                 super().__init__(placeholder="삭제할 카테고리를 선택하세요", min_values=1, max_values=1, options=opts or [discord.SelectOption(label="삭제할 카테고리가 없습니다", value="__none__")], custom_id=f"cat_del_{owner_id}")
                 self.owner_id=owner_id
@@ -631,7 +618,8 @@ class CategoryDeleteView(discord.ui.View):
                 DB["categories"]=[c for c in DB["categories"] if c["name"]!=val]
                 DB["products"]=[p for p in DB["products"] if p["category"]!=val]; db_save()
                 e=discord.Embed(title="카테고리 삭제 완료", description=f"삭제된 카테고리: {val}", color=GRAY)
-                small_author(e, it.user); await it.response.send_message(embed=e, ephemeral=True)
+                set_footer_bot(e)
+                await it.response.send_message(embed=e, ephemeral=True)
         self.add_item(CategoryDeleteSelect(owner_id))
 
 class CategorySetupModal(discord.ui.Modal, title="카테고리 추가"):
@@ -651,9 +639,9 @@ class CategorySetupModal(discord.ui.Modal, title="카테고리 추가"):
         if i>=0: DB["categories"][i]=row
         else: DB["categories"].append(row)
         db_save()
-        prev=str(parse_partial_emoji(emoji)) if emoji else ""
-        e=discord.Embed(title="카테고리 등록 완료", description=f"{(prev+' ') if prev else ''}{name}\n{desc}", color=GRAY)
-        small_author(e, it.user); await it.response.send_message(embed=e, ephemeral=True)
+        e=discord.Embed(title="카테고리 등록 완료", description=f"{name}\n{desc}", color=GRAY)
+        set_footer_bot(e)
+        await it.response.send_message(embed=e, ephemeral=True)
 
 class ProductSetupModal(discord.ui.Modal, title="제품 추가"):
     name_input = discord.ui.TextInput(label="제품 이름", required=True, max_length=60)
@@ -675,10 +663,9 @@ class ProductSetupModal(discord.ui.Modal, title="제품 추가"):
         price=int(price_s)
         emoji=str(self.emoji_input.value).strip() if self.emoji_input.value else ""
         prod_upsert(name, cat, price, emoji)
-        em=str(parse_partial_emoji(emoji)) if emoji else ""
-        desc=product_desc_line(prod_get(name, cat))
-        e=discord.Embed(title="제품 등록 완료", description=f"{(em+' ') if em else ''}{name}\n카테고리: {cat}\n{desc}", color=GRAY)
-        small_author(e, it.user); await it.response.send_message(embed=e, ephemeral=True)
+        e=discord.Embed(title="제품 등록 완료", description=f"{name}\n카테고리: {cat}\n{product_desc_line(prod_get(name, cat))}", color=GRAY)
+        set_footer_bot(e)
+        await it.response.send_message(embed=e, ephemeral=True)
 
 class ProductDeleteView(discord.ui.View):
     def __init__(self, owner_id:int):
@@ -688,8 +675,8 @@ class ProductDeleteView(discord.ui.View):
                 prods=prod_list_all(); opts=[]
                 for p in prods[:25]:
                     opt={"label":p["name"], "value":f"{p['name']}||{p['category']}", "description":product_desc_line(p)}
-                    e=safe_emoji(p.get("emoji_raw"))
-                    if e: opt["emoji"]=e
+                    em=safe_emoji(p.get("emoji_raw"))
+                    if em: opt["emoji"]=em
                     opts.append(discord.SelectOption(**opt))
                 super().__init__(placeholder="삭제할 제품을 선택하세요", min_values=1, max_values=1, options=opts or [discord.SelectOption(label="삭제할 제품이 없습니다", value="__none__")], custom_id=f"prod_del_{owner_id}")
                 self.owner_id=owner_id
@@ -702,10 +689,11 @@ class ProductDeleteView(discord.ui.View):
                 name,cat=val.split("||",1)
                 prod_delete(name, cat)
                 e=discord.Embed(title="제품 삭제 완료", description=f"삭제된 제품: {name} (카테고리: {cat})", color=GRAY)
-                small_author(e, it.user); await it.response.send_message(embed=e, ephemeral=True)
+                set_footer_bot(e)
+                await it.response.send_message(embed=e, ephemeral=True)
         self.add_item(ProductDeleteSelect(owner_id))
 
-# ===== 슬래시 COG(10개) =====
+# ===== 슬래시 명령어 10개 =====
 class ControlCog(commands.Cog):
     def __init__(self, bot_:commands.Bot):
         self.bot=bot_
@@ -714,7 +702,7 @@ class ControlCog(commands.Cog):
     @app_commands.guilds(GUILD)
     async def 버튼패널(self, it: discord.Interaction):
         e=discord.Embed(title="윈드 OTT", description="아래 버튼으로 이용해주세요!", color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, view=ButtonPanel())
 
     @app_commands.command(name="카테고리_설정", description="구매 카테고리를 설정합니다.")
@@ -736,11 +724,11 @@ class ControlCog(commands.Cog):
                     await inter.response.send_modal(CategorySetupModal(self.owner_id))
                 else:
                     e=discord.Embed(title="카테고리 삭제", description="삭제할 카테고리를 선택하세요.", color=GRAY)
-                    small_author(e, inter.user)
+                    set_footer_bot(e)
                     await inter.response.send_message(embed=e, view=CategoryDeleteView(self.owner_id), ephemeral=True)
         view.add_item(Root(it.user.id))
         e=discord.Embed(title="카테고리 설정하기", description="카테고리 설정해주세요", color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, view=view, ephemeral=True)
 
     @app_commands.command(name="제품_설정", description="제품을 추가/삭제로 관리합니다.")
@@ -762,11 +750,11 @@ class ControlCog(commands.Cog):
                     await inter.response.send_modal(ProductSetupModal(self.owner_id))
                 else:
                     e=discord.Embed(title="제품 삭제", description="삭제할 제품을 선택하세요.", color=GRAY)
-                    small_author(e, inter.user)
+                    set_footer_bot(e)
                     await inter.response.send_message(embed=e, view=ProductDeleteView(self.owner_id), ephemeral=True)
         view.add_item(Root(it.user.id))
         e=discord.Embed(title="제품 설정하기", description="제품 설정해주세요", color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, view=view, ephemeral=True)
 
     @app_commands.command(name="재고_설정", description="제품 재고를 추가합니다.")
@@ -780,8 +768,8 @@ class ControlCog(commands.Cog):
                     opts=[]
                     for p in prods[:25]:
                         opt={"label":f"{p['name']} ({p['category']})", "value":f"{p['name']}||{p['category']}", "description":product_desc_line(p)}
-                        e=safe_emoji(p.get("emoji_raw")); 
-                        if e: opt["emoji"]=e
+                        em=safe_emoji(p.get("emoji_raw")); 
+                        if em: opt["emoji"]=em
                         opts.append(discord.SelectOption(**opt))
                 else:
                     opts=[discord.SelectOption(label="등록된 제품이 없습니다", value="__none__")]
@@ -797,7 +785,7 @@ class ControlCog(commands.Cog):
                 await inter.response.send_modal(StockAddModal(self.owner_id, name, cat))
         view=discord.ui.View(timeout=None); view.add_item(StockSel(it.user.id))
         e=discord.Embed(title="재고 설정하기", description="재고 설정해주세요", color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, view=view, ephemeral=True)
 
     @app_commands.command(name="로그_설정", description="구매로그/구매후기/관리자로그 채널을 설정합니다.")
@@ -814,18 +802,20 @@ class ControlCog(commands.Cog):
                 raw=str(self.channel_id_input.value).strip()
                 if not raw.isdigit():
                     e=discord.Embed(title="실패", description="채널 ID는 숫자여야 합니다.", color=RED)
-                    small_author(e, inter.user); await inter.response.send_message(embed=e, ephemeral=True); return
+                    set_footer_bot(e)
+                    await inter.response.send_message(embed=e, ephemeral=True); return
                 ch=inter.guild.get_channel(int(raw))
                 if not isinstance(ch, discord.TextChannel):
                     e=discord.Embed(title="실패", description="유효한 텍스트 채널 ID가 아닙니다.", color=RED)
-                    small_author(e, inter.user); await inter.response.send_message(embed=e, ephemeral=True); return
+                    set_footer_bot(e)
+                    await inter.response.send_message(embed=e, ephemeral=True); return
                 DB["logs"].setdefault(self.log_key, {"enabled": False, "target_channel_id": None})
                 DB["logs"][self.log_key]["target_channel_id"]=int(raw)
-                DB["logs"][self.log_key]["enabled"]=True
-                db_save()
+                DB["logs"][self.log_key]["enabled"]=True; db_save()
                 pretty={"purchase":"구매로그","review":"구매후기","admin":"관리자로그"}[self.log_key]
                 e=discord.Embed(title=f"{pretty} 채널 지정 완료", description=f"목적지: {ch.mention}", color=GRAY)
-                small_author(e, inter.user); await inter.response.send_message(embed=e, ephemeral=True)
+                set_footer_bot(e)
+                await inter.response.send_message(embed=e, ephemeral=True)
         class Root(discord.ui.Select):
             def __init__(self, owner_id:int):
                 options=[discord.SelectOption(label="구매로그 설정", value="purchase"),
@@ -839,7 +829,7 @@ class ControlCog(commands.Cog):
                 await inter.response.send_modal(LogChannelIdModal(self.owner_id, self.values[0]))
         view=discord.ui.View(timeout=None); view.add_item(Root(it.user.id))
         e=discord.Embed(title="로그 설정하기", description="로그 설정해주세요", color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, view=view, ephemeral=True)
 
     @app_commands.command(name="잔액_설정", description="유저 잔액을 추가/차감합니다.")
@@ -857,7 +847,7 @@ class ControlCog(commands.Cog):
         else:
             bal_add(gid, uid, 금액); after=bal_get(gid, uid); color=GREEN; title=f"{유저} 금액 추가"
         e=discord.Embed(title=title, description=f"원래 금액 : {prev}\n변경 금액 : {금액}\n변경 후 금액 : {after}", color=color)
-        small_author(e, it.user); e.timestamp=discord.utils.utcnow(); e.set_footer(text="변경 시간")
+        set_footer_bot(e)
         await it.response.send_message(embed=e, ephemeral=True)
 
     @app_commands.command(name="결제수단_설정", description="결제수단 지원 여부를 설정합니다.")
@@ -880,7 +870,7 @@ class ControlCog(commands.Cog):
         e=discord.Embed(title="결제수단 설정 완료",
                         description=f"계좌이체: {계좌이체.value}\n코인충전: {코인충전.value}\n문상충전: {문상충전.value}",
                         color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, ephemeral=True)
 
     @app_commands.command(name="계좌번호_설정", description="은행명/계좌번호/예금주를 설정합니다.")
@@ -901,13 +891,13 @@ class ControlCog(commands.Cog):
         if 여부.value=="ban":
             DB["bans"][gid][uid]=True; db_save()
             e=discord.Embed(title="차단하기", description=f"{유저}님은 자판기 이용 불가능합니다\n- 차단해제는 /유저_설정", color=RED)
-            small_author(e, it.user)
+            set_footer_bot(e)
             await it.channel.send(embed=e)
             await it.response.send_message("처리 완료", ephemeral=True)
         else:
             DB["bans"][gid].pop(uid, None); db_save()
             e=discord.Embed(title="차단풀기", description=f"{유저}님은 다시 자판기 이용 가능합니다", color=GREEN)
-            small_author(e, it.user)
+            set_footer_bot(e)
             await it.channel.send(embed=e)
             await it.response.send_message("처리 완료", ephemeral=True)
 
@@ -916,12 +906,16 @@ class ControlCog(commands.Cog):
     @is_admin()
     async def 유저_조회(self, it:discord.Interaction, 유저:discord.Member):
         gid=it.guild.id; uid=유저.id
-        bal=bal_get(gid, uid); ords=orders_get(gid, uid); pts=pt_get(gid, uid)
-        spent=sum((next((pp["price"]*o["qty"] for pp in DB["products"] if pp["name"]==o["product"]), 0) for o in ords))
+        ords=orders_get(gid, uid)
+        spent=0
+        for o in ords:
+            p=next((pp for pp in DB["products"] if pp["name"]==o["product"]), None)
+            if p: spent += p["price"]*o["qty"]
+        bal=bal_get(gid, uid); pts=pt_get(gid, uid)
         e=discord.Embed(title=f"{유저} 정보",
                         description=f"보유 금액 : `{bal}`\n누적 금액 : `{spent}`\n포인트 : `{pts}`\n거래 횟수 : `{len(ords)}`",
                         color=GRAY)
-        small_author(e, it.user)
+        set_footer_bot(e)
         await it.response.send_message(embed=e, ephemeral=True)
 
 # ===== FastAPI 웹훅 =====
@@ -962,7 +956,7 @@ def run_api():
 async def guild_sync(b: commands.Bot):
     try:
         synced = await b.tree.sync(guild=GUILD)
-        print(f"[setup_hook] 길드 싱크 완료({GUILD_ID}): {len(synced)}개 -> {', '.join('/'+c.name for c in synced)}")
+        print(f"[setup_hook] 길드 싱크 완료({GUILD_ID}): {len(synced)}개")
     except Exception as e:
         print(f"[setup_hook] 길드 싱크 실패: {e}")
 
