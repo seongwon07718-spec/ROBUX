@@ -13,6 +13,7 @@ GRAY = discord.Color.from_str("#808080")
 RED = discord.Color.red()
 GREEN = discord.Color.green()
 ORANGE = discord.Color.orange()
+PINK = discord.Color.from_str("#ff5ea3")  # 후기 버튼 클릭 응답/가이드 컬러
 
 # 이모지
 EMOJI_NOTICE = "<:Announcement:1422906665249800274>"
@@ -23,6 +24,7 @@ EMOJI_TOSS = "<:TOSS:1421430302684745748>"
 EMOJI_COIN = "<:emoji_68:1421430304706658347>"
 EMOJI_CULTURE = "<:culture:1421430797604229150>"
 EMOJI_TICKET = "<:ticket:1389546740054626304>"
+EMOJI_HEART = "💌"
 
 intents = discord.Intents.default()
 intents.members = True
@@ -48,7 +50,8 @@ def _default_db():
         "orders": {},  # 전건 무제한 누적
         "account": {"bank": "", "number": "", "holder": ""},
         "bans": {},
-        "reviews": {},
+        "reviews": {},            # per guild -> per user -> [product names reviewed?] (선호 보관)
+        "purchases_sent": {},     # DM 발송 건 기록(후기 1회 제한용) {gid:{uid:{uniqueKey: True}}}
         "topups": {"requests": [], "receipts": []}
     }
 
@@ -63,7 +66,7 @@ def db_load():
     base = _default_db()
     for k, v in base.items():
         data.setdefault(k, v)
-    # 정수 보정
+    # 숫자 딕셔너리 정리
     def _intmap(d):
         out={}
         if isinstance(d, dict):
@@ -77,6 +80,8 @@ def db_load():
         data["account"][k] = str(data["account"].get(k,""))
     data["topups"].setdefault("requests", [])
     data["topups"].setdefault("receipts", [])
+    data["purchases_sent"] = {**data.get("purchases_sent", {})}
+    data["reviews"] = {**data.get("reviews", {})}
     return data
 
 def db_save():
@@ -168,7 +173,6 @@ def product_desc_line(p: dict) -> str:
     avg = round(statistics.mean(ratings), 1) if ratings else None
     return f"{p['price']}원 | 재고{p['stock']}개 | 평점{star_bar(avg)}"
 
-# ===== 공통 임베드 스타일 v2 =====
 def set_footer_bot(embed: discord.Embed):
     try:
         embed.set_footer(text=str(bot.user), icon_url=bot.user.display_avatar.url)
@@ -227,7 +231,7 @@ def emb_purchase_dm(product: str, qty: int, price: int, items: list[str]):
     set_footer_bot(e)
     return e
 
-# ===== 자동충전(카뱅 파서) =====
+# ===== 자동충전(카뱅 파서/매칭) =====
 TOPUP_TIMEOUT_SEC = 5*60
 
 RE_AMOUNT = [re.compile(r"입금\s*([0-9][0-9,]*)\s*원")]
@@ -331,7 +335,76 @@ async def handle_deposit(guild: discord.Guild, amount: int, depositor: str):
         await send_log_text(guild, "admin", f"[자동충전] {amount}원, 입금자={depositor} 매칭 대기")
         return False, "queued"
 
-# ===== 구매/후기/결제 UI =====
+# ===== 후기(핑크 버튼 + 1회 제한 + 로그 채널 전송) =====
+def can_send_review(gid:int, uid:int, unique_key:str) -> bool:
+    DB["purchases_sent"].setdefault(str(gid), {}).setdefault(str(uid), {})
+    return not DB["purchases_sent"][str(gid)][str(uid)].get(unique_key, False)
+
+def lock_review(gid:int, uid:int, unique_key:str):
+    DB["purchases_sent"].setdefault(str(gid), {}).setdefault(str(uid), {})
+    DB["purchases_sent"][str(gid)][str(uid)][unique_key] = True
+    db_save()
+
+class ReviewSendModal(discord.ui.Modal, title="구매 후기 작성"):
+    product_input = discord.ui.TextInput(label="구매 제품", required=True, max_length=60)
+    stars_input = discord.ui.TextInput(label="별점(1~5)", required=True, max_length=1)
+    content_input = discord.ui.TextInput(label="후기 내용", style=discord.TextStyle.paragraph, required=True, max_length=500)
+    def __init__(self, gid:int, uid:int, unique_key:str, default_product:str=""):
+        super().__init__()
+        self.gid=gid; self.uid=uid; self.unique_key=unique_key
+        if default_product:
+            self.product_input.default = default_product
+    async def on_submit(self, it: discord.Interaction):
+        # 1회 제한 체크
+        if not can_send_review(self.gid, self.uid, self.unique_key):
+            await it.response.send_message(embed=discord.Embed(
+                title="후기 전송 불가", description="이 구매건은 이미 후기를 작성했습니다.", color=PINK
+            ), ephemeral=True); return
+        s=str(self.stars_input.value).strip()
+        if not s.isdigit() or not (1<=int(s)<=5):
+            await it.response.send_message("별점은 1~5 숫자로 입력해줘.", ephemeral=True); return
+        product=str(self.product_input.value).strip()
+        content=str(self.content_input.value).strip()
+        # 리뷰 임베드 생성
+        e = emb_review_full(it.user, product, int(s), content)
+        # 로그 채널로 전송(구매후기 설정)
+        try:
+            await send_log_embed(it.guild, "review", e)
+        except: pass
+        # 락 저장
+        lock_review(self.gid, self.uid, self.unique_key)
+        await it.response.send_message("후기 전송 완료!", ephemeral=True)
+
+class ReviewButtonView(discord.ui.View):
+    def __init__(self, gid:int, uid:int, unique_key:str, default_product:str=""):
+        super().__init__(timeout=None)
+        btn = discord.ui.Button(label=f"{EMOJI_HEART} 후기 전송", style=discord.ButtonStyle.secondary)
+        async def _cb(i: discord.Interaction):
+            if i.user.id != uid:
+                await i.response.send_message("구매자만 작성할 수 있어.", ephemeral=True); return
+            if not can_send_review(gid, uid, unique_key):
+                await i.response.send_message("이미 이 구매건으로 후기를 작성했어.", ephemeral=True); return
+            await i.response.send_modal(ReviewSendModal(gid, uid, unique_key, default_product))
+        btn.callback = _cb
+        self.add_item(btn)
+
+# ===== 구매 플로우 =====
+class StockAddModal(discord.ui.Modal, title="재고 추가"):
+    lines_input = discord.ui.TextInput(label="재고 추가(줄마다 1개)", style=discord.TextStyle.paragraph, required=True, max_length=4000)
+    def __init__(self, owner_id:int, product_name:str, category:str):
+        super().__init__(); self.owner_id=owner_id; self.product_name=product_name; self.category=category
+    async def on_submit(self, it: discord.Interaction):
+        if it.user.id!=self.owner_id:
+            await it.response.send_message("작성자만 제출할 수 있어.", ephemeral=True); return
+        lines=[ln.strip() for ln in str(self.lines_input.value).splitlines() if ln.strip()]
+        p=prod_get(self.product_name, self.category)
+        if not p:
+            await it.response.send_message("유효하지 않은 제품입니다.", ephemeral=True); return
+        p["items"].extend(lines); p["stock"]+=len(lines); db_save()
+        e=discord.Embed(title="재고 추가 완료", description=f"{self.product_name} +{len(lines)} → 재고 {p['stock']}", color=GRAY)
+        set_footer_bot(e)
+        await it.response.send_message(embed=e, ephemeral=True)
+
 class ReviewModal(discord.ui.Modal, title="구매 후기 작성"):
     product_input = discord.ui.TextInput(label="구매 제품", required=True, max_length=60)
     stars_input = discord.ui.TextInput(label="별점(1~5)", required=True, max_length=1)
@@ -378,10 +451,15 @@ class QuantityModal(discord.ui.Modal, title="수량 입력"):
             taken.append(p["items"].pop(0)); cnt-=1
         p["stock"]-=qty; p["sold_count"]+=qty; db_save()
         bal_sub(it.guild.id, it.user.id, p["price"]*qty)
+        # DM 발송 + 후기 버튼(핑크)
         try:
             dm=await it.user.create_dm()
-            await dm.send(embed=emb_purchase_dm(self.product_name, qty, p["price"], taken))
+            unique_key = f"{it.guild.id}:{it.user.id}:{self.product_name}:{_now()}"
+            dm_embed = emb_purchase_dm(self.product_name, qty, p["price"], taken)
+            dm_view = ReviewButtonView(it.guild.id, it.user.id, unique_key, self.product_name)
+            await dm.send(embed=dm_embed, view=dm_view)
         except: pass
+        # 구매로그
         try: await send_log_embed(it.guild, "purchase", emb_purchase_log(it.user, self.product_name, qty))
         except: pass
         embed_ok=discord.Embed(title="구매 완료", description=f"{self.product_name} 구매가 완료되었습니다. DM을 확인해주세요.", color=GREEN)
@@ -507,7 +585,7 @@ class PaymentMethodView(discord.ui.View):
             b.callback=_cb
             self.add_item(b)
 
-# ===== 내 정보(썸네일에 유저 프사, 드롭다운 5개) =====
+# ===== 내 정보(썸네일 프사, 최근5건 드롭다운) =====
 class RecentOrdersSelect(discord.ui.Select):
     def __init__(self, owner_id:int, orders:list[dict]):
         opts=[]
@@ -541,7 +619,7 @@ class ButtonPanel(discord.ui.View):
         n=discord.ui.Button(label="공지사항", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_NOTICE), row=0)
         c=discord.ui.Button(label="충전", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_CHARGE), row=0)
         i=discord.ui.Button(label="내 정보", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_TICKET), row=1)
-        b=discord.ui.Button(label="구매", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_BUTY if False else EMOJI_BUY), row=1)
+        b=discord.ui.Button(label="구매", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMOJI_BUY), row=1)
 
         async def _notice(it):
             e = discord.Embed(title="공지사항", description="서버규칙 필독 부탁드립니다\n자충 오류시 티켓 열어주세요", color=GRAY)
@@ -566,7 +644,6 @@ class ButtonPanel(discord.ui.View):
         async def _info(it):
             gid=it.guild.id; uid=it.user.id
             ords=orders_get(gid, uid)
-            # 누적 금액/거래횟수 전건 기준
             spent = 0
             for o in ords:
                 p=next((pp for pp in DB["products"] if pp["name"]==o["product"]), None)
@@ -575,7 +652,6 @@ class ButtonPanel(discord.ui.View):
             line = "ㅡ"*18
             desc = f"보유 금액 : {bal}\n누적 금액 : {spent}\n포인트 : {pts}\n거래 횟수 : {len(ords)}\n{line}\n역할등급 : 아직 없습니다\n역할혜택 : 아직 없습니다"
             e = discord.Embed(title="내 정보", description=desc, color=GRAY)
-            # 썸네일에 유저 프사 노출
             try: e.set_thumbnail(url=it.user.display_avatar.url)
             except: pass
             set_footer_bot(e)
@@ -596,6 +672,14 @@ class ButtonPanel(discord.ui.View):
         self.add_item(n); self.add_item(c); self.add_item(i); self.add_item(b)
 
 # ===== 카테고리/제품/재고/로그 설정(슬래시 10개) =====
+def is_admin():
+    async def predicate(interaction: discord.Interaction):
+        if interaction.user.guild_permissions.manage_guild:
+            return True
+        await interaction.response.send_message("관리자만 사용할 수 있어.", ephemeral=True)
+        return False
+    return app_commands.check(predicate)
+
 class CategoryDeleteView(discord.ui.View):
     def __init__(self, owner_id:int):
         super().__init__(timeout=None)
