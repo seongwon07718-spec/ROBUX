@@ -1,3 +1,5 @@
+main.py
+
 import os, json, time, re, statistics, threading, hashlib, asyncio, base64, contextlib, sys
 import discord
 from discord import app_commands
@@ -5,7 +7,7 @@ from discord.ext import commands
 from fastapi import FastAPI, Request
 import uvicorn
 
-# ===== playwright 가용 여부 체크/지연 로딩 =====
+# playwright 체크
 PLAYWRIGHT_AVAILABLE = False
 try:
     from playwright.async_api import async_playwright, TimeoutError as PwTimeout
@@ -13,7 +15,7 @@ try:
 except Exception:
     PLAYWRIGHT_AVAILABLE = False
 
-# 일부 환경(child watcher 미구현) 방어
+# child watcher 방어
 try:
     if sys.platform != "win32":
         loop = asyncio.get_event_loop()
@@ -36,7 +38,7 @@ GREEN = discord.Color.green()
 ORANGE = discord.Color.orange()
 PINK = discord.Color.from_str("#ff5ea3")
 
-# 이모지(안전 파싱; 실패 시 None)
+# 이모지
 EMJ_NOTICE   = "<:Announcement:1423544323735027763>"
 EMJ_CHARGE   = "<a:Card_Black:1423544325597560842>"
 EMJ_INFO     = "<:saknagkang_00000:1371042122345484353>"
@@ -76,7 +78,7 @@ def _default_db():
         "reviews": {},
         "purchases_sent": {},
         "topups": {"requests": [], "receipts": []},
-        "culture_accounts": {}
+        "culture_accounts": {}  # {gid:{uid:{idEnc,pwEnc,options,cookies[],cookiesAt}}}
     }
 
 def db_load():
@@ -130,6 +132,13 @@ def safe_emoji(raw: str | None):
     return pe if pe else None
 
 def _now(): return int(time.time())
+
+def set_v2(e: discord.Embed):
+    try: e.set_author(name="")
+    except: pass
+    try: e.set_footer(text="")
+    except: pass
+    return e
 
 def star_bar(avg: float | None) -> str:
     if avg is None: return "평점 없음"
@@ -202,13 +211,6 @@ def prod_delete(name: str, category: str):
     DB["products"] = [p for p in DB["products"] if not (p["name"]==name and p["category"]==category)]
     db_save()
 
-def set_v2(e: discord.Embed):
-    try: e.set_author(name="")
-    except: pass
-    try: e.set_footer(text="")
-    except: pass
-    return e
-
 # ===== 로그 채널 =====
 def get_log_channel(guild: discord.Guild, key: str) -> discord.TextChannel | None:
     cfg = DB["logs"].get(key) or {}
@@ -223,31 +225,40 @@ async def send_log_embed(guild: discord.Guild, key: str, embed: discord.Embed):
         await ch.send(embed=embed); return True
     except: return False
 
+async def send_log_text(guild: discord.Guild, key: str, text: str):
+    ch = get_log_channel(guild, key)
+    if not ch: return False
+    try:
+        await ch.send(text); return True
+    except: return False
+
 # ===== 구매/후기/DM =====
 def emb_purchase_log(user: discord.User, product: str, qty: int):
-    e = discord.Embed(title="구매로그",
-                      description=f"{user.mention}님 {product} {qty}개\n구매 감사합니다 후기 작성 부탁드립니다:gift_heart:",
-                      color=GRAY)
-    return set_v2(e)
+    return set_v2(discord.Embed(
+        title="구매로그",
+        description=f"{user.mention}님 {product} {qty}개\n구매 감사합니다 후기 작성 부탁드립니다:gift_heart:",
+        color=GRAY
+    ))
 
 def emb_review_full(product: str, stars: int, content: str):
-    stars = max(1, min(stars, 5))
-    line = "ㅡ"*18
-    e = discord.Embed(title="구매 후기",
-                      description=f"**구매제품** : {product}\n**별점** : {'⭐️'*stars}\n{line}\n{content}\n{line}",
-                      color=GRAY)
-    return set_v2(e)
+    line="ㅡ"*18
+    return set_v2(discord.Embed(
+        title="구매 후기",
+        description=f"**구매제품** : {product}\n**별점** : {'⭐️'*max(1,min(stars,5))}\n{line}\n{content}\n{line}",
+        color=GRAY
+    ))
 
 def emb_purchase_dm(product: str, qty: int, price: int, items: list[str]):
-    line = "ㅡ"*18
-    visible = items[:20]
-    rest = len(items) - len(visible)
-    block = "\n".join(visible) + (f"\n외 {rest}개…" if rest>0 else "")
-    if not block: block = "표시할 항목이 없습니다"
-    e = discord.Embed(title="구매 성공",
-                      description=f"제품 이름 : {product}\n구매 개수 : {qty}\n차감 금액 : {price}\n{line}\n{block}",
-                      color=GREEN)
-    return set_v2(e)
+    line="ㅡ"*18
+    vis=items[:20]
+    rest=len(items)-len(vis)
+    block="\n".join(vis)+ (f"\n외 {rest}개…" if rest>0 else "")
+    if not block: block="표시할 항목이 없습니다"
+    return set_v2(discord.Embed(
+        title="구매 성공",
+        description=f"제품 이름 : {product}\n구매 개수 : {qty}\n차감 금액 : {price}\n{line}\n{block}",
+        color=GREEN
+    ))
 
 # ===== 자동충전(계좌) =====
 TOPUP_TIMEOUT_SEC = 5*60
@@ -295,7 +306,7 @@ async def handle_deposit(guild: discord.Guild, amount: int, depositor: str):
     }); db_save()
     return (True,"matched") if matched_user_id else (False,"queued")
 
-# ===== 컬쳐랜드 자동화 =====
+# ===== 컬쳐 세션 쿠키 저장/복원 =====
 CULTURE_K = os.getenv("CULTURE_K", "change_me")
 def _enc(plain: str) -> str:
     return base64.b64encode((plain or "").encode()).decode()
@@ -303,14 +314,36 @@ def _dec(cipher: str) -> str:
     try: return base64.b64decode(cipher.encode()).decode()
     except: return ""
 
+def _save_culture_cookies(gid:int, uid:int, cookies:list[dict]):
+    DB["culture_accounts"].setdefault(str(gid), {}).setdefault(str(uid), {})
+    DB["culture_accounts"][str(gid)][str(uid)]["cookies"] = cookies
+    DB["culture_accounts"][str(gid)][str(uid)]["cookiesAt"] = _now()
+    db_save()
+
+async def _restore_culture_cookies(context, gid:int, uid:int):
+    acc = DB["culture_accounts"].get(str(gid), {}).get(str(uid)) or {}
+    cookies = acc.get("cookies") or []
+    if cookies:
+        try:
+            await context.add_cookies(cookies)
+            return True
+        except:
+            return False
+    return False
+
+def _cookies_expired(gid:int, uid:int, ttl_sec:int=60*60*12):
+    acc = DB["culture_accounts"].get(str(gid), {}).get(str(uid)) or {}
+    ts = int(acc.get("cookiesAt") or 0)
+    return (_now() - ts) > ttl_sec
+
+# ===== 컬쳐랜드 자동화(세션 우선+로그 기록) =====
 async def culture_login_and_redeem(pin: str, gid:int, uid:int) -> tuple[bool, int, str]:
-    # playwright 사용 불가 환경 방어
     if not PLAYWRIGHT_AVAILABLE:
         return False, 0, "자동화 모듈 미설치(Playwright)."
     acc = DB["culture_accounts"].get(str(gid), {}).get(str(uid))
     if not acc:
         return False, 0, "컬쳐랜드 계정 미등록(/컬쳐랜드_설정)"
-    cid=_dec(acc["idEnc"]); cpw=_dec(acc["pwEnc"])
+    cid=_dec(acc.get("idEnc","")); cpw=_dec(acc.get("pwEnc",""))
     if not cid or not cpw:
         return False, 0, "계정 복호화 실패"
     p = pin.replace("-", "").replace(" ", "")
@@ -320,6 +353,7 @@ async def culture_login_and_redeem(pin: str, gid:int, uid:int) -> tuple[bool, in
     from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 
     LOGIN_URL = "https://m.cultureland.co.kr/mmb/loginMain.do?returnUrl="
+    HOME_URL  = "https://m.cultureland.co.kr/main.do"
     CHARGE_18_URL = "https://m.cultureland.co.kr/csh/cshGiftCard.do"
     CHARGE_16_URL = "https://m.cultureland.co.kr/csh/cshGiftCulture.do"
 
@@ -334,28 +368,47 @@ async def culture_login_and_redeem(pin: str, gid:int, uid:int) -> tuple[bool, in
     ERROR_TEXTS = ["이미 사용", "잘못된", "사용할 수 없는", "충전 불가", "잠시 후 다시", "인증 실패", "한도"]
     OK_TEXTS = ["충전이 완료", "충전되었습니다", "충전 완료"]
 
-    # child watcher 문제 방지: 브라우저 런치 옵션 강화
     launch_kwargs = dict(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(**launch_kwargs)
         context = await browser.new_context(user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
         page = await context.new_page()
+        login_fresh = False
         try:
-            await page.goto(LOGIN_URL, timeout=20000)
+            session_ok=False
+            if not _cookies_expired(gid, uid):
+                if await _restore_culture_cookies(context, gid, uid):
+                    try:
+                        await page.goto(HOME_URL, timeout=15000)
+                        html = await page.content()
+                        if ("로그아웃" in html) or ("마이페이지" in html) or ("내 정보" in html):
+                            session_ok=True
+                    except:
+                        session_ok=False
 
-            id_el = await page.query_selector(SEL_ID) or (await page.query_selector_all("input"))[0]
-            await id_el.fill(cid)
-            pw_el = await page.query_selector(SEL_PW) or (await page.query_selector_all("input[type='password']"))[0]
-            await pw_el.fill(cpw)
-            btn = await page.query_selector(SEL_LOGIN_BTN) or await page.query_selector("button")
-            await btn.click()
-            await page.wait_for_timeout(1500)
-            html = await page.content()
-            if "hCaptcha" in html or "캡차" in html:
-                return False, 0, "캡차 차단"
-            if "비밀번호" in html and "오류" in html:
-                return False, 0, "로그인 실패"
+            if not session_ok:
+                await page.goto(LOGIN_URL, timeout=20000)
+                id_el = await page.query_selector(SEL_ID) or (await page.query_selector_all("input"))[0]
+                await id_el.fill(cid)
+                pw_el = await page.query_selector(SEL_PW) or (await page.query_selector_all("input[type='password']"))[0]
+                await pw_el.fill(cpw)
+                btn = await page.query_selector(SEL_LOGIN_BTN) or await page.query_selector("button")
+                await btn.click()
+                await page.wait_for_timeout(1500)
+                html = await page.content()
+                if "hCaptcha" in html or "캡차" in html:
+                    return False, 0, "캡차 차단"
+                if "비밀번호" in html and "오류" in html:
+                    return False, 0, "로그인 실패"
+                # 로그인 성공 로그
+                await send_log_text(bot.get_guild(gid), "admin", f"[컬쳐랜드] 로그인 성공 uid={uid}")
+                try:
+                    cookies = await context.cookies()
+                    _save_culture_cookies(gid, uid, cookies)
+                except:
+                    pass
+                login_fresh=True
 
             if len(p)==18:
                 await page.goto(CHARGE_18_URL, timeout=20000)
@@ -382,32 +435,41 @@ async def culture_login_and_redeem(pin: str, gid:int, uid:int) -> tuple[bool, in
             for fail in ERROR_TEXTS:
                 if fail in html2:
                     return False, 0, f"충전 실패: {fail}"
-            amount = 0
-            m = AMOUNT_REGEX.search(html2)
+
+            amount=0
+            m = re.search(r"([0-9][0-9,]{2,})\s*원", html2)
             if m:
-                try: amount = int(m.group(1).replace(",",""))
-                except: amount = 0
-            ok = any(txt in html2 for txt in OK_TEXTS)
+                try: amount=int(m.group(1).replace(",",""))
+                except: amount=0
+            ok = any(t in html2 for t in OK_TEXTS)
             if ok and amount>0:
                 return True, amount, ""
+
             await page.wait_for_timeout(900)
             html3 = await page.content()
             for fail in ERROR_TEXTS:
                 if fail in html3:
                     return False, 0, f"충전 실패: {fail}"
-            m2 = AMOUNT_REGEX.search(html3)
+            m2 = re.search(r"([0-9][0-9,]{2,})\s*원", html3)
             if m2:
-                try: amount = int(m2.group(1).replace(",",""))
-                except: amount = 0
-            ok2 = any(txt in html3 for txt in OK_TEXTS)
+                try: amount=int(m2.group(1).replace(",",""))
+                except: amount=0
+            ok2 = any(t in html3 for t in OK_TEXTS)
             if ok2 and amount>0:
                 return True, amount, ""
             return False, 0, "결과 확인 실패"
         except PwTimeout:
             return False, 0, "응답 지연"
+        except NotImplementedError:
+            return False, 0, "호스트가 하위 프로세스 미지원"
         except Exception as e:
             return False, 0, f"자동화 예외: {str(e)[:120]}"
         finally:
+            try:
+                cookies = await context.cookies()
+                _save_culture_cookies(gid, uid, cookies)
+            except:
+                pass
             with contextlib.suppress(Exception): await context.close()
             with contextlib.suppress(Exception): await browser.close()
 
@@ -420,6 +482,41 @@ def lock_review(gid:int, uid:int, unique_key:str):
     DB["purchases_sent"].setdefault(str(gid), {}).setdefault(str(uid), {})
     DB["purchases_sent"][str(gid)][str(uid)][unique_key]=True
     db_save()
+
+class ReviewSendModal(discord.ui.Modal, title="구매 후기 작성"):
+    product_input = discord.ui.TextInput(label="구매 제품", required=True, max_length=60)
+    stars_input   = discord.ui.TextInput(label="별점(1~5)", required=True, max_length=1)
+    content_input = discord.ui.TextInput(label="후기 내용", style=discord.TextStyle.paragraph, required=True, max_length=500)
+    def __init__(self, gid:int, uid:int, unique_key:str, default_product:str=""):
+        super().__init__()
+        self.gid=gid; self.uid=uid; self.unique_key=unique_key
+        if default_product: self.product_input.default=default_product
+    async def on_submit(self, it: discord.Interaction):
+        if not can_send_review(self.gid, self.uid, self.unique_key):
+            await it.response.send_message(embed=set_v2(discord.Embed(title="후기 전송 불가", description="이미 작성됨", color=PINK)), ephemeral=True); return
+        s=str(self.stars_input.value).strip()
+        if not s.isdigit() or not (1<=int(s)<=5):
+            await it.response.send_message("별점은 1~5 숫자", ephemeral=True); return
+        product=str(self.product_input.value).strip()
+        content=str(self.content_input.value).strip()
+        e = emb_review_full(product, int(s), content)
+        guild = it.guild or bot.get_guild(GUILD_ID)
+        if guild: await send_log_embed(guild, "review", e)
+        lock_review(self.gid, self.uid, self.unique_key)
+        await it.response.send_message("후기 전송 완료", ephemeral=True)
+
+class ReviewButtonView(discord.ui.View):
+    def __init__(self, gid:int, uid:int, unique_key:str, default_product:str=""):
+        super().__init__(timeout=None)
+        btn = discord.ui.Button(label=f"{EMJ_HEART} 후기 전송", style=discord.ButtonStyle.secondary)
+        async def _cb(i:discord.Interaction):
+            if i.user.id!=uid:
+                await i.response.send_message("구매자만 가능", ephemeral=True); return
+            if not can_send_review(gid, uid, unique_key):
+                await i.response.send_message("이미 작성됨", ephemeral=True); return
+            await i.response.send_modal(ReviewSendModal(gid, uid, unique_key, default_product))
+        btn.callback=_cb
+        self.add_item(btn)
 
 # ===== 충전(계좌 승인/거부) =====
 class SecureApproveView(discord.ui.View):
@@ -487,7 +584,7 @@ class PaymentModal(discord.ui.Modal, title="충전 신청"):
             ))
             await secure_ch.send(embed=e_sec, view=SecureApproveView(payload))
 
-# ===== 컬쳐랜드 설정/모달 =====
+# ===== 컬쳐 설정/모달 =====
 class CultureAccountModal(discord.ui.Modal, title="컬쳐랜드 설정"):
     id_input = discord.ui.TextInput(label="ID", required=True, max_length=60)
     pw_input = discord.ui.TextInput(label="PW", required=True, max_length=80)
@@ -503,6 +600,8 @@ class CultureAccountModal(discord.ui.Modal, title="컬쳐랜드 설정"):
             "idEnc": _enc(str(self.id_input.value).strip()),
             "pwEnc": _enc(str(self.pw_input.value).strip()),
             "options": str(self.opt_input.value).strip(),
+            "cookies": DB["culture_accounts"].get(gid, {}).get(uid, {}).get("cookies", []),
+            "cookiesAt": DB["culture_accounts"].get(gid, {}).get(uid, {}).get("cookiesAt", 0),
             "createdAt": _now(),
             "updatedAt": _now()
         }
@@ -643,10 +742,8 @@ class ButtonPanel(discord.ui.View):
         c=discord.ui.Button(label="충전",   style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMJ_CHARGE), row=0)
         i=discord.ui.Button(label="내 정보", style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMJ_INFO),   row=1)
         b=discord.ui.Button(label="구매",   style=discord.ButtonStyle.secondary, emoji=safe_emoji(EMJ_BUY),    row=1)
-
         async def _notice(it):
             await it.response.send_message(embed=set_v2(discord.Embed(title="공지사항", description="서버규칙 필독 부탁드립니다\n자충 오류시 티켓 열어주세요", color=GRAY)), ephemeral=True)
-
         async def _charge(it):
             if ban_is_blocked(it.guild.id, it.user.id):
                 await it.response.send_message(embed=set_v2(discord.Embed(title="이용 불가", description="차단 상태입니다. /유저_설정으로 해제하세요.", color=RED)), ephemeral=True); return
@@ -655,28 +752,25 @@ class ButtonPanel(discord.ui.View):
                 await it.response.send_message(embed=set_v2(discord.Embed(title="결제수단 선택하기", description="현재 지원되는 결제수단이 없습니다.", color=ORANGE)), ephemeral=True)
             else:
                 await it.response.send_message(embed=set_v2(discord.Embed(title="결제수단 선택하기", description="원하시는 결제수단 버튼을 클릭해주세요", color=GRAY)), view=view, ephemeral=True)
-
         async def _info(it):
             gid=it.guild.id; uid=it.user.id
             ords=orders_get(gid, uid); spent=0
             for o in ords:
                 p=next((pp for pp in DB["products"] if pp["name"]==o["product"]), None)
                 if p: spent += p["price"]*o["qty"]
-            bal=bal_get(gid, uid); pts=DB["points"].get(str(gid), {}).get(str(uid), 0)
+            bal=bal_get(gid, uid); pts=pt_get(gid, uid)
             line="ㅡ"*18
             desc=f"보유 금액 : {bal}\n누적 금액 : {spent}\n포인트 : {pts}\n거래 횟수 : {len(ords)}\n{line}\n역할등급 : 아직 없습니다\n역할혜택 : 아직 없습니다"
             e=set_v2(discord.Embed(title="내 정보", description=desc, color=GRAY))
             try: e.set_thumbnail(url=it.user.display_avatar.url)
             except: pass
             await it.response.send_message(embed=e, view=MyInfoView(uid, ords), ephemeral=True)
-
         async def _buy(it):
             if ban_is_blocked(it.guild.id, it.user.id):
                 await it.response.send_message(embed=set_v2(discord.Embed(title="이용 불가", description="차단 상태입니다. /유저_설정으로 해제하세요.", color=RED)), ephemeral=True); return
             e = build_category_embed()
             v = CategorySelectForBuyView(it.user.id)
             await it.response.send_message(embed=e, view=v, ephemeral=True)
-
         n.callback=_notice; c.callback=_charge; i.callback=_info; b.callback=_buy
         self.add_item(n); self.add_item(c); self.add_item(i); self.add_item(b)
 
@@ -1012,7 +1106,7 @@ class ControlCog(commands.Cog):
         for o in ords:
             p=next((pp for pp in DB["products"] if pp["name"]==o["product"]), None)
             if p: spent += p["price"]*o["qty"]
-        bal=bal_get(gid, uid); pts=DB["points"].get(str(gid), {}).get(str(uid), 0)
+        bal=bal_get(gid, uid); pts=pt_get(gid, uid)
         await it.response.send_message(embed=set_v2(discord.Embed(title=f"{유저} 정보", description=f"보유 금액 : `{bal}`\n누적 금액 : `{spent}`\n포인트 : `{pts}`\n거래 횟수 : `{len(ords)}`", color=GRAY)), ephemeral=True)
 
     @app_commands.command(name="컬쳐랜드_설정", description="컬쳐랜드 계정 등록/갱신")
@@ -1021,7 +1115,7 @@ class ControlCog(commands.Cog):
     async def 컬쳐랜드_설정(self, it:discord.Interaction):
         await it.response.send_modal(CultureAccountModal(it.user.id))
 
-# ===== FastAPI 웹훅(카뱅) =====
+# ===== FastAPI 웹훅 =====
 app = FastAPI()
 
 def parse_sms_kakaobank(msg: str) -> tuple[int | None, str | None]:
@@ -1089,8 +1183,7 @@ async def kbank_webhook(req: Request):
         if not guild:
             return {"ok": False, "error":"guild_not_found"}
         if amount is None or depositor is None:
-            ch=get_log_channel(guild, "admin")
-            if ch: await ch.send("[자동충전] 파싱 실패")
+            await send_log_text(guild, "admin", "[자동충전] 파싱 실패")
             return {"ok": False, "result":"parse_failed"}
         ok,msg2=await handle_deposit(guild, int(amount), str(depositor))
         return {"ok": ok, "result": msg2}
