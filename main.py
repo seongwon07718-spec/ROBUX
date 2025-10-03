@@ -4,25 +4,21 @@ import asyncio
 import discord
 from discord.ext import commands
 
-# 필수 환경변수
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
-# 길드 고정 (네 길드)
-GUILD_ID = 1419200424636055592
+GUILD_ID = 1419200424636055592  # 네 길드
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 카드 v2 메시지 페이로드
+# 카드 v2 페이로드 (임베드 사용 안 함)
 def make_card_message():
-    # 주의: 아래 키(type/name)는 카드 v2 스타일 예시다.
-    # 만약 네 클라/길드 스펙에서 명칭이 다르면 동일 자리의 키 이름만 바꿔주면 된다.
     return {
         "content": "",
         "components": [
             {
-                "type": "card",  # 카드 컨테이너
+                "type": "card",      # 카드 컨테이너 (v2 스타일)
                 "children": [
                     {
                         "type": "card_header",
@@ -31,7 +27,7 @@ def make_card_message():
                     },
                     {
                         "type": "section",
-                        "text": "상품을 고르고 아래 버튼으로 구매를 진행해줘."
+                        "text": "상품을 고르고 아래 버튼으로 구매 진행해줘."
                     },
                     {
                         "type": "field_grid",
@@ -39,7 +35,7 @@ def make_card_message():
                             {"label": "상품", "value": "Robux 100", "inline": True},
                             {"label": "가격", "value": "100 크레딧", "inline": True},
                             {"label": "상품", "value": "Robux 500", "inline": True},
-                            {"label": "가격", "value": "500 크레딧", "inline": True},
+                            {"label": "가격", "value": "500 크레딧", "inline": True}
                         ]
                     },
                     {
@@ -55,6 +51,36 @@ def make_card_message():
         ],
         "allowed_mentions": {"parse": []}
     }
+
+# 안전 가드: 채널 검증 (존재/길드 일치/권한)
+async def validate_channel(bot: commands.Bot, channel_id: int) -> tuple[bool, str]:
+    ch = bot.get_channel(channel_id)
+    if ch is None:
+        # 캐시에 없을 수 있으니 API 조회
+        try:
+            ch = await bot.fetch_channel(channel_id)
+        except discord.NotFound:
+            return False, "채널이 존재하지 않음 (NotFound). CHANNEL_ID 다시 확인."
+        except discord.Forbidden:
+            return False, "채널 정보를 볼 권한이 없음 (Forbidden). 봇 권한 확인."
+        except discord.HTTPException as e:
+            return False, f"채널 조회 실패(HTTPException): {e}"
+
+    # 텍스트 채널인지 체크
+    if not isinstance(ch, (discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel)):
+        # 카드 전송은 텍스트 메시지가 가능한 곳이어야 함
+        if not isinstance(ch, discord.TextChannel):
+            return False, "텍스트 채널이 아님. 일반 텍스트 채널 ID를 넣어줘."
+
+    # 길드 일치 체크
+    if getattr(ch, "guild", None) and ch.guild.id != GUILD_ID:
+        return False, f"길드 불일치. 채널의 길드({ch.guild.id}) != 기대 길드({GUILD_ID})."
+
+    # 권한 체크
+    perms = ch.permissions_for(ch.guild.me) if getattr(ch, "guild", None) else None
+    if perms and not perms.send_messages:
+        return False, "메시지 보내기 권한 없음. 채널 권한 부여 필요."
+    return True, "OK"
 
 class QtyModal(discord.ui.Modal, title="구매 수량 입력"):
     def __init__(self, sku: str):
@@ -90,51 +116,53 @@ class QtyModal(discord.ui.Modal, title="구매 수량 입력"):
 
 @bot.event
 async def on_ready():
-    print(f"ready {bot.user} | guild={GUILD_ID}")
-    if CHANNEL_ID == 0:
-        print("CHANNEL_ID 환경변수 설정 필요")
+    print(f"READY {bot.user} | guild={GUILD_ID} | channel={CHANNEL_ID}")
+
+    # 길드 캐시 확인
+    g = bot.get_guild(GUILD_ID)
+    if g is None:
+        print("경고: 봇이 해당 길드 캐시에 없음. 초대/권한/Shard 범위 확인.")
+
+    # 채널 검증
+    ok, reason = await validate_channel(bot, CHANNEL_ID)
+    if not ok:
+        print(f"[차단] 카드 전송 중단: {reason}")
         return
+    print("[검증 통과] 채널로 카드 전송 시도")
 
-    # 봇이 해당 길드에 실제로 있는지 확인
-    guild = bot.get_guild(GUILD_ID)
-    if guild is None:
-        print("봇이 1419200424636055592 길드에 없거나, 캐시에서 못 찾았어. 초대/권한 확인해줘.")
-    else:
-        print(f"길드 확인: {guild.name}")
-
-    # 원시 HTTP로 카드 메시지 전송
+    # 원시 HTTP로 카드 전송
     url = f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages"
     headers = {"Authorization": f"Bot {TOKEN}"}
     payload = make_card_message()
+
     async with aiohttp.ClientSession(headers=headers) as s:
         async with s.post(url, json=payload) as r:
             body = await r.text()
             print("send card:", r.status, body)
             if r.status == 404:
-                print("Unknown Channel 10003: CHANNEL_ID 다시 확인 + 봇 권한/길드 일치 확인!")
+                print("Unknown Channel 10003: 채널 ID 틀림 or 봇 권한/길드 불일치. 위 검증 메시지 참고해서 수정해.")
+            elif r.status >= 300:
+                print("전송 실패. 위 HTTP 응답 본문(body) 확인하고 키/권한/롤아웃 점검.")
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    # 버튼 인터랙션 처리 (컴포넌트 v2)
     data = getattr(interaction, "data", {}) or {}
-    custom_id = data.get("custom_id")
-    if not custom_id:
+    cid = data.get("custom_id")
+    if not cid:
         return
-
-    if custom_id.startswith("shop:buy:"):
-        sku = custom_id.split(":")[-1]
+    if cid.startswith("shop:buy:"):
+        sku = cid.split(":")[-1]
         try:
             await interaction.response.send_modal(QtyModal(sku))
         except discord.InteractionResponded:
-            # 이미 응답된 경우 대비
-            await interaction.followup.send("이미 처리된 인터랙션이야. 다시 시도해줘!", ephemeral=True)
+            await interaction.followup.send("이미 처리된 인터랙션이야. 다시 눌러줘!", ephemeral=True)
 
 def main():
     if not TOKEN:
-        raise RuntimeError("DISCORD_TOKEN이 비어있어!")
+        raise RuntimeError("DISCORD_TOKEN 비어있음. 환경변수 넣어.")
     if CHANNEL_ID == 0:
-        raise RuntimeError("CHANNEL_ID 설정해줘!")
-    # 슬래시 커맨드 동기화 관련 훅은 사용하지 않음 (네 로그의 'shop not found' 원인 제거)
+        raise RuntimeError("CHANNEL_ID 비어있음. 텍스트 채널 ID 넣어.")
+    # 슬래시 커맨드 일절 안 씀 → 'shop not found' 재발 불가
     bot.run(TOKEN)
 
 if __name__ == "__main__":
