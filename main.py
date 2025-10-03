@@ -53,7 +53,7 @@ def _default_db():
         "orders": {},                           # {guild:{user:[{product, qty, ts}]}}
         "account": {"bank": "", "number": "", "holder": ""},
         "bans": {},                             # {guild:{user: bool}}
-        "reviews": {},                          # 여유
+        "reviews": {},
         "purchases_sent": {},                   # 후기 1회 제한용 {gid:{uid:{uniqueKey:True}}}
         "topups": {"requests": [], "receipts": []}
     }
@@ -257,7 +257,7 @@ def parse_sms_kakaobank(msg: str) -> tuple[int | None, str | None]:
 RE_DEPOSITOR_FALLBACK = [
     re.compile(r"입금\s+[0-9,]+\s*원\s+([^\s\|]+)"),
     re.compile(r"입금자\s*[:\-]?\s*([^\s\|]+)"),
-    re.compile(r"(보낸분|보낸이)\s*[:\-]?\s*([^\s\|]+)"),
+    re.compile(r"(보낸분|보낸이)\s*[:\-]?\s*([^\स\|]+)"),
     re.compile(r"\n([^\n\|]+)\s*(잔액|원|입금|$)")
 ]
 
@@ -339,12 +339,6 @@ def lock_review(gid:int, uid:int, unique_key:str):
     DB["purchases_sent"][str(gid)][str(uid)][unique_key]=True
     db_save()
 
-def get_log_channel(guild: discord.Guild, key: str) -> discord.TextChannel | None:
-    cfg = DB["logs"].get(key) or {}
-    if not cfg.get("enabled") or not cfg.get("target_channel_id"): return None
-    ch = guild.get_channel(int(cfg["target_channel_id"]))
-    return ch if isinstance(ch, discord.TextChannel) else None
-
 class ReviewSendModal(discord.ui.Modal, title="구매 후기 작성"):
     product_input = discord.ui.TextInput(label="구매 제품", required=True, max_length=60)
     stars_input   = discord.ui.TextInput(label="별점(1~5)", required=True, max_length=1)
@@ -410,7 +404,7 @@ async def notify_user_topup_result(client: discord.Client, payload: dict, approv
     try:
         user = guild.get_member(uid) or await guild.fetch_member(uid)
         e=set_v2(discord.Embed(
-            title=("충전완료" if approved else "충전거부"),
+            title=("충전완료" if approved else "충전실패"),
             description=("충전신청이 성공적으로 완료되었습니다" if approved else "충전신청이 거부되었습니다"),
             color=(GREEN if approved else RED)
         ))
@@ -439,15 +433,15 @@ class PaymentModal(discord.ui.Modal, title="충전 신청"):
         number=DB["account"].get("number","미등록")
         amount_txt=f"{amt_raw}원" if amt_raw else "0원"
 
-        # 1) 유저 안내(에페메랄 + 5분 만료 안내 문구)
+        # 유저 안내(에페메랄, 안내 문구 삭제)
         e_user=set_v2(discord.Embed(
             title="충전신청",
-            description=f"은행명 : {bank}\n예금주 : {holder}\n계좌번호 : `{number}`\n보내야할 금액 : {amount_txt}\n\n(안내) 이 안내는 5분 뒤 자동 만료돼요.",
+            description=f"은행명 : {bank}\n예금주 : {holder}\n계좌번호 : `{number}`\n보내야할 금액 : {amount_txt}",
             color=GREEN
         ))
         await it.response.send_message(embed=e_user, ephemeral=True)
 
-        # 2) 보안채널 알림 + 승인/거부
+        # 보안채널 알림 + 승인/거부
         secure_ch=get_log_channel(it.guild, "secure")
         if secure_ch:
             payload={"guild_id":it.guild.id,"user_id":it.user.id,"amount":amt,"amount_txt":amount_txt,"depositor":depos}
@@ -479,15 +473,17 @@ class PaymentMethodView(discord.ui.View):
             b.callback=_cb
             self.add_item(b)
 
-# ===== 카테고리/제품 임베드(요청 포맷) =====
+# ===== 카테고리/제품 임베드(요청 포맷 + 같은 메시지 ‘수정’ 흐름) =====
 def build_category_embed():
     lines=[]
     if DB["categories"]:
         for c in DB["categories"]:
+            prod_count = len([p for p in DB["products"] if p["category"]==c["name"]])
             stars=category_avg_stars(c["name"])
             lines.append(f"**카테고리명 : {c['name']}**")
+            lines.append(f"-# 제품 : {prod_count}")
             lines.append(f"-# 별점 : {stars}")
-            lines.append("**ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ**")
+            lines.append("ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ")
     else:
         lines.append("등록된 카테고리가 없습니다")
     return set_v2(discord.Embed(title="카테고리를 선택해주세요", description="\n".join(lines), color=GRAY))
@@ -501,15 +497,35 @@ def build_product_embed(category_name:str):
             lines.append(f"-# 남은 재고 : {p.get('stock',0)}")
             lines.append(f"-# 가격 : __{p.get('price',0)}__")
             lines.append(f"-# 별점 : {product_avg_stars(p)}")
-            lines.append("**ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ**")
+            lines.append("ㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡㅡ")
     else:
         lines.append("해당 카테고리에 제품이 없습니다")
-    return set_v2(discord.Embed(title=category_name, description="\n".join(lines), color=GRAY))
+    return set_v2(discord.Embed(title="제품 선택하기", description="제품을 선택해주세요\n\n" + "\n".join(lines), color=GRAY))
+
+# 메시지 수정 흐름을 위한 저장소: {guildId:{userId:{message_id:int, phase:str, category:str}}}
+FLOW = {}
+
+async def remember_flow_message(it: discord.Interaction, phase: str, category: str | None = None):
+    FLOW.setdefault(str(it.guild.id), {})[str(it.user.id)] = {
+        "message_id": (await it.original_response()).id,
+        "phase": phase,
+        "category": category or ""
+    }
+
+async def edit_flow_message(it: discord.Interaction, embed: discord.Embed, view: discord.ui.View | None):
+    entry = FLOW.get(str(it.guild.id), {}).get(str(it.user.id))
+    if not entry:
+        await it.followup.send(embed=embed, view=view, ephemeral=True); return
+    try:
+        msg = await it.channel.fetch_message(entry["message_id"])
+        await msg.edit(embed=embed, view=view)
+    except:
+        await it.followup.send(embed=embed, view=view, ephemeral=True)
 
 class QuantityModal(discord.ui.Modal, title="수량 입력"):
     qty_input = discord.ui.TextInput(label="구매 수량", required=True, max_length=6)
-    def __init__(self, owner_id:int, category:str, product_name:str, origin_msg_id:int):
-        super().__init__(); self.owner_id=owner_id; self.category=category; self.product_name=product_name; self.origin_msg_id=origin_msg_id
+    def __init__(self, owner_id:int, category:str, product_name:str):
+        super().__init__(); self.owner_id=owner_id; self.category=category; self.product_name=product_name
     async def on_submit(self, it: discord.Interaction):
         if it.user.id!=self.owner_id:
             await it.response.send_message("작성자만 제출할 수 있어.", ephemeral=True); return
@@ -539,9 +555,10 @@ class QuantityModal(discord.ui.Modal, title="수량 입력"):
         try:
             await send_log_embed(it.guild, "purchase", emb_purchase_log(it.user, self.product_name, qty))
         except: pass
-        await it.response.send_message(embed=set_v2(discord.Embed(
-            title="구매 완료", description=f"{self.product_name} 구매가 완료되었습니다. DM을 확인해주세요.", color=GREEN
-        )), ephemeral=True)
+        # 같은 메시지를 '구매 완료'로 수정
+        e_done=set_v2(discord.Embed(title="구매 완료", description=f"{self.product_name} 구매가 완료되었습니다. DM을 확인해주세요.", color=GREEN))
+        await it.response.defer(ephemeral=True)  # 모달 응답 소거
+        await edit_flow_message(it, e_done, view=None)
 
 class ProductSelectClean(discord.ui.Select):
     def __init__(self, owner_id:int, category:str):
@@ -560,7 +577,7 @@ class ProductSelectClean(discord.ui.Select):
         val=self.values[0]
         if val=="__none__":
             await it.response.send_message("먼저 제품을 추가해주세요.", ephemeral=True); return
-        await it.response.send_modal(QuantityModal(self.owner_id, self.category, val, 0))
+        await it.response.send_modal(QuantityModal(self.owner_id, self.category, val))
 
 class CategorySelectForBuy(discord.ui.Select):
     def __init__(self, owner_id:int):
@@ -579,9 +596,15 @@ class CategorySelectForBuy(discord.ui.Select):
         val=self.values[0]
         if val=="__none__":
             await it.response.send_message("먼저 카테고리를 추가해주세요.", ephemeral=True); return
-        e = build_product_embed(val)
+        # 같은 메시지를 제품 선택 화면으로 '수정'
+        e_prod = build_product_embed(val)
         v=discord.ui.View(timeout=None); v.add_item(ProductSelectClean(self.owner_id, val))
-        await it.response.send_message(embed=e, view=v, ephemeral=True)
+        await it.response.defer(ephemeral=True)
+        await edit_flow_message(it, e_prod, v)
+        # 단계 저장
+        FLOW.setdefault(str(it.guild.id), {}).setdefault(str(it.user.id), {})
+        FLOW[str(it.guild.id)][str(it.user.id)]["phase"]="product"
+        FLOW[str(it.guild.id)][str(it.user.id)]["category"]=val
 
 class CategorySelectForBuyView(discord.ui.View):
     def __init__(self, owner_id:int):
@@ -635,9 +658,16 @@ class ButtonPanel(discord.ui.View):
                 await it.response.send_message(embed=set_v2(discord.Embed(
                     title="이용 불가", description="차단 상태입니다. /유저_설정으로 해제하세요.", color=RED
                 )), ephemeral=True); return
+            # 카테고리 임베드 + 아래 드롭다운(같은 메시지 수정 기반으로 운용)
             e = build_category_embed()
             await it.response.send_message(embed=e, ephemeral=True)
-            await it.followup.send(content="카테고리를 드롭다운에서 선택하세요.", view=CategorySelectForBuyView(it.user.id), ephemeral=True)
+            await remember_flow_message(it, phase="category")
+            # 같은 메시지에 드롭다운을 붙이려면 edit 필요 → original_response 가져와서 edit로 view 부착
+            try:
+                msg = await it.original_response()
+                v = CategorySelectForBuyView(it.user.id)
+                await msg.edit(view=v)
+            except: pass
 
         n.callback=_notice; c.callback=_charge; i.callback=_info; b.callback=_buy
         self.add_item(n); self.add_item(c); self.add_item(i); self.add_item(b)
@@ -714,7 +744,6 @@ class CategorySetupModal(discord.ui.Modal, title="카테고리 추가"):
         name=str(self.name_input.value).strip()
         desc=str(self.desc_input.value).strip() if self.desc_input.value else ""
         emoji=str(self.emoji_input.value).strip() if self.emoji_input.value else ""
-        prod_upsert_dummy=False
         i=next((k for k,c in enumerate(DB["categories"]) if c["name"]==name), -1)
         row={"name":name,"desc":desc,"emoji_raw":emoji}
         if i>=0: DB["categories"][i]=row
