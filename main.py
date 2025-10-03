@@ -10,12 +10,15 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 카드 v2 페이로드 생성
 def make_card_message():
+    # 주의: 아래 키/타입 명칭은 “임베드”가 아닌 “카드 v2” 레이아웃을 가정
+    # 네 길드/클라에 적용된 스펙 명칭이 다르면 그대로 치환해줘
     return {
-        "content": "",
+        "content": "",  # 카드만 보여주고 싶으면 비워둠
         "components": [
             {
-                "type": "card",
+                "type": "card",  # 카드 컨테이너
                 "children": [
                     {
                         "type": "card_header",
@@ -24,7 +27,7 @@ def make_card_message():
                     },
                     {
                         "type": "section",
-                        "text": "상품을 고르고 아래 버튼을 눌러줘."
+                        "text": "원하는 상품을 골라 아래 버튼으로 구매 진행해줘."
                     },
                     {
                         "type": "field_grid",
@@ -32,7 +35,7 @@ def make_card_message():
                             {"label": "상품", "value": "Robux 100", "inline": True},
                             {"label": "가격", "value": "100 크레딧", "inline": True},
                             {"label": "상품", "value": "Robux 500", "inline": True},
-                            {"label": "가격", "value": "500 크레딧", "inline": True}
+                            {"label": "가격", "value": "500 크레딧", "inline": True},
                         ]
                     },
                     {
@@ -45,7 +48,8 @@ def make_card_message():
                     }
                 ]
             }
-        ]
+        ],
+        "allowed_mentions": {"parse": []}
     }
 
 class QtyModal(discord.ui.Modal, title="구매 수량 입력"):
@@ -67,14 +71,16 @@ class QtyModal(discord.ui.Modal, title="구매 수량 입력"):
             if qty <= 0:
                 raise ValueError
         except Exception:
-            await interaction.response.send_message("수량이 올바르지 않아.", ephemeral=True)
+            await interaction.response.send_message("수량이 올바르지 않아 ㅠ 다시 입력해줘.", ephemeral=True)
             return
 
         order_id = f"ord-{self.sku}-{qty}"
+        # 최초 응답
         await interaction.response.send_message(
             f"주문 완료! SKU: {self.sku}, 수량: {qty}\n주문번호: {order_id}",
             ephemeral=True
         )
+        # 후속 알림
         await interaction.followup.send(
             f"[영수증] <@{interaction.user.id}> {self.sku} x {qty} 구매",
             ephemeral=True
@@ -82,26 +88,37 @@ class QtyModal(discord.ui.Modal, title="구매 수량 입력"):
 
 @bot.event
 async def on_ready():
-    print("ready", bot.user)
-    # 카드 전송
+    print(f"ready {bot.user}")
+    if CHANNEL_ID == 0:
+        print("CHANNEL_ID 환경변수 설정 필요")
+        return
+    # 원시 HTTP로 카드 메시지 전송
     url = f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages"
     headers = {"Authorization": f"Bot {TOKEN}"}
     async with aiohttp.ClientSession(headers=headers) as s:
-        r = await s.post(url, json=make_card_message())
-        print("send card:", r.status, await r.text())
+        async with s.post(url, json=make_card_message()) as r:
+            body = await r.text()
+            print("send card:", r.status, body)
+            if r.status == 404:
+                print("채널을 못 찾았어. CHANNEL_ID 다시 확인 + 봇이 그 길드에 있는지/권한 있는지 체크!")
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
+    # 컴포넌트 v2 버튼 콜백 처리
     data = getattr(interaction, "data", {}) or {}
     cid = data.get("custom_id")
     if not cid:
         return
     if cid.startswith("shop:buy:"):
         sku = cid.split(":")[-1]
-        # 모달 띄워 수량 입력
         await interaction.response.send_modal(QtyModal(sku))
 
-if __name__ == "__main__":
-    if not TOKEN or CHANNEL_ID == 0:
-        raise RuntimeError("DISCORD_TOKEN, CHANNEL_ID 환경변수 세팅 필요")
+def main():
+    if not TOKEN:
+        raise RuntimeError("DISCORD_TOKEN이 비어있어!")
+    if CHANNEL_ID == 0:
+        raise RuntimeError("CHANNEL_ID 설정해줘!")
     bot.run(TOKEN)
+
+if __name__ == "__main__":
+    main()
