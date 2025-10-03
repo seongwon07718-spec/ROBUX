@@ -1,12 +1,32 @@
-import os, json, time, re, statistics, threading, hashlib, asyncio, base64, contextlib
+import os, json, time, re, statistics, threading, hashlib, asyncio, base64, contextlib, sys
 import discord
 from discord import app_commands
 from discord.ext import commands
 from fastapi import FastAPI, Request
 import uvicorn
-from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 
-# ===== 기본 환경 =====
+# ===== playwright 가용 여부 체크/지연 로딩 =====
+PLAYWRIGHT_AVAILABLE = False
+try:
+    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
+    PLAYWRIGHT_AVAILABLE = True
+except Exception:
+    PLAYWRIGHT_AVAILABLE = False
+
+# 일부 환경(child watcher 미구현) 방어
+try:
+    if sys.platform != "win32":
+        loop = asyncio.get_event_loop()
+        if hasattr(asyncio, "get_child_watcher"):
+            try:
+                asyncio.get_child_watcher()
+            except NotImplementedError:
+                from asyncio import SafeChildWatcher, set_child_watcher
+                set_child_watcher(SafeChildWatcher())
+except Exception:
+    pass
+
+# ===== 환경 =====
 GUILD_ID = int(os.getenv("GUILD_ID", "1419200424636055592"))
 GUILD = discord.Object(id=GUILD_ID)
 
@@ -16,7 +36,7 @@ GREEN = discord.Color.green()
 ORANGE = discord.Color.orange()
 PINK = discord.Color.from_str("#ff5ea3")
 
-# 요청 이모지 셋(문제 시 자동 무시)
+# 이모지(안전 파싱; 실패 시 None)
 EMJ_NOTICE   = "<:Announcement:1423544323735027763>"
 EMJ_CHARGE   = "<a:Card_Black:1423544325597560842>"
 EMJ_INFO     = "<:saknagkang_00000:1371042122345484353>"
@@ -284,6 +304,9 @@ def _dec(cipher: str) -> str:
     except: return ""
 
 async def culture_login_and_redeem(pin: str, gid:int, uid:int) -> tuple[bool, int, str]:
+    # playwright 사용 불가 환경 방어
+    if not PLAYWRIGHT_AVAILABLE:
+        return False, 0, "자동화 모듈 미설치(Playwright)."
     acc = DB["culture_accounts"].get(str(gid), {}).get(str(uid))
     if not acc:
         return False, 0, "컬쳐랜드 계정 미등록(/컬쳐랜드_설정)"
@@ -293,6 +316,8 @@ async def culture_login_and_redeem(pin: str, gid:int, uid:int) -> tuple[bool, in
     p = pin.replace("-", "").replace(" ", "")
     if not p.isdigit() or len(p) not in (16, 18, 20):
         return False, 0, "핀 형식 오류"
+
+    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
 
     LOGIN_URL = "https://m.cultureland.co.kr/mmb/loginMain.do?returnUrl="
     CHARGE_18_URL = "https://m.cultureland.co.kr/csh/cshGiftCard.do"
@@ -309,9 +334,12 @@ async def culture_login_and_redeem(pin: str, gid:int, uid:int) -> tuple[bool, in
     ERROR_TEXTS = ["이미 사용", "잘못된", "사용할 수 없는", "충전 불가", "잠시 후 다시", "인증 실패", "한도"]
     OK_TEXTS = ["충전이 완료", "충전되었습니다", "충전 완료"]
 
+    # child watcher 문제 방지: 브라우저 런치 옵션 강화
+    launch_kwargs = dict(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context()
+        browser = await pw.chromium.launch(**launch_kwargs)
+        context = await browser.new_context(user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
         page = await context.new_page()
         try:
             await page.goto(LOGIN_URL, timeout=20000)
@@ -393,7 +421,7 @@ def lock_review(gid:int, uid:int, unique_key:str):
     DB["purchases_sent"][str(gid)][str(uid)][unique_key]=True
     db_save()
 
-# ===== 충전(계좌: 승인/거부) =====
+# ===== 충전(계좌 승인/거부) =====
 class SecureApproveView(discord.ui.View):
     def __init__(self, payload: dict):
         super().__init__(timeout=TOPUP_TIMEOUT_SEC)
@@ -459,7 +487,7 @@ class PaymentModal(discord.ui.Modal, title="충전 신청"):
             ))
             await secure_ch.send(embed=e_sec, view=SecureApproveView(payload))
 
-# ===== 컬쳐랜드 완전 자동 =====
+# ===== 컬쳐랜드 설정/모달 =====
 class CultureAccountModal(discord.ui.Modal, title="컬쳐랜드 설정"):
     id_input = discord.ui.TextInput(label="ID", required=True, max_length=60)
     pw_input = discord.ui.TextInput(label="PW", required=True, max_length=80)
@@ -479,11 +507,7 @@ class CultureAccountModal(discord.ui.Modal, title="컬쳐랜드 설정"):
             "updatedAt": _now()
         }
         db_save()
-        await it.response.send_message(embed=set_v2(discord.Embed(
-            title="컬쳐랜드 계정 저장 완료",
-            description="문상결제에서 자동 사용됩니다.",
-            color=GRAY
-        )), ephemeral=True)
+        await it.response.send_message(embed=set_v2(discord.Embed(title="컬쳐랜드 계정 저장 완료", description="문상결제에서 자동 사용됩니다.", color=GRAY)), ephemeral=True)
 
 class CulturePinModal(discord.ui.Modal, title="문화상품권 충전(컬쳐랜드)"):
     pin_input = discord.ui.TextInput(label="핀코드(하이픈 없이)", required=True, max_length=32)
@@ -493,20 +517,14 @@ class CulturePinModal(discord.ui.Modal, title="문화상품권 충전(컬쳐랜�
         pin = str(self.pin_input.value).strip()
         ok, amount, reason = await culture_login_and_redeem(pin, it.guild.id, it.user.id)
         if not ok or amount <= 0:
-            await it.response.send_message(embed=set_v2(discord.Embed(
-                title="충전실패", description=reason or "검증 실패", color=RED
-            )), ephemeral=True); return
+            await it.response.send_message(embed=set_v2(discord.Embed(title="충전실패", description=reason or "검증 실패", color=RED)), ephemeral=True); return
         res_ok, _ = await handle_deposit(it.guild, int(amount), "문화상품권(컬쳐랜드)")
         if res_ok:
-            await it.response.send_message(embed=set_v2(discord.Embed(
-                title="충전완료", description=f"{amount}원 충전되었습니다", color=GREEN
-            )), ephemeral=True)
+            await it.response.send_message(embed=set_v2(discord.Embed(title="충전완료", description=f"{amount}원 충전되었습니다", color=GREEN)), ephemeral=True)
         else:
-            await it.response.send_message(embed=set_v2(discord.Embed(
-                title="충전대기", description="잠시 후 반영됩니다.", color=ORANGE
-            )), ephemeral=True)
+            await it.response.send_message(embed=set_v2(discord.Embed(title="충전대기", description="잠시 후 반영됩니다.", color=ORANGE)), ephemeral=True)
 
-# ===== 결제수단 뷰(이모지 방어 적용) =====
+# ===== 결제수단 뷰 =====
 class PaymentMethodView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -522,13 +540,15 @@ class PaymentMethodView(discord.ui.View):
                 if label=="계좌이체":
                     await i.response.send_modal(PaymentModal(i.user.id))
                 elif label=="문상결제":
+                    if not PLAYWRIGHT_AVAILABLE:
+                        await i.response.send_message("자동화 모듈 미설치(Playwright).", ephemeral=True); return
                     await i.response.send_modal(CulturePinModal(i.user.id))
                 else:
                     await i.response.send_message(embed=set_v2(discord.Embed(title="실패", description="현재 미지원", color=RED)), ephemeral=True)
             b.callback=_cb
             self.add_item(b)
 
-# ===== 카테고리/제품 =====
+# ===== 카테고리/제품(예전 플로우) =====
 def build_category_embed():
     lines=[]
     if DB["categories"]:
@@ -615,7 +635,7 @@ class CategorySelectForBuyView(discord.ui.View):
     def __init__(self, owner_id:int):
         super().__init__(timeout=None); self.add_item(CategorySelectForBuy(owner_id))
 
-# ===== 버튼 패널(이모지 파싱 실패 시 이모지 없이 표시) =====
+# ===== 버튼 패널 =====
 class ButtonPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -660,7 +680,7 @@ class ButtonPanel(discord.ui.View):
         n.callback=_notice; c.callback=_charge; i.callback=_info; b.callback=_buy
         self.add_item(n); self.add_item(c); self.add_item(i); self.add_item(b)
 
-# ===== 내 정보 뷰 =====
+# ===== 내 정보 =====
 class RecentOrdersSelect(discord.ui.Select):
     def __init__(self, owner_id:int, orders:list[dict]):
         opts=[]
@@ -1001,7 +1021,7 @@ class ControlCog(commands.Cog):
     async def 컬쳐랜드_설정(self, it:discord.Interaction):
         await it.response.send_modal(CultureAccountModal(it.user.id))
 
-# ===== FastAPI 웹훅 =====
+# ===== FastAPI 웹훅(카뱅) =====
 app = FastAPI()
 
 def parse_sms_kakaobank(msg: str) -> tuple[int | None, str | None]:
