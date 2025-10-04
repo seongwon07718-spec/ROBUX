@@ -16,7 +16,9 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ========== DB(JSON) Functions ==========
+# =========================================================================
+# 💡 핵심 수정: 모든 DB 함수는 클래스 정의 전에 위치하여 NameError를 방지
+# =========================================================================
 DATA_PATH = "data.json"
 
 def _load_db() -> Dict[str, Any]:
@@ -40,17 +42,14 @@ def _ensure_user(uid: int) -> Dict[str, Any]:
             "roblox": {"cookie": None, "username": None, "password": None, "last_robux": 0, "last_username": None}
         }
         _save_db(db)
-    # Reread to get the actual, saved data
-    with open(DATA_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["users"][str(uid)]
+        # Reread after saving to ensure the latest state
+        db = _load_db() 
+    return db["users"][str(uid)]
 
 def add_tx(uid: int, amount: int, desc: str, ttype: str = "other"):
     db = _load_db()
-    # Use _ensure_user logic inline for immediate access to mutable dict 'u' within 'db'
-    u = db["users"].setdefault(str(uid), {
-        "wallet": 0, "total": 0, "count": 0, "recent": [],
-        "roblox": {"cookie": None, "username": None, "password": None, "last_robux": 0, "last_username": None}
-    })
+    # ensure user exists and get mutable reference
+    u = db["users"].setdefault(str(uid), _ensure_user(uid))
     
     u["wallet"] = max(0, int(u.get("wallet", 0) + amount))
     if amount > 0:
@@ -64,9 +63,8 @@ def add_tx(uid: int, amount: int, desc: str, ttype: str = "other"):
 
 def set_login_info(uid: int, cookie: Optional[str], username: Optional[str], password: Optional[str]):
     db = _load_db()
-    # Since _ensure_user loads and saves, let's call it to guarantee the user exists first.
-    _ensure_user(uid) 
-    u = db["users"][str(uid)] # Reload the now-guaranteed user data
+    _ensure_user(uid)
+    u = db["users"][str(uid)]
     r = u["roblox"]
     if cookie: r["cookie"] = cookie
     if username is not None: r["username"] = username
@@ -86,8 +84,9 @@ def set_login_result(uid: int, robux: int, username_hint: Optional[str]):
     u["roblox"] = r
     db["users"][str(uid)] = u
     _save_db(db)
+# =========================================================================
 
-# ========== PartialEmoji ==========
+# ========== PartialEmoji & Constants (unchanged) ==========
 def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
     return discord.PartialEmoji(name=name, id=eid, animated=animated)
 
@@ -96,7 +95,9 @@ EMOJI_CHARGE = pe(1381244136627245066, name="charge")
 EMOJI_INFO   = pe(1381244138355294300, name="info")
 EMOJI_BUY    = pe(1381244134680957059, name="category")
 
-# ========== Roblox 파싱/로그인 (omitted for brevity, assume content is unchanged) ==========
+# ========== Roblox 파싱/로그인 (unchanged) ==========
+# ... (Roblox URLs, selectors, and parsing/login functions are here) ...
+
 ROBLOX_HOME_URLS = ["https://www.roblox.com/ko/home", "https://www.roblox.com/home"]
 ROBLOX_LOGIN_URLS= ["https://www.roblox.com/ko/Login", "https://www.roblox.com/Login"]
 ROBLOX_TX_URL    = "https://www.roblox.com/ko/transactions"
@@ -320,14 +321,14 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
     except Exception:
         return False, None, "예외", None
 
-# ========== COLORS ==========
+# ========== COLORS (unchanged) ==========
 PINK   = discord.Colour(int("ff5dd6", 16))  # 패널
 GRAY   = discord.Colour.dark_grey()         # 공지/내정보
 ORANGE = discord.Colour.orange()            # 로그인 중..
 GREEN  = discord.Colour.green()             # 성공
 RED    = discord.Colour.red()               # 실패
 
-# ========== 임베드/뷰 ==========
+# ========== 임베드/뷰 (unchanged) ==========
 def embed_panel() -> Embed:
     return Embed(title="자동 로벅스 자판기", description="아래 버튼을 눌려 이용해주세요!", colour=PINK)
 
@@ -370,6 +371,7 @@ button_lock = asyncio.Lock()
 
 class PanelView(discord.ui.View):
     def __init__(self):
+        # View를 생성할 때 add_tx와 _ensure_user 함수가 전역 스코프에 이미 정의되어 있어야 함
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="공지",   emoji=EMOJI_NOTICE, custom_id="panel_notice", row=0))
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="충전",   emoji=EMOJI_CHARGE, custom_id="panel_charge", row=0))
@@ -379,6 +381,7 @@ class PanelView(discord.ui.View):
     async def interaction_check(self, interaction: Interaction) -> bool:
         async with button_lock:
             try:
+                # 상호작용 업데이트를 먼저 시도하여 Unknown interaction 에러를 방지
                 await interaction.response.defer_update()
             except Exception:
                 pass
@@ -388,35 +391,38 @@ class PanelView(discord.ui.View):
                 if cid == "panel_notice":
                     await interaction.followup.send(embed=embed_notice(), ephemeral=True)
                 elif cid == "panel_info":
+                    # NameError를 방지하기 위해 _ensure_user가 여기서 사용됨
                     stats = _ensure_user(uid)
                     await interaction.followup.send(embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
                 elif cid == "panel_charge":
+                    # NameError를 방지하기 위해 add_tx가 여기서 사용됨
                     add_tx(uid, 1000, "충전", "charge")
                     stats = _ensure_user(uid)
                     await interaction.followup.send(content="충전 완료!", embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
                 elif cid == "panel_buy":
+                    # NameError를 방지하기 위해 add_tx가 여기서 사용됨
                     add_tx(uid, -500, "구매", "buy")
                     stats = _ensure_user(uid)
                     await interaction.followup.send(content="구매 처리 완료!", embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
             except discord.NotFound:
-                # Unknown Webhook 폴백
+                # Unknown Webhook 폴백 (If interaction token is invalid/expired)
                 try: await interaction.edit_original_response(content="요청 처리 완료!")
                 except Exception: pass
             except NameError as e:
-                # Fallback in case the NameError persists unexpectedly
+                # NameError가 다시 발생할 경우를 대비한 진단용 코드
                 print(f"NameError caught in PanelView: {e}")
                 try: 
-                    await interaction.followup.send(content=f"❌ 오류 발생: 함수를 찾을 수 없습니다. 봇 코드를 확인해주세요. ({e})", ephemeral=True)
+                    await interaction.followup.send(content=f"❌ 오류 발생: 봇 코드의 함수 정의 순서를 확인하세요. ({e})", ephemeral=True)
                 except Exception:
                     pass
         return False
 
-# ========== /버튼패널 ==========
+# ========== /버튼패널 (unchanged) ==========
 @tree.command(name="버튼패널", description="자동 로벅스 자판기 패널을 공개로 표시합니다.")
 async def 버튼패널(inter: Interaction):
     await inter.response.send_message(embed=embed_panel(), view=PanelView(), ephemeral=False)
 
-# ========== /재고 ==========
+# ========== /재고 (unchanged) ==========
 class StockLoginModal(discord.ui.Modal, title="로그인"):
     cookie = discord.ui.TextInput(label="cookie(.ROBLOSECURITY)", required=False, style=discord.TextStyle.short, max_length=4000, placeholder="쿠키값(선택)")
     uid    = discord.ui.TextInput(label="아이디", required=False, style=discord.TextStyle.short, max_length=100)
@@ -475,7 +481,7 @@ class StockLoginModal(discord.ui.Modal, title="로그인"):
 async def 재고(inter: Interaction):
     await inter.response.send_modal(StockLoginModal(inter))
 
-# ========== READY ==========
+# ========== READY (unchanged) ==========
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
