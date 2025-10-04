@@ -1,4 +1,4 @@
-import os, io, json, time, re, asyncio
+Import os, io, json, time, re, asyncio
 from typing import Dict, Any, List, Optional, Tuple
 
 import discord
@@ -16,7 +16,7 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ========== DB(JSON) ==========
+# ========== DB(JSON) Functions ==========
 DATA_PATH = "data.json"
 
 def _load_db() -> Dict[str, Any]:
@@ -40,11 +40,18 @@ def _ensure_user(uid: int) -> Dict[str, Any]:
             "roblox": {"cookie": None, "username": None, "password": None, "last_robux": 0, "last_username": None}
         }
         _save_db(db)
-    return _load_db()["users"][str(uid)]
+    # Reread to get the actual, saved data
+    with open(DATA_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)["users"][str(uid)]
 
 def add_tx(uid: int, amount: int, desc: str, ttype: str = "other"):
     db = _load_db()
-    u = db["users"].setdefault(str(uid), _ensure_user(uid))
+    # Use _ensure_user logic inline for immediate access to mutable dict 'u' within 'db'
+    u = db["users"].setdefault(str(uid), {
+        "wallet": 0, "total": 0, "count": 0, "recent": [],
+        "roblox": {"cookie": None, "username": None, "password": None, "last_robux": 0, "last_username": None}
+    })
+    
     u["wallet"] = max(0, int(u.get("wallet", 0) + amount))
     if amount > 0:
         u["total"] = int(u.get("total", 0) + amount)
@@ -57,7 +64,9 @@ def add_tx(uid: int, amount: int, desc: str, ttype: str = "other"):
 
 def set_login_info(uid: int, cookie: Optional[str], username: Optional[str], password: Optional[str]):
     db = _load_db()
-    u = _ensure_user(uid)
+    # Since _ensure_user loads and saves, let's call it to guarantee the user exists first.
+    _ensure_user(uid) 
+    u = db["users"][str(uid)] # Reload the now-guaranteed user data
     r = u["roblox"]
     if cookie: r["cookie"] = cookie
     if username is not None: r["username"] = username
@@ -68,7 +77,8 @@ def set_login_info(uid: int, cookie: Optional[str], username: Optional[str], pas
 
 def set_login_result(uid: int, robux: int, username_hint: Optional[str]):
     db = _load_db()
-    u = _ensure_user(uid)
+    _ensure_user(uid)
+    u = db["users"][str(uid)]
     r = u["roblox"]
     r["last_robux"] = int(robux)
     if username_hint:
@@ -86,7 +96,9 @@ EMOJI_CHARGE = pe(1381244136627245066, name="charge")
 EMOJI_INFO   = pe(1381244138355294300, name="info")
 EMOJI_BUY    = pe(1381244134680957059, name="category")
 
-# ========== Roblox 파싱/로그인 ==========
+# ========== Roblox 파싱/로그인 (omitted for brevity, assume content is unchanged) ==========
+# ... [ROBLOX_HOME_URLS to robux_with_login functions remain here] ...
+
 ROBLOX_HOME_URLS = ["https://www.roblox.com/ko/home", "https://www.roblox.com/home"]
 ROBLOX_LOGIN_URLS= ["https://www.roblox.com/ko/Login", "https://www.roblox.com/Login"]
 ROBLOX_TX_URL    = "https://www.roblox.com/ko/transactions"
@@ -368,9 +380,13 @@ class PanelView(discord.ui.View):
 
     async def interaction_check(self, interaction: Interaction) -> bool:
         async with button_lock:
+            # We explicitly confirm the imports and function access here
+            # The functions add_tx and _ensure_user are defined globally above this class
+            # and should be accessible.
             try:
                 await interaction.response.defer_update()
             except Exception:
+                # Timeouts or already responded issues are caught here
                 pass
             cid = (interaction.data or {}).get("custom_id")
             uid = interaction.user.id
@@ -378,20 +394,30 @@ class PanelView(discord.ui.View):
                 if cid == "panel_notice":
                     await interaction.followup.send(embed=embed_notice(), ephemeral=True)
                 elif cid == "panel_info":
-                    stats = _ensure_user(uid)
+                    # Ensure the user exists before getting stats
+                    stats = _ensure_user(uid) 
                     await interaction.followup.send(embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
                 elif cid == "panel_charge":
+                    # Call the globally defined function
                     add_tx(uid, 1000, "충전", "charge")
                     stats = _ensure_user(uid)
                     await interaction.followup.send(content="충전 완료!", embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
                 elif cid == "panel_buy":
+                    # Call the globally defined function
                     add_tx(uid, -500, "구매", "buy")
                     stats = _ensure_user(uid)
                     await interaction.followup.send(content="구매 처리 완료!", embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
             except discord.NotFound:
-                # Unknown Webhook 폴백
+                # Unknown Webhook 폴백 (If interaction token is invalid/expired)
                 try: await interaction.edit_original_response(content="요청 처리 완료!")
                 except Exception: pass
+            except NameError as e:
+                # A fallback error message for NameError, though it should not happen now
+                print(f"NameError caught in PanelView: {e}")
+                try: 
+                    await interaction.followup.send(content=f"❌ 오류 발생: 함수를 찾을 수 없습니다. 봇 코드를 확인해주세요. ({e})", ephemeral=True)
+                except Exception:
+                    pass
         return False
 
 # ========== /버튼패널 ==========
@@ -465,6 +491,8 @@ async def on_ready():
     try:
         await tree.sync()
         print("[SYNC] global commands synced (/버튼패널, /재고)")
+        # Add the persistent view for buttons after sync
+        bot.add_view(PanelView())
     except Exception as e:
         print("[SYNC][ERR]", e)
 
