@@ -16,7 +16,7 @@ def _force_load_env() -> Dict[str, Any]:
     try:
         from dotenv import load_dotenv, dotenv_values, find_dotenv
     except Exception:
-        print("[ENV] python-dotenv 미설치. pip install python-dotenv 필요")
+        print("[ENV] python-dotenv 미설치. pip install python-dotenv")
         return {"loaded": False, "path": None}
     script_dir = os.path.dirname(os.path.abspath(__file__))
     env_path_script = os.path.join(script_dir, ".env")
@@ -35,15 +35,15 @@ def _force_load_env() -> Dict[str, Any]:
         if found:
             load_dotenv(found, override=True)
             used = found
-    token = os.getenv("DISCORD_TOKEN")
-    gid = os.getenv("GUILD_ID")
-    print(f"[ENV] path={used} token_len={0 if token is None else len(token)} guild_id={gid}")
-    return {"loaded": bool(token), "path": used}
+    tok = os.getenv("DISCORD_TOKEN"); gid = os.getenv("GUILD_ID")
+    print(f"[ENV] path={used} token_len={0 if tok is None else len(tok)} guild_id={gid}")
+    return {"loaded": bool(tok), "path": used}
 
 _env = _force_load_env()
 
-# ===== 기본 설정 =====
+# ===== 기본 설정/데이터 =====
 DATA_PATH = "data.json"
+
 def _atomic_write(path: str, data: Dict[str, Any]):
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -52,10 +52,10 @@ def _atomic_write(path: str, data: Dict[str, Any]):
 
 def _default_data():
     return {
-        "users": {},  # userId: {wallet:int, total:int, count:int, recent:[{desc,amount,ts}] , roblox:{cookie,username,password}}
+        "users": {},  # userId: {wallet,total,count,recent[], roblox{cookie,username,password}}
         "stats": {"total_sold": 0},
         "cache": {"balances": {}},
-        "meta": {"version": 2}
+        "meta": {"version": 3}
     }
 
 def load_data() -> Dict[str, Any]:
@@ -82,7 +82,8 @@ def update_user_stats(uid: int, amount: int, desc: str):
     d = load_data()
     u = d["users"].setdefault(str(uid), {"wallet": 0, "total": 0, "count": 0, "recent": [], "roblox": {}})
     u["wallet"] = max(0, int(u.get("wallet", 0) + amount))
-    u["total"] = max(0, int(u.get("total", 0) + max(amount, 0)))
+    if amount > 0:
+        u["total"] = int(u.get("total", 0) + amount)
     u["count"] = int(u.get("count", 0) + 1)
     recent = u.get("recent", [])
     recent.insert(0, {"desc": desc, "amount": int(amount), "ts": int(asyncio.get_event_loop().time())})
@@ -130,7 +131,7 @@ except Exception:
     GUILD_ID = 0
     print("[ENV][WARN] GUILD_ID 파싱 실패 → 전역 등록")
 
-# ===== 이미지 설정 =====
+# ===== 이미지(임베드 IMAGE) =====
 IMAGE_MODE = "url"  # "attach_local"로 바꾸면 stock.png 첨부 고정
 STOCK_IMAGE_URL = "https://cdn.discordapp.com/attachments/1420389790649421877/1423898721036271718/IMG_2038.png"
 LOCAL_IMAGE_PATH = "stock.png"
@@ -139,15 +140,15 @@ LOCAL_IMAGE_PATH = "stock.png"
 ROBLOX_HOME_URLS = ["https://www.roblox.com/ko/home", "https://www.roblox.com/home"]
 ROBLOX_LOGIN_URLS = ["https://www.roblox.com/ko/Login", "https://www.roblox.com/Login"]
 
-# 정확도 우선(느리더라도 확실히)
-BALANCE_CACHE_TTL_SEC = 15  # 캐시는 짧게
+# 정확도 우선
+BALANCE_CACHE_TTL_SEC = 15
 PAGE_TIMEOUT = 25000
 UPDATE_INTERVAL_SEC = 60
 LOGIN_RETRY = 3
 
 NUM_RE = re.compile(r"(\d{1,3}(?:[,\.\s]\d{3})*|\d+)")
 
-# ===== Playwright 런처 =====
+# ===== Playwright =====
 async def launch_browser(p):
     args = ["--disable-dev-shm-usage","--no-sandbox","--disable-gpu","--disable-setuid-sandbox","--no-zygote"]
     try: return await p.chromium.launch(headless=True, args=args)
@@ -164,7 +165,7 @@ async def new_context(browser: Browser) -> Optional[BrowserContext]:
     except Exception:
         return None
 
-# ===== Roblox 파싱(정확 모드) =====
+# ===== Roblox 파싱(홈 우상단 뱃지, 느려도 정확) =====
 ROBLOX_BADGE_SELECTORS: List[str] = [
     "[data-testid*='nav-robux']",
     "a[aria-label*='Robux']",
@@ -183,17 +184,15 @@ async def _goto_any(page: Page, urls: List[str]) -> bool:
     return False
 
 async def _wait_nav_ready(page: Page):
-    # 상단 네비에 Robux 뱃지가 등장할 시간을 넉넉히 준다
     for sel in ROBLOX_BADGE_SELECTORS:
         try:
             await page.wait_for_selector(sel, timeout=PAGE_TIMEOUT)
             return
         except Exception:
             continue
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(1.5)
 
 async def _extract_robux_badge(page: Page) -> Optional[int]:
-    # 1) 명시 셀렉터
     for sel in ROBLOX_BADGE_SELECTORS:
         try:
             el = await page.query_selector(sel)
@@ -206,7 +205,6 @@ async def _extract_robux_badge(page: Page) -> Optional[int]:
                 return v
         except Exception:
             continue
-    # 2) 주변 텍스트 폴백(엄격)
     try:
         html = await page.content()
         around = []
@@ -310,12 +308,15 @@ async def fetch_image_bytes(url: str, timeout: int = 10) -> Optional[bytes]:
         return None
 
 # ===== 임베드 =====
-def make_stock_embed(guild: Optional[discord.Guild], robux_balance: int, total_sold: int, image_as_attachment: bool) -> Embed:
-    colour = discord.Colour(int("ff5dd6", 16))
-    emb = Embed(title="", colour=colour)
+def _author(emb: Embed, guild: Optional[discord.Guild]):
     if guild:
         icon = guild.icon.url if guild.icon else None
         emb.set_author(name=guild.name, icon_url=icon)
+
+def make_stock_embed(guild: Optional[discord.Guild], robux_balance: int, total_sold: int, image_as_attachment: bool) -> Embed:
+    colour = discord.Colour(int("ff5dd6", 16))
+    emb = Embed(title="", colour=colour)
+    _author(emb, guild)
     stock = f"{robux_balance:,}"; total = f"{total_sold:,}"
     emb.description = "\n".join([
         "### <a:upuoipipi:1423892277373304862>실시간 로벅스 재고",
@@ -329,28 +330,18 @@ def make_stock_embed(guild: Optional[discord.Guild], robux_balance: int, total_s
     return emb
 
 def make_panel_embed(guild: Optional[discord.Guild]) -> Embed:
-    colour = discord.Colour(int("ff5dd6", 16))
-    emb = Embed(title="", colour=colour)
-    if guild:
-        icon = guild.icon.url if guild.icon else None
-        emb.set_author(name=guild.name, icon_url=icon)
+    emb = Embed(title="", colour=discord.Colour(int("ff5dd6", 16)))
+    _author(emb, guild)
     emb.description = "## 24시간 자동 자판기\n**아래 원하시는 버튼을 눌려 이용해주세요**"
     return emb
 
 def make_notice_embed(guild: Optional[discord.Guild]) -> Embed:
-    # 회색(다크 그레이)
-    colour = discord.Colour.dark_grey()
-    emb = Embed(title="", colour=colour, description="<#1419230737244229653> 필독 부탁드립니다")
-    if guild:
-        icon = guild.icon.url if guild.icon else None
-        emb.set_author(name=guild.name, icon_url=icon)
+    emb = Embed(title="", colour=discord.Colour.dark_grey(), description="<#1419230737244229653> 필독 부탁드립니다")
+    _author(emb, guild)
     return emb
 
 def make_myinfo_embed(user: discord.User | discord.Member, stats: Dict[str, Any]) -> Embed:
-    colour = discord.Colour(int("ff5dd6", 16))
-    title = f"{user.display_name}님 정보"
-    emb = Embed(title=title, colour=colour)
-    # 본문(제목 제외)
+    emb = Embed(title=f"{user.display_name}님 정보", colour=discord.Colour(int("ff5dd6", 16)))
     emb.description = "\n".join([
         f"### 보유 금액 : {int(stats.get('wallet',0)):,}",
         f"### 누적 금액 : {int(stats.get('total',0)):,}",
@@ -358,12 +349,11 @@ def make_myinfo_embed(user: discord.User | discord.Member, stats: Dict[str, Any]
         "",
         "최근 거래내역 5개"
     ])
-    # 우측 프로필(썸네일)
     if user.display_avatar:
         emb.set_thumbnail(url=user.display_avatar.url)
     return emb
 
-# ===== 디스코드 봇/동기화 =====
+# ===== 디스코드 봇 =====
 INTENTS = discord.Intents.default()
 INTENTS.message_content = False
 BOT = commands.Bot(command_prefix="!", intents=INTENTS)
@@ -375,141 +365,135 @@ def pe(id_str: str, name: str = None, animated: bool = False) -> discord.Partial
 EMOJI_ACC     = pe("1423544323735027763", name="Acc",     animated=False)
 EMOJI_CARD    = pe("1423544325597560842", name="Card",    animated=True)
 EMOJI_DISCORD = pe("1423517142556610560", name="discord", animated=False)
-# 구매 버튼 이모지 교체
 EMOJI_GREEN   = pe("1423939286817837090", name="Green_dot", animated=True)
 
 class TransactionsSelect(discord.ui.Select):
     def __init__(self, entries: List[Dict[str, Any]]):
         options = []
-        for i, e in enumerate(entries):
-            label = f"{e.get('desc','거래')} / {int(e.get('amount',0)):,}"
-            options.append(discord.SelectOption(label=label[:100], value=str(i)))
-        if not options:
+        if entries:
+            for i, e in enumerate(entries):
+                label = f"{e.get('desc','거래')} / {int(e.get('amount',0)):,}"
+                options.append(discord.SelectOption(label=label[:100], value=str(i)))
+        else:
             options = [discord.SelectOption(label="거래 내역 없음", value="none", default=True)]
         super().__init__(placeholder="거래내역 보기", min_values=1, max_values=1, options=options)
-
     async def callback(self, interaction: Interaction):
-        # 선택만 받고 표시 업데이트 없이 조용히 처리
         try:
-            await interaction.response.defer()
+            await interaction.response.defer_update()
         except Exception:
             pass
 
 class PanelView(discord.ui.View):
-    def __init__(self, user: Optional[discord.User] = None):
+    def __init__(self):
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="공지사항", emoji=EMOJI_ACC,     custom_id="p_notice", row=0))
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="충전",   emoji=EMOJI_CARD,    custom_id="p_charge", row=0))
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="내 정보", emoji=EMOJI_DISCORD, custom_id="p_me",     row=1))
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="구매",   emoji=EMOJI_GREEN,   custom_id="p_buy",    row=1))
-
-    @discord.ui.button(label="hidden", style=discord.ButtonStyle.secondary)
-    async def dummy(self, interaction: Interaction, button: discord.ui.Button):
-        pass
-
     async def interaction_check(self, interaction: Interaction) -> bool:
-        # 공용 패널이라 누가 눌러도 됨. 응답 메시지는 띄우지 않음.
+        # 버튼 누르면 화면 변경 없이 인터랙션만 소거
         try:
-            await interaction.response.defer()
+            await interaction.response.defer_update()
         except Exception:
             pass
-        # 버튼 별 동작
         cid = interaction.data.get("custom_id") if interaction.data else None
-        if cid == "p_notice":
-            # 공지: 회색 임베드, 나만 보이게
-            emb = make_notice_embed(interaction.guild)
-            await interaction.followup.send(embed=emb, ephemeral=True)
-        elif cid == "p_me":
-            stats = get_user_stats(interaction.user.id)
-            emb = make_myinfo_embed(interaction.user, stats)
-            view = discord.ui.View(timeout=None)
-            view.add_item(TransactionsSelect(stats.get("recent", [])))
-            await interaction.followup.send(embed=emb, view=view, ephemeral=True)
-        elif cid == "p_charge":
-            # 샘플: 충전 버튼을 누르면 1,000원 충전 예시(실서비스에 맞춰 변경)
-            update_user_stats(interaction.user.id, amount=1000, desc="충전")
-            stats = get_user_stats(interaction.user.id)
-            emb = make_myinfo_embed(interaction.user, stats)
-            view = discord.ui.View(timeout=None)
-            view.add_item(TransactionsSelect(stats.get("recent", [])))
-            await interaction.followup.send(content="충전 완료!", embed=emb, view=view, ephemeral=True)
-        elif cid == "p_buy":
-            # 샘플: 구매시 -500 차감 예시
-            update_user_stats(interaction.user.id, amount=-500, desc="구매")
-            stats = get_user_stats(interaction.user.id)
-            emb = make_myinfo_embed(interaction.user, stats)
-            view = discord.ui.View(timeout=None)
-            view.add_item(TransactionsSelect(stats.get("recent", [])))
-            await interaction.followup.send(content="구매 처리 완료!", embed=emb, view=view, ephemeral=True)
+        try:
+            if cid == "p_notice":
+                await interaction.followup.send(embed=make_notice_embed(interaction.guild), ephemeral=True)
+            elif cid == "p_me":
+                stats = get_user_stats(interaction.user.id)
+                view = discord.ui.View(timeout=None)
+                view.add_item(TransactionsSelect(stats.get("recent", [])))
+                await interaction.followup.send(embed=make_myinfo_embed(interaction.user, stats), view=view, ephemeral=True)
+            elif cid == "p_charge":
+                update_user_stats(interaction.user.id, amount=1000, desc="충전")
+                stats = get_user_stats(interaction.user.id)
+                view = discord.ui.View(timeout=None)
+                view.add_item(TransactionsSelect(stats.get("recent", [])))
+                await interaction.followup.send(content="충전 완료!", embed=make_myinfo_embed(interaction.user, stats), view=view, ephemeral=True)
+            elif cid == "p_buy":
+                update_user_stats(interaction.user.id, amount=-500, desc="구매")
+                stats = get_user_stats(interaction.user.id)
+                view = discord.ui.View(timeout=None)
+                view.add_item(TransactionsSelect(stats.get("recent", [])))
+                await interaction.followup.send(content="구매 처리 완료!", embed=make_myinfo_embed(interaction.user, stats), view=view, ephemeral=True)
+        except Exception as e:
+            print("[BTN] error:", e)
         return False
 
 # ===== 슬래시 명령어 =====
-@TREE.command(name="실시간_재고_설정", description="쿠키/로그인 저장 후 즉시 검증하고 임베드에 반영(나만 보이게).")
+@TREE.command(name="실시간_재고_설정", description="쿠키/로그인 저장 후 바로 결과를 '나만 보이게' 보여줍니다.")
 @app_commands.describe(mode="cookie 또는 login", cookie=".ROBLOSECURITY 값", id="Roblox 아이디", pw="Roblox 비밀번호")
 async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None, id: Optional[str] = None, pw: Optional[str] = None):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    # 즉시 응답(에페메럴), 이후 작업은 백그라운드 태스크로
+    await inter.response.send_message("연동을 시작할게. 잠시만!", ephemeral=True)
     mode = (mode or "").lower().strip()
-    if mode not in ("cookie","login"):
-        await inter.followup.send("mode는 cookie 또는 login이야.", ephemeral=True); return
-    if mode == "cookie":
-        if not cookie:
-            await inter.followup.send("cookie(.ROBLOSECURITY) 값이 필요해.", ephemeral=True); return
-        set_user_cookie(inter.user.id, cookie)
-        bal = await fetch_balance(inter.user.id)
-        emb = Embed(title="연동 완료", description=f"현재 잔액: {bal:,} 로벅스", colour=discord.Colour.green())
-        await inter.followup.send(embed=emb, ephemeral=True)
-        return
-    if mode == "login":
-        if not id or not pw:
-            await inter.followup.send("login 모드는 id, pw 둘 다 필요해.", ephemeral=True); return
-        set_user_login(inter.user.id, id, pw)
-        tried_ok, bal_value = False, 0
-        try:
-            async with async_playwright() as p:
-                browser = await launch_browser(p)
-                if browser:
-                    ctx = await new_context(browser)
-                    if ctx:
-                        for _ in range(LOGIN_RETRY):
-                            ok, bal, new_cookie, uname_hint = await _login_with_idpw_home(ctx, id, pw)
-                            if ok and isinstance(bal, int):
-                                tried_ok = True; bal_value = bal
-                                if new_cookie: set_user_cookie(inter.user.id, new_cookie, uname_hint)
-                                break
-                    await browser.close()
-        except Exception:
-            pass
-        if tried_ok:
-            emb = Embed(title="로그인 완료", description=f"현재 잔액: {bal_value:,} 로벅스", colour=discord.Colour.green())
-            await inter.followup.send(embed=emb, ephemeral=True)
-        else:
-            emb = Embed(title="로그인 실패", description="2FA/장치인증일 수 있어. 쿠키 방식 추천.", colour=discord.Colour.red())
-            await inter.followup.send(embed=emb, ephemeral=True)
+    async def task():
+        if mode not in ("cookie","login"):
+            await inter.followup.send("mode는 cookie 또는 login이야.", ephemeral=True); return
+        if mode == "cookie":
+            if not cookie:
+                await inter.followup.send("cookie(.ROBLOSECURITY) 값이 필요해.", ephemeral=True); return
+            set_user_cookie(inter.user.id, cookie)
+            bal = await fetch_balance(inter.user.id)
+            emb = Embed(title="연동 완료", description=f"현재 잔액: {bal:,} 로벅스", colour=discord.Colour.green())
+            await inter.followup.send(embed=emb, ephemeral=True); return
+        if mode == "login":
+            if not id or not pw:
+                await inter.followup.send("login 모드는 id, pw 둘 다 필요해.", ephemeral=True); return
+            set_user_login(inter.user.id, id, pw)
+            tried_ok, bal_value = False, 0
+            try:
+                async with async_playwright() as p:
+                    browser = await launch_browser(p)
+                    if browser:
+                        ctx = await new_context(browser)
+                        if ctx:
+                            for _ in range(LOGIN_RETRY):
+                                ok, bal, new_cookie, uname_hint = await _login_with_idpw_home(ctx, id, pw)
+                                if ok and isinstance(bal, int):
+                                    tried_ok = True; bal_value = bal
+                                    if new_cookie: set_user_cookie(inter.user.id, new_cookie, uname_hint)
+                                    break
+                        await browser.close()
+            except Exception as e:
+                print("[SETUP] err:", e)
+            if tried_ok:
+                emb = Embed(title="로그인 완료", description=f"현재 잔액: {bal_value:,} 로벅스", colour=discord.Colour.green())
+                await inter.followup.send(embed=emb, ephemeral=True)
+            else:
+                emb = Embed(title="로그인 실패", description="2FA/장치인증 가능성. 쿠키 방식 추천.", colour=discord.Colour.red())
+                await inter.followup.send(embed=emb, ephemeral=True)
+    asyncio.create_task(task())
 
 @TREE.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
 async def cmd_show(inter: Interaction):
-    await inter.response.defer(thinking=True, ephemeral=False)
-    bal = await fetch_balance(inter.user.id)
-    total = get_total_sold()
-    image_as_attachment = (IMAGE_MODE == "attach_local")
-    file: Optional[File] = None
-    if image_as_attachment:
-        if os.path.exists(LOCAL_IMAGE_PATH):
-            file = File(fp=LOCAL_IMAGE_PATH, filename="stock.png")
-        else:
-            img = await fetch_image_bytes(STOCK_IMAGE_URL)
-            if img: file = File(io.BytesIO(img), filename="stock.png")
-    emb = make_stock_embed(inter.guild, bal, total, image_as_attachment)
-    await inter.followup.send(embed=emb, file=file if file else discord.utils.MISSING, ephemeral=False)
+    # 즉시 응답(공개 안내), 실제 임베드는 followup
+    await inter.response.send_message("재고 임베드를 올리는 중...", ephemeral=False)
+    async def task():
+        bal = await fetch_balance(inter.user.id)
+        total = get_total_sold()
+        image_as_attachment = (IMAGE_MODE == "attach_local")
+        file: Optional[File] = None
+        if image_as_attachment:
+            if os.path.exists(LOCAL_IMAGE_PATH):
+                file = File(fp=LOCAL_IMAGE_PATH, filename="stock.png")
+            else:
+                img = await fetch_image_bytes(STOCK_IMAGE_URL)
+                if img: file = File(io.BytesIO(img), filename="stock.png")
+        emb = make_stock_embed(inter.guild, bal, total, image_as_attachment)
+        await inter.followup.send(embed=emb, file=file if file else discord.utils.MISSING, ephemeral=False)
+    asyncio.create_task(task())
 
 @TREE.command(name="버튼패널", description="24시간 자동 자판기 패널을 공개로 표시합니다.")
 async def cmd_panel(inter: Interaction):
-    await inter.response.defer(thinking=True, ephemeral=False)
+    # 즉시 응답 → 이어서 패널 전송
+    await inter.response.send_message("패널을 띄워줄게!", ephemeral=False)
     emb = make_panel_embed(inter.guild)
-    view = PanelView(user=inter.user)
+    view = PanelView()
     await inter.followup.send(embed=emb, view=view, ephemeral=False)
 
-# ===== 동기화/부팅 =====
+# ===== 동기화 =====
 async def sync_tree(force_guild: Optional[int] = None):
     try:
         if force_guild:
@@ -539,7 +523,7 @@ async def on_ready():
 # ===== 메인 =====
 def main():
     if not TOKEN or len(TOKEN) < 10:
-        raise RuntimeError("DISCORD_TOKEN 비어있거나 형식 이상. .env 위치/내용 확인.")
+        raise RuntimeError("DISCORD_TOKEN 비어있거나 형식 이상. .env 확인.")
     BOT.run(TOKEN)
 
 if __name__ == "__main__":
