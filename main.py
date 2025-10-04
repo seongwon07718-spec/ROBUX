@@ -6,7 +6,7 @@ from discord import app_commands, Interaction, Embed, File
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Playwright 체크
+# Playwright는 /재고추가에서만 사용(설치 안 되어 있어도 나머지 명령은 동작)
 PLAYWRIGHT_OK = True
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PwTimeout
@@ -23,7 +23,14 @@ tree = bot.tree
 
 # ================== DB ==================
 DATA_PATH = "data.json"
-INIT_DATA = {"users": {}}
+INIT_DATA = {
+    "guilds": {
+        # "{guild_id}": {
+        #   "stock": { "robux": 0, "totalSold": 0, "pricePer": 0, "lastMsg": {"channelId":0,"messageId":0} },
+        #   "sessions": { "{user_id}": {"cookie": null, "username": null, "password": null, "lastRobux":0} }
+        # }
+    }
+}
 
 def db_load() -> Dict[str, Any]:
     if not os.path.exists(DATA_PATH):
@@ -38,68 +45,94 @@ def db_save(db: Dict[str, Any]):
         json.dump(db, f, ensure_ascii=False, indent=2)
     os.replace(tmp, DATA_PATH)
 
-def ensure_user(uid: int) -> Dict[str, Any]:
+def gslot(gid: int) -> Dict[str, Any]:
     db = db_load()
-    s = str(uid)
-    if s not in db["users"]:
-        db["users"][s] = {
-            "wallet": 0, "total": 0, "count": 0, "recent": [],
-            "roblox": {"cookie": None, "username": None, "password": None, "last_robux": 0, "last_username": None}
+    gs = db["guilds"].get(str(gid))
+    if not gs:
+        gs = {
+            "stock": {"robux": 0, "totalSold": 0, "pricePer": 0, "lastMsg": {"channelId": 0, "messageId": 0}},
+            "sessions": {}
         }
-        db_save(db); db = db_load()
-    return db["users"][s]
+        db["guilds"][str(gid)] = gs
+        db_save(db)
+    return gs
 
-def set_cookie(uid: int, cookie: Optional[str]):
-    if cookie is None: return
+def update_gslot(gid: int, gs: Dict[str, Any]):
     db = db_load()
-    u = ensure_user(uid)
-    u["roblox"]["cookie"] = cookie
-    db["users"][str(uid)] = u
+    db["guilds"][str(gid)] = gs
     db_save(db)
 
-def set_login_info(uid: int, username: Optional[str], password: Optional[str]):
-    db = db_load()
-    u = ensure_user(uid)
-    if username is not None: u["roblox"]["username"] = username
-    if password is not None: u["roblox"]["password"] = password
-    db["users"][str(uid)] = u
-    db_save(db)
+def set_session(gid: int, uid: int, cookie: Optional[str], username: Optional[str], password: Optional[str]):
+    gs = gslot(gid)
+    sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0})
+    if cookie is not None: sess["cookie"] = cookie
+    if username is not None: sess["username"] = username
+    if password is not None: sess["password"] = password
+    gs["sessions"][str(uid)] = sess
+    update_gslot(gid, gs)
 
-def set_login_result(uid: int, robux: int, username_hint: Optional[str] = None):
-    db = db_load()
-    u = ensure_user(uid)
-    u["roblox"]["last_robux"] = int(robux)
-    if username_hint: u["roblox"]["last_username"] = username_hint
-    db["users"][str(uid)] = u
-    db_save(db)
+def set_last_robux(gid: int, uid: int, amount: int):
+    gs = gslot(gid)
+    sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0})
+    sess["lastRobux"] = int(amount)
+    gs["sessions"][str(uid)] = sess
+    update_gslot(gid, gs)
+
+def set_stock_values(gid: int, robux: Optional[int] = None, totalSold: Optional[int] = None, pricePer: Optional[int] = None):
+    gs = gslot(gid)
+    if robux is not None: gs["stock"]["robux"] = int(robux)
+    if totalSold is not None: gs["stock"]["totalSold"] = int(totalSold)
+    if pricePer is not None: gs["stock"]["pricePer"] = int(pricePer)
+    update_gslot(gid, gs)
+
+def set_last_message(gid: int, channelId: int, messageId: int):
+    gs = gslot(gid)
+    gs["stock"]["lastMsg"] = {"channelId": int(channelId), "messageId": int(messageId)}
+    update_gslot(gid, gs)
 
 # ================== 색/이모지/임베드 ==================
-def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
-    return discord.PartialEmoji(name=name, id=eid, animated=animated)
-
-EMOJI_NOTICE = pe(1424003478275231916, name="emoji_5")
-EMOJI_CHARGE = pe(1381244136627245066, name="charge")
-EMOJI_INFO   = pe(1381244138355294300, name="info")
-EMOJI_BUY    = pe(1381244134680957059, name="category")
-
 def color_hex(hex_str: str) -> discord.Colour:
     h = hex_str.lower().replace("#", "")
     return discord.Colour(int(h, 16))
 
 COLOR_BLACK = color_hex("000000")
-COLOR_PANEL = color_hex("ff5dd6")
+COLOR_PINK = color_hex("ff5dd6")
 
-def embed_panel() -> Embed:
-    return Embed(title="자동 로벅스 자판기", description="아래 버튼을 눌러 이용해줘!", colour=COLOR_PANEL)
+# 사용자 제공 애니메 이모지 ID
+EMO_REALTIME = "<a:upuoipipi:1423892277373304862>"
+EMO_THUMBS  = "<a:thumbsuppp:1423892279612936294>"
+EMO_SAK     = "<a:sakfnmasfagfamg:1423892278677602435>"
 
-def embed_notice() -> Embed:
-    return Embed(title="공지", description="<#1419230737244229653> 필독 부탁!", colour=COLOR_BLACK)
+FOOTER_IMAGE = "https://cdn.discordapp.com/attachments/1420389790649421877/1424077172435325091/IMG_2038.png?ex=68e2a2b7&is=68e15137&hm=712b0f434f2267c261dc260fd22a7a163d158b7c2f43fa618642abd80b17058c&"
 
-def embed_myinfo(user: discord.User | discord.Member, stats: Dict[str, Any]) -> Embed:
+def build_stock_embed(gid: int) -> Embed:
+    gs = gslot(gid)
+    robux = int(gs["stock"].get("robux", 0))
+    total = int(gs["stock"].get("totalSold", 0))
+    price = int(gs["stock"].get("pricePer", 0))
+
+    # 요청 포맷: 제목 없음, 본문 라인별 이모지와 라벨
+    lines = [
+        f"{EMO_REALTIME}실시간 로벅스",
+        f"{EMO_THUMBS}로벅스 재고",
+        f"{EMO_SAK}{robux if robux >= 0 else 0}로벅스",
+        f"{EMO_THUMBS}로벅스 가격",
+        f"{EMO_SAK}1당 {price if price >= 0 else 0}로벅스",
+        f"{EMO_THUMBS}총 판매량",
+        f"{EMO_SAK}{total if total >= 0 else 0}로벅스",
+    ]
+    e = Embed(title="제목 없음", description="\n".join(lines), colour=COLOR_PINK)
+    # 하단 이미지(요청)
+    e.set_image(url=FOOTER_IMAGE)
+    return e
+
+def build_info_embed(user: discord.User | discord.Member, gid: int) -> Embed:
+    gs = gslot(gid)
+    # 유저 개인 지갑/누적/횟수는 간단히 0으로 두고 구조만 유지(원하면 확장)
+    wallet = 0
+    total  = 0
+    count  = 0
     e = Embed(title=f"{getattr(user,'display_name',user.name)}님 정보", colour=COLOR_BLACK)
-    wallet = int(stats.get("wallet", 0))
-    total = int(stats.get("total", 0))
-    count = int(stats.get("count", 0))
     e.description = "\n".join([
         f"보유 금액 : `{wallet}`원",
         f"누적 금액 : `{total}`원",
@@ -109,10 +142,7 @@ def embed_myinfo(user: discord.User | discord.Member, stats: Dict[str, Any]) -> 
     except Exception: pass
     return e
 
-def embed_state(title: str, desc: str) -> Embed:
-    return Embed(title=title, description=desc, colour=COLOR_BLACK)
-
-# ================== Roblox 로그인/파싱 ==================
+# ================== Roblox 세션/파싱 ==================
 # URL 후보
 ROBLOX_LOGIN_URLS = [
     "https://www.roblox.com/Login",
@@ -125,26 +155,19 @@ ROBLOX_HOME_URLS = [
 ]
 ROBLOX_TX_URL = "https://www.roblox.com/ko/transactions"
 
-# 쿠키 정규화: _|WARNING:...|_ 형식 → 실제 값 추출
+# 쿠키 정규화(.ROBLOSECURITY=..., _|WARNING:…|_ 둘 다 허용)
 def normalize_cookie(raw: str) -> Optional[str]:
     if not raw: return None
     s = raw.strip()
-    # 흔한 포맷 1) .ROBLOSECURITY=xxxxx; Path=/; ...
     m1 = re.search(r"\.ROBLOSECURITY\s*=\s*([^;]+)", s, re.IGNORECASE)
     if m1: return m1.group(1).strip()
-    # 흔한 포맷 2) _|WARNING:xxxx|_xxxxx (앞 경고 토큰 포함)
     m2 = re.search(r"(\_\|WARNING:.+?\|\_.+)", s, re.IGNORECASE)
     if m2: return m2.group(1).strip()
-    # 흔한 포맷 3) 그냥 _|WARNING:…|_ 로 시작하는 순수 값
-    if s.startswith("_|WARNING:") and s.endswith("|_") or s.startswith("_|WARNING:"):
-        return s
-    # 혹시 값만 딱 들어온 경우도 허용(길이가 충분히 긴 토큰)
-    if len(s) >= 100:
-        return s
+    if s.startswith("_|WARNING:"): return s
+    if len(s) >= 100: return s
     return None
 
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
-
 BALANCE_LABELS = ["내 잔액", "My Balance", "Balance"]
 BADGE_SELECTORS = [
     "[data-testid*='nav-robux']",
@@ -160,7 +183,6 @@ SECURITY_MAP = {
     "captcha": ["captcha", "hcaptcha", "recaptcha", "i’m not a robot", "i am not a robot"],
     "rate_block": ["too many requests", "access denied", "forbidden", "403"],
 }
-
 CREDENTIAL_KEYS = ["incorrect", "wrong password", "invalid", "비밀번호", "아이디", "로그인 실패", "일치하지 않", "다시 시도", "재시도", "blocked", "suspended"]
 
 def _to_int(txt: str) -> Optional[int]:
@@ -185,10 +207,8 @@ async def _ctx(browser: Browser):
 
 async def _goto(page: Page, url: str) -> bool:
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        return True
-    except Exception:
-        return False
+        await page.goto(url, wait_until="domcontentloaded", timeout=25000); return True
+    except Exception: return False
 
 async def _shot(page: Page) -> Optional[bytes]:
     try: return await page.screenshot(type="png", full_page=False)
@@ -222,8 +242,7 @@ async def _parse_tx(page: Page) -> Optional[int]:
             txt = await (await container.get_property("innerText")).json_value()
             v = _to_int(txt or "")
             if isinstance(v, int) and 0 <= v <= 100_000_000: return v
-        except Exception:
-            continue
+        except Exception: continue
     try:
         html = await page.content()
         nums = []
@@ -246,35 +265,22 @@ async def _parse_home(page: Page) -> Optional[int]:
             txt = (await el.inner_text() or "").strip()
             v = _to_int(txt)
             if isinstance(v, int) and 0 <= v <= 100_000_000: return v
-        except Exception:
-            continue
+        except Exception: continue
     return None
 
-# 쿠키 로그인
 async def robux_with_cookie(raw_cookie: str) -> Tuple[bool, Optional[int], str, Optional[bytes]]:
-    if not PLAYWRIGHT_OK:
-        return False, None, "Playwright 미설치", None
+    if not PLAYWRIGHT_OK: return False, None, "Playwright 미설치", None
     cookie = normalize_cookie(raw_cookie)
-    if not cookie:
-        return False, None, "쿠키 형식 오류(.ROBLOSECURITY 또는 _|WARNING:…|_ 필요)", None
+    if not cookie: return False, None, "쿠키 형식 오류(.ROBLOSECURITY 또는 _|WARNING:…|_ 필요)", None
     try:
         async with async_playwright() as p:
             browser = await _launch(p)
             if not browser: return False, None, "브라우저 오류", None
             ctx = await _ctx(browser)
             if not ctx: await browser.close(); return False, None, "컨텍스트 오류", None
-            await ctx.add_cookies([{
-                "name": ".ROBLOSECURITY",
-                "value": cookie,
-                "domain": ".roblox.com",
-                "path": "/",
-                "httpOnly": True,
-                "secure": True,
-                "sameSite": "Lax"
-            }])
+            await ctx.add_cookies([{"name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"}])
             page = await ctx.new_page()
 
-            # 바로 transactions 시도 → home 보조
             v_tx, v_home, shot = None, None, None
             if await _goto(page, ROBLOX_TX_URL):
                 html = await page.content()
@@ -303,10 +309,8 @@ async def robux_with_cookie(raw_cookie: str) -> Tuple[bool, Optional[int], str, 
     except Exception:
         return False, None, "예외", None
 
-# ID/PW 로그인
 async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional[int], str, Optional[bytes]]:
-    if not PLAYWRIGHT_OK:
-        return False, None, "Playwright 미설치", None
+    if not PLAYWRIGHT_OK: return False, None, "Playwright 미설치", None
     try:
         async with async_playwright() as p:
             browser = await _launch(p)
@@ -322,7 +326,6 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
             if not moved:
                 await browser.close(); return False, None, "로그인 페이지 이동 실패", None
 
-            # 입력 강화: 여러 셀렉터/순서로 시도
             id_ok = False
             for sel in ["input#login-username", "input[name='username']", "input[type='text']"]:
                 try: await page.fill(sel, username); id_ok = True; break
@@ -380,53 +383,43 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-
-    @discord.ui.button(label="공지", emoji=EMOJI_NOTICE, style=discord.ButtonStyle.secondary, custom_id="panel_notice", row=0)
+    @discord.ui.button(label="공지", style=discord.ButtonStyle.secondary, custom_id="panel_notice", row=0)
     async def notice_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=embed_notice(), ephemeral=True)
-
-    @discord.ui.button(label="충전", emoji=EMOJI_CHARGE, style=discord.ButtonStyle.secondary, custom_id="panel_charge", row=0)
-    async def charge_button(self, interaction: Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=embed_state("충전", "충전 기능은 준비 중이야."), ephemeral=True)
-
-    @discord.ui.button(label="정보", emoji=EMOJI_INFO, style=discord.ButtonStyle.secondary, custom_id="panel_info", row=1)
+    @discord.ui.button(label="정보", style=discord.ButtonStyle.secondary, custom_id="panel_info", row=0)
     async def info_button(self, interaction: Interaction, button: discord.ui.Button):
-        stats = ensure_user(interaction.user.id)
-        await interaction.response.send_message(embed=embed_myinfo(interaction.user, stats), ephemeral=True)
-
-    @discord.ui.button(label="구매", emoji=EMOJI_BUY, style=discord.ButtonStyle.secondary, custom_id="panel_buy", row=1)
+        e = build_info_embed(interaction.user, interaction.guild.id)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+    @discord.ui.button(label="충전", style=discord.ButtonStyle.secondary, custom_id="panel_charge", row=1)
+    async def charge_button(self, interaction: Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(embed=Embed(title="충전", description="준비 중이야.", colour=COLOR_BLACK), ephemeral=True)
+    @discord.ui.button(label="구매", style=discord.ButtonStyle.secondary, custom_id="panel_buy", row=1)
     async def buy_button(self, interaction: Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=embed_state("구매", "구매 기능은 준비 중이야."), ephemeral=True)
+        await interaction.response.send_message(embed=Embed(title="구매", description="준비 중이야.", colour=COLOR_BLACK), ephemeral=True)
 
-# ================== /재고추가 모달 ==================
-class StockModal(discord.ui.Modal, title="로그인/세션 추가"):
-    cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=False, max_length=4000, placeholder="쿠키 값(선택)")
-    id_input = discord.ui.TextInput(label="아이디", required=False, max_length=100, placeholder="아이디(쿠키 없을 때)")
-    pw_input = discord.ui.TextInput(label="비밀번호", required=False, max_length=100, placeholder="비밀번호(쿠키 없을 때)")
-
+# ================== 모달(/재고추가) ==================
+class StockModal(discord.ui.Modal, title="세션/로그인 추가"):
+    cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=False, max_length=4000)
+    id_input = discord.ui.TextInput(label="아이디", required=False, max_length=100)
+    pw_input = discord.ui.TextInput(label="비밀번호", required=False, max_length=100)
     async def on_submit(self, interaction: Interaction):
-        await interaction.response.send_message(embed=embed_state("확인 중..", "세션 확인/로그인 진행 중"), ephemeral=True)
-
+        gid = interaction.guild.id
+        await interaction.response.send_message(embed=Embed(title="확인 중..", description="조금만 기다려줘!", colour=COLOR_BLACK), ephemeral=True)
         raw_cookie = (self.cookie_input.value or "").strip()
         uid = (self.id_input.value or "").strip()
         pw = (self.pw_input.value or "").strip()
-
         if raw_cookie:
             norm = normalize_cookie(raw_cookie)
-            if norm: set_cookie(interaction.user.id, norm)
-            else: set_cookie(interaction.user.id, raw_cookie)
-
+            set_session(gid, interaction.user.id, norm if norm else raw_cookie, None, None)
         if uid or pw:
-            set_login_info(interaction.user.id, uid if uid else None, pw if pw else None)
+            set_session(gid, interaction.user.id, None, uid if uid else None, pw if pw else None)
 
         ok, amount, reason, shot = False, None, None, None
-
         # 1) 쿠키 우선
         if raw_cookie:
             c_ok, c_amt, c_reason, c_shot = await robux_with_cookie(raw_cookie)
             if c_ok: ok, amount, reason, shot = True, c_amt, "ok", c_shot
             else: reason, shot = c_reason, c_shot
-
         # 2) ID/PW 보조
         if not ok and uid and pw:
             l_ok, l_amt, l_reason, l_shot = await robux_with_login(uid, pw)
@@ -434,39 +427,79 @@ class StockModal(discord.ui.Modal, title="로그인/세션 추가"):
             else: reason, shot = l_reason, l_shot or shot
 
         if ok and isinstance(amount, int):
-            set_login_result(interaction.user.id, amount, uid if uid else None)
-            succ = embed_state("성공", f"로벅스 수량 {amount:,}")
-            files = [File(io.BytesIO(shot), filename="robux.png")] if shot else []
-            if files:
-                succ.set_image(url="attachment://robux.png")
-                await interaction.edit_original_response(embed=succ, attachments=files)
-            else:
-                await interaction.edit_original_response(embed=succ)
-        else:
-            fail = embed_state("로그인 실패", reason or "자격증명/보안인증/파싱 실패")
+            set_last_robux(gid, interaction.user.id, amount)
+            # 재고(서버 공용 재고)를 로블록스 잔액으로 덮어쓰거나, 최소값으로 반영
+            set_stock_values(gid, robux=amount)
+            # 기존 /재고표시 메시지 실시간 수정
+            await try_update_stock_message(interaction.guild, gid)
+            e = Embed(title="성공", description=f"로벅스 수량 {amount:,}", colour=COLOR_BLACK)
             if shot:
-                fail.set_image(url="attachment://robux.png")
-                await interaction.edit_original_response(embed=fail, attachments=[File(io.BytesIO(shot), filename="robux.png")])
+                e.set_image(url="attachment://robux.png")
+                await interaction.edit_original_response(embed=e, attachments=[File(io.BytesIO(shot), filename="robux.png")])
             else:
-                await interaction.edit_original_response(embed=fail)
+                await interaction.edit_original_response(embed=e)
+        else:
+            e = Embed(title="로그인 실패", description=reason or "자격증명/보안인증/파싱 실패", colour=COLOR_BLACK)
+            if shot:
+                e.set_image(url="attachment://robux.png")
+                await interaction.edit_original_response(embed=e, attachments=[File(io.BytesIO(shot), filename="robux.png")])
+            else:
+                await interaction.edit_original_response(embed=e)
+
+# ================== 유틸: /재고표시 메시지 갱신 ==================
+async def try_update_stock_message(guild: discord.Guild, gid: int):
+    gs = gslot(gid)
+    last = gs["stock"].get("lastMsg", {}) or {}
+    ch_id = int(last.get("channelId") or 0)
+    msg_id = int(last.get("messageId") or 0)
+    if ch_id and msg_id:
+        ch = guild.get_channel(ch_id)
+        if isinstance(ch, discord.TextChannel):
+            try:
+                msg = await ch.fetch_message(msg_id)
+                await msg.edit(embed=build_stock_embed(gid))
+            except Exception:
+                pass
 
 # ================== 슬래시 명령 ==================
 @tree.command(name="버튼패널", description="자판기 패널을 공개로 표시합니다.")
 async def 버튼패널(inter: Interaction):
     await inter.response.send_message(embed=embed_panel(), view=PanelView(), ephemeral=False)
 
+@tree.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
+async def 재고표시(inter: Interaction):
+    gid = inter.guild.id
+    e = build_stock_embed(gid)
+    await inter.response.send_message(embed=e, ephemeral=False)
+    try:
+        sent = await inter.original_response()
+        set_last_message(gid, inter.channel.id, sent.id)
+    except Exception:
+        pass
+
+@tree.command(name="가격설정", description="1당 가격을 설정합니다(관리자).")
+@app_commands.describe(일당="1당 가격(정수)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def 가격설정(inter: Interaction, 일당: int):
+    gid = inter.guild.id
+    set_stock_values(gid, pricePer=max(0, int(일당)))
+    # 공개 임베드 즉시 업데이트
+    await try_update_stock_message(inter.guild, gid)
+    e = Embed(title="제목 없음", description="가격설정 완료", colour=COLOR_BLACK)
+    await inter.response.send_message(embed=e, ephemeral=True)
+
 @tree.command(name="재고추가", description="쿠키 또는 아이디/비밀번호로 세션을 추가하고 로벅스 수량을 확인합니다.")
 async def 재고추가(inter: Interaction):
     await inter.response.send_modal(StockModal())
 
-# ================== 이벤트/부팅 ==================
+# ================== 부팅 ==================
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
     try:
         cmds = await tree.sync()
         print("[SYNC]", ", ".join("/"+c.name for c in cmds))
-        bot.add_view(PanelView())
+        bot.add_view(PanelView())  # 패널 버튼 유지(선택)
     except Exception as e:
         print("[SYNC][ERR]", e)
 
