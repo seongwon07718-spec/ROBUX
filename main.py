@@ -16,7 +16,7 @@ bot = commands.Bot(
     application_id=int(os.getenv("DISCORD_APP_ID", "0"))
 )
 
-# ===== 간단 DB =====
+# ===== DB =====
 DB_PATH = "stock_data.json"
 _db_lock = threading.Lock()
 
@@ -46,7 +46,7 @@ def slot(gid: int):
 
 def now(): return int(time.time())
 
-# ===== 테스트용 인코딩(운영 땐 교체 권장) =====
+# ===== 테스트용 인코딩 =====
 def enc(s: str) -> str: return base64.b64encode((s or "").encode()).decode()
 def dec(s: str) -> str:
     try: return base64.b64decode((s or "").encode()).decode()
@@ -129,7 +129,7 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             await btn.click()
             await page.wait_for_timeout(1800)
             html = await page.content()
-            # 보안 차단 감지(간단)
+            # 보안 차단 감지
             if any(k in html.lower() for k in ["hcaptcha", "recaptcha", "two-step", "mfa", "verify"]):
                 return False, 0, "보안 인증(캡차/2FA) 발생", await context.cookies()
             # 잔액 페이지
@@ -137,7 +137,6 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             await page.wait_for_timeout(1200)
             html2 = await page.content()
             bal = None
-            # 우선 패턴
             for pat in [r"(내\s*잔액|balance|robux)\D+([0-9][0-9,\.]*)", r"([0-9][0-9,\.]*)\s*(robux|rbx)"]:
                 m = re.search(pat, html2, re.IGNORECASE)
                 if m:
@@ -231,7 +230,7 @@ class StockCog(commands.Cog):
         else:
             await it.followup.send(f"설정 실패: {reason or '확인 불가'}. 잠시 후 다시 시도해줘.", ephemeral=True)
 
-# ===== 싱크(길드 한정, setup_hook에서 1회) =====
+# ===== 싱크: setup_hook에서 길드 한정 1회만 =====
 @bot.event
 async def setup_hook():
     await bot.add_cog(StockCog(bot))
@@ -244,7 +243,6 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     print(f"로그인: {bot.user} 준비완료")
-    # on_ready에서는 재싱크 호출 안 함(환경에 따라 MissingSentinel 완화)
 
 # ===== 실행 =====
 async def main():
