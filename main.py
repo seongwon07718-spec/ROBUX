@@ -9,10 +9,9 @@ from typing import Any, Dict, Optional, Tuple
 import discord
 from discord import app_commands, Interaction, Embed, Colour
 from discord.ext import commands, tasks
-
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
-# ========== 설정 ==========
+# ===== 설정 =====
 DATA_PATH = "data.json"
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
@@ -22,16 +21,16 @@ ROBLOX_TX_URLS = ["https://www.roblox.com/ko/transactions", "https://www.roblox.
 
 BALANCE_CACHE_TTL_SEC = 30
 PAGE_TIMEOUT = 15000
-UPDATE_INTERVAL_SEC = 60  # 60초마다 실시간 업데이트
+UPDATE_INTERVAL_SEC = 60
 
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
-# ========== 저장소 ==========
+# ===== 저장소 유틸 =====
 def _default_data() -> Dict[str, Any]:
     return {
         "users": {},  # { userId: { "roblox": {"username","password","cookie_raw","masked_cookie","cookie_set_at"}, "last_embed": {"channel_id","message_id"} } }
-        "stats": {"total_sold": 0},
-        "cache": {"balances": {}},  # { userId: {"value": int, "ts": iso} }
+        "stats": {"total_sold": 0},  # 유지: 총 판매량 필드(표시만; 누적 명령 제거됨)
+        "cache": {"balances": {}},   # { userId: {"value": int, "ts": iso} }
         "meta": {"version": 1}
     }
 
@@ -43,16 +42,16 @@ def _atomic_write(path: str, data: Dict[str, Any]):
 
 def load_data() -> Dict[str, Any]:
     if not os.path.exists(DATA_PATH):
-        data = _default_data()
-        _atomic_write(DATA_PATH, data)
-        return data
+        d = _default_data()
+        _atomic_write(DATA_PATH, d)
+        return d
     try:
         with open(DATA_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        data = _default_data()
-        _atomic_write(DATA_PATH, data)
-        return data
+        d = _default_data()
+        _atomic_write(DATA_PATH, d)
+        return d
 
 def save_data(d: Dict[str, Any]):
     _atomic_write(DATA_PATH, d)
@@ -99,11 +98,6 @@ def get_last_embed(uid: int) -> Optional[Dict[str, int]]:
     u = get_user_block(uid)
     return u.get("last_embed")
 
-def set_total_sold(val: int):
-    d = load_data()
-    d["stats"]["total_sold"] = int(val)
-    save_data(d)
-
 def get_total_sold() -> int:
     d = load_data()
     return int(d.get("stats", {}).get("total_sold", 0))
@@ -127,7 +121,7 @@ def get_cached_balance(uid: int) -> Optional[int]:
         return int(item["value"])
     return None
 
-# ========== Roblox 조회 ==========
+# ===== Roblox 조회 =====
 async def _extract_numbers_from_page(page: Page) -> Optional[int]:
     html = await page.content()
     nums = []
@@ -184,7 +178,6 @@ async def _login_with_idpw(context: BrowserContext, username: str, password: str
     except Exception:
         await page.close()
         return ok, bal, cookie_val, username_hint
-
     try:
         await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT)
     except Exception:
@@ -227,14 +220,12 @@ async def fetch_balance(uid: int) -> Optional[int]:
         async with async_playwright() as p:
             browser: Browser = await p.chromium.launch(headless=True)
             context: BrowserContext = await browser.new_context()
-            # 쿠키 우선
             if cookie_raw:
                 bal = await _open_with_cookie(context, cookie_raw)
                 await browser.close()
                 if isinstance(bal, int):
                     cache_balance(uid, bal)
                     return bal
-            # 로그인 폴백
             if username and password:
                 ok, bal, new_cookie, uname_hint = await _login_with_idpw(context, username, password)
                 await browser.close()
@@ -250,51 +241,47 @@ async def fetch_balance(uid: int) -> Optional[int]:
     except Exception:
         return None
 
-# ========== Discord Bot ==========
+# ===== Discord Bot =====
 INTENTS = discord.Intents.default()
 BOT = commands.Bot(command_prefix="!", intents=INTENTS)
 TREE = BOT.tree
 
-# 유저별 자동 업데이트 태스크 상태
-# { userId: {"guild_id": int, "channel_id": int, "message_id": int} }
+# 자동 업데이트 추적 { userId(str): {"guild_id": int, "channel_id": int, "message_id": int} }
 active_updates: Dict[str, Dict[str, int]] = {}
 
-def build_stock_embed(robux_balance: Optional[int], total_sold: int) -> Embed:
-    # 형식 그대로(볼드/코드블록/구분선/링크) + 회색
-    emb = Embed(title="실시간 로벅스 재고", colour=Colour.dark_grey(), timestamp=dt.datetime.utcnow())
-    # 본문은 설명 또는 필드 조합으로 구현
-    # 요구 포맷:
-    # **로벅스 수량**
-    # `디비값`로벅스
-    # ——————————
-    # **총 판매량**
-    # `디비값`로벅스
-    # ——————————
-    # [로벅스 구매 바로가기](디스코드 채널 링크)
+def build_stock_embed(guild: Optional[discord.Guild], robux_balance: Optional[int], total_sold: int) -> Embed:
+    # 색상 ff5dd6
+    colour = discord.Colour(int("ff5dd6", 16))
+    emb = Embed(title="", colour=colour, timestamp=dt.datetime.utcnow())
+
+    # 서버프사/서버이름 작게 (author + thumbnail)
+    if guild:
+        emb.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else discord.Embed.Empty)
+        if guild.icon:
+            emb.set_thumbnail(url=guild.icon.url)
+
+    # 본문: 요청 포맷 그대로
     stock = "불러오기 실패"
     if isinstance(robux_balance, int):
         stock = f"{robux_balance:,}"
     total = f"{total_sold:,}"
 
-    desc_lines = [
-        "**로벅스 수량**",
-        f"`{stock}`로벅스",
-        "——————————",
-        "**총 판매량**",
-        f"`{total}`로벅스",
-        "——————————",
-        "[로벅스 구매 바로가기](https://discord.com/channels/1419200424636055592/1419235238512427083)",
-    ]
-    emb.description = "\n".join(desc_lines)
+    desc = []
+    desc.append("## <a:upuoipipi:1423892277373304862>실시간 로벅스 재고")
+    desc.append("### <a:thumbsuppp:1423892279612936294>로벅스 재고")
+    desc.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{stock}`로벅스** ( 60초 마다 갱신 )")
+    desc.append("### <a:upuoipipi:1423892277373304862>총 로벅스 판매량")
+    desc.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{total}`로벅스** ( 60초 마다 갱신 )")
+
+    emb.description = "\n".join(desc)
     return emb
 
-async def send_or_edit_stock(inter: Interaction, uid: int, force_new: bool = False):
-    # 최신 잔액 조회
+async def upsert_public_embed(inter: Interaction, uid: int, force_new: bool = False):
     bal = await fetch_balance(uid)
     total = get_total_sold()
-    embed = build_stock_embed(bal, total)
+    embed = build_stock_embed(inter.guild, bal, total)
 
-    # 공개 메시지로 보내기(모든 유저 보이게)
+    # 공개 메시지
     if force_new or not get_last_embed(uid):
         msg = await inter.channel.send(embed=embed)
         set_last_embed(uid, inter.channel.id, msg.id)
@@ -308,26 +295,26 @@ async def send_or_edit_stock(inter: Interaction, uid: int, force_new: bool = Fal
         await msg.edit(embed=embed)
         active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": ch.id, "message_id": msg.id}
     except Exception:
-        # 기존 메시지 못 찾으면 새로 보냄
         msg = await inter.channel.send(embed=embed)
         set_last_embed(uid, inter.channel.id, msg.id)
         active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": inter.channel.id, "message_id": msg.id}
 
 @tasks.loop(seconds=UPDATE_INTERVAL_SEC)
 async def updater_loop():
-    # 등록된 사용자들 메시지를 60초마다 갱신
     for uid, loc in list(active_updates.items()):
         try:
             user_id = int(uid)
             # 최신 값
             bal = await fetch_balance(user_id)
             total = get_total_sold()
-            embed = build_stock_embed(bal, total)
+            # Guild 객체 없이도 안전하게 편집
             ch = await BOT.fetch_channel(loc["channel_id"])
             msg = await ch.fetch_message(loc["message_id"])
+            # 가능한 guild 얻기
+            guild = msg.guild if hasattr(msg, "guild") else None
+            embed = build_stock_embed(guild, bal, total)
             await msg.edit(embed=embed)
         except Exception:
-            # 실패하면 일단 계속 진행(한두 번 튕겨도 다음 주기에 복구 가능)
             continue
 
 async def sync_tree():
@@ -347,7 +334,7 @@ async def on_ready():
     if not updater_loop.is_running():
         updater_loop.start()
 
-# /실시간_재고_설정
+# ===== 명령어 =====
 @TREE.command(name="실시간_재고_설정", description="Roblox 실시간 재고 연동을 설정합니다. (cookie 또는 login)")
 @app_commands.describe(mode="cookie 또는 login", cookie=".ROBLOSECURITY 값", id="Roblox 아이디", pw="Roblox 비밀번호")
 async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None, id: Optional[str] = None, pw: Optional[str] = None):
@@ -371,24 +358,13 @@ async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None,
         set_user_login(inter.user.id, id, pw)
         await inter.response.send_message("로그인 정보 저장 완료! /재고표시로 불러올게.", ephemeral=True)
 
-# /재고표시
 @TREE.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
 async def cmd_show(inter: Interaction):
-    # 공개로 보여야 하니, reply 대신 채널에 직접 메시지 전송(또는 followup 공개)
     await inter.response.defer(thinking=True, ephemeral=False)
-    await send_or_edit_stock(inter, inter.user.id, force_new=True)
-    await inter.followup.send("재고 임베드가 공개로 표시됐어. 60초마다 자동 갱신할게.", ephemeral=True)
+    await upsert_public_embed(inter, inter.user.id, force_new=True)
+    await inter.followup.send("재고 임베드가 공개로 표시됐어. 60초마다 자동 갱신해.", ephemeral=True)
 
-# 총 판매량 누적(운영 훅)
-@TREE.command(name="판매_누적", description="총 판매량을 누적합니다.")
-@app_commands.describe(amount="증가 수량(정수)")
-async def cmd_inc(inter: Interaction, amount: int):
-    if amount < 0:
-        await inter.response.send_message("음수 불가.", ephemeral=True)
-        return
-    cur = get_total_sold()
-    set_total_sold(cur + amount)
-    await inter.response.send_message(f"총 판매량 {amount:,} 증가! 현재 {cur+amount:,}", ephemeral=True)
+# /판매_누적 명령어는 요청대로 제거
 
 def main():
     if not TOKEN or len(TOKEN) < 10:
