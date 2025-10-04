@@ -5,17 +5,14 @@ from discord import app_commands, Interaction, Embed
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# ============ ENV ============
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 
-# ============ CLIENT ============
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ============ EMOJI/VIEW ============
 def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
     return discord.PartialEmoji(name=name, id=eid, animated=animated)
 
@@ -38,107 +35,75 @@ class PanelView(discord.ui.View):
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="충전",   emoji=EMOJI_CHARGE, custom_id="panel_charge", row=0))
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="내 정보", emoji=EMOJI_INFO,   custom_id="panel_info",   row=1))
         self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="구매",   emoji=EMOJI_BUY,    custom_id="panel_buy",    row=1))
-
     async def interaction_check(self, interaction: Interaction) -> bool:
-        try:
-            await interaction.response.defer()
-        except Exception:
-            pass
+        try: await interaction.response.defer()
+        except: pass
         return False
 
-# ============ 슬래시: 패널만 등록 ============
 @tree.command(name="버튼패널", description="자동 로벅스 자판기 패널을 공개로 표시합니다.")
 async def cmd_button_panel(inter: Interaction):
     await inter.response.send_message(embed=make_panel_embed(), view=PanelView(), ephemeral=False)
 
-# ============ 하드 삭제(REST) 유틸 ============
 API = "https://discord.com/api/v10"
 
 async def get_app_id(session: aiohttp.ClientSession) -> str:
-    # 봇 자신의 application 정보
     async with session.get(f"{API}/oauth2/applications/@me", headers={"Authorization": f"Bot {TOKEN}"}) as r:
         js = await r.json()
         if r.status != 200:
             raise RuntimeError(f"get app failed: {r.status} {js}")
         return js["id"]
 
-async def list_guild_commands(session: aiohttp.ClientSession, app_id: str, guild_id: int):
-    async with session.get(f"{API}/applications/{app_id}/guilds/{guild_id}/commands", headers={"Authorization": f"Bot {TOKEN}"}) as r:
+async def put_commands(session: aiohttp.ClientSession, app_id: str, scope: str, guild_id: int | None, body):
+    # scope: "global" or "guild"
+    if scope == "global":
+        url = f"{API}/applications/{app_id}/commands"
+    else:
+        if not guild_id: raise RuntimeError("guild_id required for guild scope")
+        url = f"{API}/applications/{app_id}/guilds/{guild_id}/commands"
+    async with session.put(url, headers={"Authorization": f"Bot {TOKEN}"}, json=body) as r:
         js = await r.json()
-        if r.status != 200:
-            raise RuntimeError(f"list guild cmds failed: {r.status} {js}")
+        if r.status not in (200, 201):
+            raise RuntimeError(f"put {scope} cmds failed: {r.status} {js}")
         return js
 
-async def delete_guild_command(session: aiohttp.ClientSession, app_id: str, guild_id: int, cmd_id: str):
-    async with session.delete(f"{API}/applications/{app_id}/guilds/{guild_id}/commands/{cmd_id}", headers={"Authorization": f"Bot {TOKEN}"}) as r:
-        if r.status not in (200, 204):
-            js = await r.text()
-            raise RuntimeError(f"delete guild cmd failed: {r.status} {js}")
-
-async def list_global_commands(session: aiohttp.ClientSession, app_id: str):
-    async with session.get(f"{API}/applications/{app_id}/commands", headers={"Authorization": f"Bot {TOKEN}"}) as r:
-        js = await r.json()
-        if r.status != 200:
-            raise RuntimeError(f"list global cmds failed: {r.status} {js}")
-        return js
-
-async def delete_global_command(session: aiohttp.ClientSession, app_id: str, cmd_id: str):
-    async with session.delete(f"{API}/applications/{app_id}/commands/{cmd_id}", headers={"Authorization": f"Bot {TOKEN}"}) as r:
-        if r.status not in (200, 204):
-            js = await r.text()
-            raise RuntimeError(f"delete global cmd failed: {r.status} {js}")
-
-TARGET_REMOVE = {"재고카드", "재고패널"}  # 반드시 지울 이름
-KEEP_ONLY = {"버튼패널"}                 # 이 외는 삭제
-
-async def hard_cleanup_commands():
+async def hard_reset_commands(panel_only: bool = True):
     async with aiohttp.ClientSession() as session:
         app_id = await get_app_id(session)
-        removed_names = []
+        # 1) 전역 명령 전체 삭제(= 빈 배열로 덮어쓰기)
+        await put_commands(session, app_id, "global", None, body=[])
+        print("[CLEAN][GLOBAL] cleared")
 
-        # 1) 길드 명령 싹 정리
+        # 2) 길드 명령 전체 삭제(= 빈 배열로 덮어쓰기)
         if GUILD_ID:
-            cmds = await list_guild_commands(session, app_id, GUILD_ID)
-            for c in cmds:
-                name = c.get("name")
-                cid = c.get("id")
-                if (name in TARGET_REMOVE) or (name not in KEEP_ONLY):
-                    await delete_guild_command(session, app_id, GUILD_ID, cid)
-                    removed_names.append(f"guild:{name}")
+            await put_commands(session, app_id, "guild", GUILD_ID, body=[])
+            print(f"[CLEAN][GUILD {GUILD_ID}] cleared")
 
-        # 2) 전역 명령에서도 같은 이름 제거(혹시 전역에 남아 있으면)
-        gcmds = await list_global_commands(session, app_id)
-        for c in gcmds:
-            name = c.get("name")
-            cid = c.get("id")
-            if name in TARGET_REMOVE:
-                await delete_global_command(session, app_id, cid)
-                removed_names.append(f"global:{name}")
+        # 3) 패널만 다시 등록(길드에만)
+        if panel_only and GUILD_ID:
+            body = [{
+                "name": "버튼패널",
+                "type": 1,
+                "description": "자동 로벅스 자판기 패널을 공개로 표시합니다."
+            }]
+            await put_commands(session, app_id, "guild", GUILD_ID, body=body)
+            print(f"[SET][GUILD {GUILD_ID}] set panel-only")
 
-        if removed_names:
-            print("[CLEAN][HARD] removed:", removed_names)
-        else:
-            print("[CLEAN][HARD] nothing to remove")
-
-# ============ on_ready ============
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-
-    # 0) 하드 삭제 먼저 실행(REST로 즉시 삭제)
     try:
-        await hard_cleanup_commands()
+        await hard_reset_commands(panel_only=True)
     except Exception as e:
-        print("[CLEAN][ERR]", e)
+        print("[RESET][ERR]", e)
 
-    # 1) 이제 /버튼패널만 등록되어 있도록 동기화
+    # 트리 싱크(혹시 모를 캐시 반영 보조)
     try:
         if GUILD_ID:
             await tree.sync(guild=discord.Object(id=GUILD_ID))
-            print(f"[SYNC] guild {GUILD_ID} → panel-only")
+            print(f"[SYNC] guild {GUILD_ID} panel-only")
         else:
             await tree.sync()
-            print("[SYNC] global → panel-only (may delay)")
+            print("[SYNC] global (empty) — no commands")
     except Exception as e:
         print("[SYNC][ERR]", e)
 
