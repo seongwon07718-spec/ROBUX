@@ -4,7 +4,7 @@ import json
 import re
 import shutil
 import asyncio
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import discord
 from discord import app_commands, Interaction, Embed, File
@@ -12,12 +12,12 @@ from discord.ext import commands, tasks
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from dotenv import load_dotenv; load_dotenv()
 
-# ===== 기본 설정 =====
+# ========= 기본 설정 =========
 DATA_PATH = "data.json"
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 
-# 이미지 모드: "url" 또는 "attach_local"
+# 이미지 모드: "url" → 외부 URL(실패 시 첨부 폴백), "attach_local" → 로컬 stock.png 첨부 고정(권장, 100% 표시)
 IMAGE_MODE = "url"
 STOCK_IMAGE_URL = "https://cdn.discordapp.com/attachments/1420389790649421877/1423898721036271718/IMG_2038.png?ex=68e1fc85&is=68e0ab05&hm=267f34b38adac333d3bdd72c603867239aa843dd5c6c891b83434b151daa1006&"
 LOCAL_IMAGE_PATH = "stock.png"
@@ -34,7 +34,7 @@ LOGIN_RETRY = 2
 
 NUM_RE = re.compile(r"(\d{1,3}(?:[,\.\s]\d{3})*|\d+)")
 
-# ===== 데이터 유틸 =====
+# ========= 데이터 유틸 =========
 def _default_data() -> Dict[str, Any]:
     return {"users": {}, "stats": {"total_sold": 0}, "cache": {"balances": {}}, "meta": {"version": 1}}
 
@@ -97,7 +97,7 @@ def get_cached_balance(uid: int) -> Optional[int]:
     if (asyncio.get_running_loop().time() - ts) <= BALANCE_CACHE_TTL_SEC: return int(item["value"])
     return None
 
-# ===== Playwright 런처 =====
+# ========= Playwright 런처 =========
 async def launch_browser(p):
     args = ["--disable-dev-shm-usage","--no-sandbox","--disable-gpu","--disable-setuid-sandbox","--no-zygote"]
     try: return await p.chromium.launch(headless=True, args=args)
@@ -114,8 +114,8 @@ async def new_context(browser: Browser) -> Optional[BrowserContext]:
     except Exception:
         return None
 
-# ===== Roblox 파싱(홈 우상단 뱃지) =====
-ROBLOX_BADGE_SELECTORS = [
+# ========= Roblox 파싱(홈 우상단 뱃지) =========
+ROBLOX_BADGE_SELECTORS: List[str] = [
     "[data-testid*='nav-robux']",
     "a[aria-label*='Robux']",
     "a[aria-label*='로벅스']",
@@ -123,8 +123,17 @@ ROBLOX_BADGE_SELECTORS = [
     "span[title*='로벅스']",
 ]
 
+async def _goto_any(page: Page, urls: List[str]) -> bool:
+    for u in urls:
+        try:
+            await page.goto(u, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+            return True
+        except Exception:
+            continue
+    return False
+
 async def _extract_robux_badge(page: Page) -> Optional[int]:
-    # 상단 뱃지 영역만 본다
+    # 상단 뱃지 텍스트만 콕!
     for sel in ROBLOX_BADGE_SELECTORS:
         try:
             el = await page.query_selector(sel)
@@ -137,7 +146,7 @@ async def _extract_robux_badge(page: Page) -> Optional[int]:
                 return v
         except Exception:
             continue
-    # 주변 텍스트 폴백(근접 80자)
+    # 폴백: "Robux/로벅스" 주변 80자에서 가장 그럴듯한 수(작은 수 우선)
     try:
         html = await page.content()
         around = []
@@ -150,20 +159,10 @@ async def _extract_robux_badge(page: Page) -> Optional[int]:
             for m in re.finditer(NUM_RE, chunk):
                 v = int(re.sub(r"[,\.\s]", "", m.group(1)))
                 if 0 <= v <= 100_000_000: nums.append(v)
-        if nums:
-            return min(nums)
+        if nums: return min(nums)
     except Exception:
         pass
     return None
-
-async def _goto_any(page: Page, urls: list[str]):
-    for u in urls:
-        try:
-            await page.goto(u, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
-            return True
-        except Exception:
-            continue
-    return False
 
 async def _open_with_cookie_home(context: BrowserContext, cookie_raw: str) -> Optional[int]:
     try:
@@ -172,7 +171,6 @@ async def _open_with_cookie_home(context: BrowserContext, cookie_raw: str) -> Op
         ok = await _goto_any(page, ROBLOX_HOME_URLS)
         if not ok:
             await page.close(); return None
-        # 상단 뱃지 바로 파싱(입력 대기 없이)
         bal = await _extract_robux_badge(page)
         await page.close()
         return bal
@@ -183,32 +181,21 @@ async def _login_with_idpw_home(context: BrowserContext, username: str, password
     ok, bal, cookie_val, username_hint = False, None, None, None
     page = await context.new_page()
     try:
-        # 로그인 페이지 진입
         got = await _goto_any(page, ROBLOX_LOGIN_URLS)
         if not got:
             await page.close(); return False, None, None, None
-
         user_sel = "input[name='username'], input#login-username, input[type='text']"
         pass_sel = "input[name='password'], input#login-password, input[type='password']"
-        await page.wait_for_selector(user_sel, timeout=PAGE_TIMEOUT)
-        await page.fill(user_sel, username)
-        await page.wait_for_selector(pass_sel, timeout=PAGE_TIMEOUT)
-        await page.fill(pass_sel, password)
-        # 빠른 클릭
+        await page.wait_for_selector(user_sel, timeout=PAGE_TIMEOUT); await page.fill(user_sel, username)
+        await page.wait_for_selector(pass_sel, timeout=PAGE_TIMEOUT); await page.fill(pass_sel, password)
         login_btn = "button[type='submit'], button[aria-label], button:has-text('로그인'), button:has-text('Log In')"
         await page.click(login_btn)
-        # 네트워크 전체 대기 대신 짧게 DOM 상호작용 대기
-        try:
-            await page.wait_for_load_state("domcontentloaded", timeout=PAGE_TIMEOUT)
-        except Exception:
-            pass
-        # 홈으로 이동 후 우상단 뱃지
+        try: await page.wait_for_load_state("domcontentloaded", timeout=PAGE_TIMEOUT)
+        except Exception: pass
         ok_home = await _goto_any(page, ROBLOX_HOME_URLS)
         if not ok_home:
             await page.close(); return False, None, None, None
         bal = await _extract_robux_badge(page)
-
-        # 쿠키 추출
         for c in await context.cookies():
             if c.get("name") == ".ROBLOSECURITY":
                 cookie_val = c.get("value"); break
@@ -217,8 +204,7 @@ async def _login_with_idpw_home(context: BrowserContext, username: str, password
             if t:
                 m = re.search(r"[A-Za-z0-9_]{3,20}", t)
                 if m: username_hint = m.group(0)
-        except Exception:
-            pass
+        except Exception: pass
         ok = bal is not None
         return ok, bal, cookie_val, username_hint
     finally:
@@ -257,7 +243,7 @@ async def fetch_balance(uid: int) -> int:
             continue
     return 0
 
-# ===== 이미지 유틸 =====
+# ========= 이미지 유틸 =========
 async def fetch_image_bytes(url: str, timeout: int = 10) -> Optional[bytes]:
     try:
         import urllib.request
@@ -266,7 +252,7 @@ async def fetch_image_bytes(url: str, timeout: int = 10) -> Optional[bytes]:
     except Exception:
         return None
 
-# ===== 임베드 템플릿 =====
+# ========= 임베드 =========
 def make_stock_embed(guild: Optional[discord.Guild], robux_balance: int, total_sold: int, image_as_attachment: bool) -> Embed:
     colour = discord.Colour(int("ff5dd6", 16))
     emb = Embed(title="", colour=colour)
@@ -294,13 +280,10 @@ def make_panel_embed(guild: Optional[discord.Guild]) -> Embed:
     if guild:
         icon = guild.icon.url if guild.icon else None
         emb.set_author(name=guild.name, icon_url=icon)
-    desc = []
-    desc.append("## 24시간 자동 자판기")
-    desc.append("**아래 원하시는 버튼을 눌려 이용해주세요**")
-    emb.description = "\n".join(desc)
+    emb.description = "## 24시간 자동 자판기\n**아래 원하시는 버튼을 눌려 이용해주세요**"
     return emb
 
-# ===== 디스코드 봇 =====
+# ========= 디스코드 봇 =========
 INTENTS = discord.Intents.default()
 BOT = commands.Bot(command_prefix="!", intents=INTENTS)
 TREE = BOT.tree
@@ -387,38 +370,33 @@ async def on_ready():
     await sync_tree()
     if not updater_loop.is_running(): updater_loop.start()
 
-# ===== PartialEmoji 준비(버튼용) =====
+# ========= PartialEmoji & 버튼뷰 =========
 def pe(id_str: str, name: str = None, animated: bool = False) -> discord.PartialEmoji:
-    # id_str는 문자열 숫자(스노우플레이크)
     return discord.PartialEmoji(name=name, id=int(id_str), animated=animated)
 
-EMOJI_ACC = pe("1423544323735027763", name="Acc", animated=False)
-EMOJI_CARD = pe("1423544325597560842", name="Card", animated=True)
+EMOJI_ACC     = pe("1423544323735027763", name="Acc",     animated=False)
+EMOJI_CARD    = pe("1423544325597560842", name="Card",    animated=True)
 EMOJI_DISCORD = pe("1423517142556610560", name="discord", animated=False)
-EMOJI_NITRO = pe("1423517143730749490", name="Nitro", animated=False)
+EMOJI_NITRO   = pe("1423517143730749490", name="Nitro",   animated=False)
 
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        # 2x2 버튼, 회색(secondary)
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="공지사항", emoji=EMOJI_ACC, custom_id="p_notice", row=0))
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="충전", emoji=EMOJI_CARD, custom_id="p_charge", row=0))
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="내 정보", emoji=EMOJI_DISCORD, custom_id="p_me", row=1))
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="구매", emoji=EMOJI_NITRO, custom_id="p_buy", row=1))
-
-    @discord.ui.button(label="hidden", style=discord.ButtonStyle.secondary)
-    async def dummy(self, interaction: Interaction, button: discord.ui.Button):
-        pass
+        # 2x2 버튼(회색)
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="공지사항", emoji=EMOJI_ACC,     custom_id="p_notice", row=0))
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="충전",   emoji=EMOJI_CARD,    custom_id="p_charge", row=0))
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="내 정보", emoji=EMOJI_DISCORD, custom_id="p_me",     row=1))
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="구매",   emoji=EMOJI_NITRO,   custom_id="p_buy",    row=1))
 
     async def interaction_check(self, interaction: Interaction) -> bool:
-        # 상호작용 응답 노출 안 되게: 즉시 업데이트만 하고 메시지는 그대로
+        # 버튼 누르면 응답 메시지 안 보이게: 즉시 defer 처리(화면 변경 없음)
         try:
-            await interaction.response.defer()  # 아무 메시지도 보내지 않음
+            await interaction.response.defer()
         except Exception:
             pass
         return False
 
-# ===== 명령어 =====
+# ========= 슬래시 명령어 3개 =========
 @TREE.command(name="실시간_재고_설정", description="쿠키/로그인 저장 후 즉시 검증하고 임베드에 반영합니다.")
 @app_commands.describe(mode="cookie 또는 login", cookie=".ROBLOSECURITY 값", id="Roblox 아이디", pw="Roblox 비밀번호")
 async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None, id: Optional[str] = None, pw: Optional[str] = None):
@@ -460,7 +438,7 @@ async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None,
             await inter.followup.send(f"로그인 완료! 현재 잔액: {bal_value:,} 로벅스", ephemeral=True)
             await send_or_edit_stock(inter, inter.user.id, force_new=False)
         else:
-            await inter.followup.send("로그인 실패(계정 보호/2FA/장치인증 가능성). 쿠키 방식 추천.", ephemeral=True)
+            await inter.followup.send("로그인 실패(2FA/장치인증 가능성). 쿠키 방식 추천.", ephemeral=True)
 
 @TREE.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
 async def cmd_show(inter: Interaction):
@@ -473,13 +451,11 @@ async def cmd_panel(inter: Interaction):
     await inter.response.defer(thinking=True, ephemeral=False)
     emb = make_panel_embed(inter.guild)
     view = PanelView()
-    # 노출만 하고, 누르면 응답 메시지 안 뜨도록 View에 처리함
     await inter.followup.send(embed=emb, view=view, ephemeral=False)
 
-# ===== 메인 =====
+# ========= 메인 =========
 def main():
-    if not TOKEN or len(TOKEN) < 10:
-        raise RuntimeError("DISCORD_TOKEN 비어있거나 형식 이상")
+    if not TOKEN or len(TOKEN) < 10: raise RuntimeError("DISCORD_TOKEN 비어있거나 형식 이상")
     BOT.run(TOKEN)
 
 if __name__ == "__main__":
