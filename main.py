@@ -16,11 +16,11 @@ bot = commands.Bot(
     application_id=int(os.getenv("DISCORD_APP_ID", "0"))
 )
 
-# ===== DB =====
+# ===== DB (아주 단순 JSON) =====
 DB_PATH = "stock_data.json"
 _db_lock = threading.Lock()
 
-def _load_db():
+def load_db():
     if not os.path.exists(DB_PATH):
         return {"guilds": {}}
     try:
@@ -29,16 +29,16 @@ def _load_db():
     except:
         return {"guilds": {}}
 
-def _save_db():
+def save_db():
     with open(DB_PATH, "w", encoding="utf-8") as f:
         json.dump(DB, f, ensure_ascii=False, indent=2)
 
-DB = _load_db()
+DB = load_db()
 
 def slot(gid: int):
     DB["guilds"].setdefault(str(gid), {
-        "inventory": 0,
-        "totalSold": 0,
+        "inventory": 0,         # 현재 로벅스 잔액(=재고)
+        "totalSold": 0,         # 총 판매량
         "lastMessage": {"channelId": 0, "messageId": 0},
         "account": {"idEnc":"", "pwEnc":"", "cookies":[], "cookiesAt":0, "optionsApplied": True}
     })
@@ -46,7 +46,7 @@ def slot(gid: int):
 
 def now(): return int(time.time())
 
-# ===== 테스트용 인코딩 =====
+# ===== 테스트용 인코딩(운영 땐 교체) =====
 def enc(s: str) -> str: return base64.b64encode((s or "").encode()).decode()
 def dec(s: str) -> str:
     try: return base64.b64decode((s or "").encode()).decode()
@@ -82,7 +82,7 @@ try:
 except:
     PLAYWRIGHT_AVAILABLE = False
 
-# 일부 환경 child watcher 방어(미호환이면 조용히 패스)
+# 일부 환경 child watcher 방어(미지원이면 조용히 패스)
 try:
     if sys.platform != "win32" and hasattr(asyncio, "get_child_watcher"):
         try: asyncio.get_child_watcher()
@@ -109,33 +109,45 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
     ID = dec(enc_id); PW = dec(enc_pw)
     if not ID or not PW:
         return False, 0, "계정 정보 오류", []
+
     from playwright.async_api import async_playwright
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(**LAUNCH_KW)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36")
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
+        )
         page = await context.new_page()
         try:
             # 로그인
             await page.goto(LOGIN_URL, timeout=25000)
             await page.wait_for_timeout(700)
+
             id_el = await page.query_selector(SEL_ID) or (await page.query_selector_all("input"))[0]
             if not id_el: return False, 0, "ID 입력칸 없음", await context.cookies()
             await id_el.fill(ID)
+
             pw_el = await page.query_selector(SEL_PW) or (await page.query_selector_all("input[type='password']"))[0]
             if not pw_el: return False, 0, "PW 입력칸 없음", await context.cookies()
             await pw_el.fill(PW)
+
             btn = await page.query_selector(SEL_LOGIN) or await page.query_selector("button")
             if not btn: return False, 0, "로그인 버튼 없음", await context.cookies()
             await btn.click()
+
             await page.wait_for_timeout(1800)
             html = await page.content()
+
             # 보안 차단 감지
             if any(k in html.lower() for k in ["hcaptcha", "recaptcha", "two-step", "mfa", "verify"]):
                 return False, 0, "보안 인증(캡차/2FA) 발생", await context.cookies()
+
             # 잔액 페이지
             await page.goto(TX_URL, timeout=25000)
             await page.wait_for_timeout(1200)
             html2 = await page.content()
+
+            # 우선 패턴
             bal = None
             for pat in [r"(내\s*잔액|balance|robux)\D+([0-9][0-9,\.]*)", r"([0-9][0-9,\.]*)\s*(robux|rbx)"]:
                 m = re.search(pat, html2, re.IGNORECASE)
@@ -144,14 +156,18 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
                     cand = cand.replace(",", "").replace(".", "")
                     if cand.isdigit():
                         bal = int(cand); break
+
             if bal is None:
                 nums = [n.replace(",", "").replace(".", "") for n in re.findall(RE_BAL, html2)]
                 nums = [n for n in nums if n.isdigit()]
                 cands = [int(n) for n in nums if 0 <= int(n) <= 100_000_000]
                 if cands: bal = min(cands)
+
             if bal is None:
                 return False, 0, "잔액 파싱 실패", await context.cookies()
+
             return True, int(bal), "", await context.cookies()
+
         except PwTimeout:
             return False, 0, "응답 지연", await context.cookies()
         except Exception as e:
@@ -160,7 +176,7 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             with contextlib.suppress(Exception): await context.close()
             with contextlib.suppress(Exception): await browser.close()
 
-# ===== Cog =====
+# ===== Cog: 명령어 2개 =====
 class StockCog(commands.Cog):
     def __init__(self, bot_: commands.Bot):
         self.bot = bot_
@@ -179,7 +195,7 @@ class StockCog(commands.Cog):
             with _db_lock:
                 s = slot(gid)
                 s["lastMessage"] = {"channelId": it.channel.id, "messageId": msg.id}
-                _save_db()
+                save_db()
         except:
             pass
 
@@ -196,7 +212,7 @@ class StockCog(commands.Cog):
             s["account"]["idEnc"] = enc(id.strip())
             s["account"]["pwEnc"] = enc(pw.strip())
             s["account"]["optionsApplied"] = True
-            _save_db()
+            save_db()
         ok, amount, reason, cookies = await roblox_login_and_get_balance(s["account"]["idEnc"], s["account"]["pwEnc"])
         with _db_lock:
             s = slot(gid)
@@ -204,11 +220,11 @@ class StockCog(commands.Cog):
                 s["inventory"] = int(max(0, amount))
                 s["account"]["cookies"] = cookies or []
                 s["account"]["cookiesAt"] = now()
-                _save_db()
+                save_db()
             else:
                 s["account"]["cookies"] = []
                 s["account"]["cookiesAt"] = 0
-                _save_db()
+                save_db()
         # 기존 메시지 수정
         try:
             with _db_lock:
@@ -233,7 +249,6 @@ class StockCog(commands.Cog):
 # ===== 싱크: setup_hook에서 길드 한정 1회만 =====
 @bot.event
 async def setup_hook():
-    # application.commands 스코프로 초대되지 않으면 여기서 바로 체크
     if not bot.application_id:
         print("DISCORD_APP_ID 누락 또는 잘못됨"); return
     await bot.add_cog(StockCog(bot))
