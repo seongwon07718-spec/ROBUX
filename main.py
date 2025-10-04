@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import re
 import shutil
@@ -6,7 +7,7 @@ import asyncio
 from typing import Any, Dict, Optional, Tuple
 
 import discord
-from discord import app_commands, Interaction, Embed
+from discord import app_commands, Interaction, Embed, File
 from discord.ext import commands, tasks
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
@@ -25,15 +26,15 @@ LOGIN_RETRY = 2
 
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
-# 임베드 하단 이미지(네가 준 URL)
+# 외부 URL 직접 이미지(실패 시 첨부로 폴백)
 STOCK_IMAGE_URL = "https://cdn.discordapp.com/attachments/1420389790649421877/1423898721036271718/IMG_2038.png?ex=68e1fc85&is=68e0ab05&hm=267f34b38adac333d3bdd72c603867239aa843dd5c6c891b83434b151daa1006&"
 
 # ===== 저장소 유틸 =====
 def _default_data() -> Dict[str, Any]:
     return {
-        "users": {},
+        "users": {},             # { userId: { "roblox": {...}, "last_embed": {"channel_id","message_id"} } }
         "stats": {"total_sold": 0},
-        "cache": {"balances": {}},
+        "cache": {"balances": {}},  # { userId: {"value": int, "ts": float} }
         "meta": {"version": 1}
     }
 
@@ -137,7 +138,6 @@ async def launch_browser(p):
         browser = await p.chromium.launch(**launch_args)
         return browser
     except Exception:
-        # 무헤드리스 폴백(일부 환경에서 headless true가 실패)
         try:
             launch_args["headless"] = False
             browser = await p.chromium.launch(**launch_args)
@@ -211,7 +211,6 @@ async def _login_with_idpw(context: BrowserContext, username: str, password: str
 
         user_sel = "input[name='username'], input#login-username, input[type='text']"
         pass_sel = "input[name='password'], input#login-password, input[type='password']"
-
         await page.wait_for_selector(user_sel, timeout=PAGE_TIMEOUT)
         await page.fill(user_sel, username)
         await page.wait_for_selector(pass_sel, timeout=PAGE_TIMEOUT)
@@ -265,7 +264,6 @@ async def _login_with_idpw(context: BrowserContext, username: str, password: str
         await page.close()
 
 async def fetch_balance(uid: int) -> int:
-    # 실패 시 0 표시
     cached = get_cached_balance(uid)
     if cached is not None:
         return int(cached)
@@ -292,8 +290,6 @@ async def fetch_balance(uid: int) -> int:
                     if isinstance(bal, int):
                         cache_balance(uid, bal)
                         return int(bal)
-                    # 폴백으로 id/pw 시도
-
                 if username and password:
                     ok, bal, new_cookie, uname_hint, _ = await _login_with_idpw(context, username, password)
                     await browser.close()
@@ -306,75 +302,130 @@ async def fetch_balance(uid: int) -> int:
                     await browser.close()
         except Exception:
             continue
-    return 0
+    return 0  # 실패 시 0
 
 # ===== Discord Bot =====
 INTENTS = discord.Intents.default()
 BOT = commands.Bot(command_prefix="!", intents=INTENTS)
 TREE = BOT.tree
 
-active_updates: Dict[str, Dict[str, int]] = {}
+# 자동 갱신 추적 { userId(str): {"guild_id": int, "channel_id": int, "message_id": int, "use_attachment": bool} }
+active_updates: Dict[str, Dict[str, Any]] = {}
 
-def build_embed(guild: Optional[discord.Guild], robux_balance: int, total_sold: int) -> Embed:
+def build_embed(guild: Optional[discord.Guild], robux_balance: int, total_sold: int, use_attachment: bool) -> Embed:
     colour = discord.Colour(int("ff5dd6", 16))
     emb = Embed(title="", colour=colour)  # timestamp 미사용 → 하단 시간 안 뜸
 
-    # 서버 이름만 작게 텍스트로(오른쪽 썸네일/프사 안 씀)
-    guild_line = f"*{guild.name}*" if guild else ""
+    # 임베드 author로 서버 프사+이름(작게) 표시
+    if guild:
+        icon = guild.icon.url if guild.icon else None
+        emb.set_author(name=guild.name, icon_url=icon)
 
     stock = f"{robux_balance:,}"
     total = f"{total_sold:,}"
 
     lines = []
-    if guild_line:
-        lines.append(guild_line)
     lines.append("### <a:upuoipipi:1423892277373304862>실시간 로벅스 재고")
     lines.append("### <a:thumbsuppp:1423892279612936294>로벅스 재고")
     lines.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{stock}`로벅스**")
     lines.append("### <a:thumbsuppp:1423892279612936294>총 판매량")
     lines.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{total}`로벅스**")
-
     emb.description = "\n".join(lines)
 
-    # 이미지가 안 보이는 이슈 수정:
-    # - set_image는 CDN 직링크 OK, 다만 프록시/권한 문제 대비하여 URL 문자열 정리
-    emb.set_image(url=STOCK_IMAGE_URL.strip())
+    if use_attachment:
+        emb.set_image(url="attachment://stock.png")
+    else:
+        emb.set_image(url=STOCK_IMAGE_URL.strip())
     return emb
 
-async def upsert_public_embed(inter: Interaction, uid: int, force_new: bool = False):
+async def download_image_bytes(session_p: Optional[any] = None) -> Optional[bytes]:
+    # 간단한 aiohttp 없이 discord.py HTTPClient로 시도 (Replit에서 간편)
+    try:
+        import urllib.request
+        with urllib.request.urlopen(STOCK_IMAGE_URL, timeout=10) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
+async def send_or_edit_embed(inter: Interaction, uid: int, force_new: bool = False):
     bal = await fetch_balance(uid)
     total = get_total_sold()
-    embed = build_embed(inter.guild, bal, total)
 
+    # 이미지 URL 직접 시도 → 실패면 첨부 파일로 폴백
+    use_attachment = False
+    image_bytes = None
+    # URL을 먼저 쓰고, 만약 첫 게시에서 URL이 차단/만료면 첨부로.
+    # 강제 첨부를 원하면 아래 use_attachment=True로 고정 가능.
+    embed = build_embed(inter.guild, bal, total, use_attachment=False)
+
+    files: Optional[list] = None
+    # 메시지 생성 시도
     if force_new or not get_last_embed(uid):
-        msg = await inter.channel.send(embed=embed)  # 공개
-        set_last_embed(uid, inter.channel.id, msg.id)
-        active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": inter.channel.id, "message_id": msg.id}
-        return
+        try:
+            msg = await inter.channel.send(embed=embed)
+            set_last_embed(uid, inter.channel.id, msg.id)
+            active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": inter.channel.id, "message_id": msg.id, "use_attachment": False}
+            return
+        except Exception:
+            # URL 실패 폴백: 첨부 이미지
+            image_bytes = await download_image_bytes()
+            if image_bytes:
+                file = File(io.BytesIO(image_bytes), filename="stock.png")
+                embed = build_embed(inter.guild, bal, total, use_attachment=True)
+                msg = await inter.channel.send(embed=embed, file=file)
+                set_last_embed(uid, inter.channel.id, msg.id)
+                active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": inter.channel.id, "message_id": msg.id, "use_attachment": True}
+                return
+            else:
+                # 이미지 없이라도 본문 정상 노출
+                msg = await inter.channel.send(embed=build_embed(inter.guild, bal, total, use_attachment=False))
+                set_last_embed(uid, inter.channel.id, msg.id)
+                active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": inter.channel.id, "message_id": msg.id, "use_attachment": False}
+                return
 
+    # 편집 경로
     last = get_last_embed(uid)
     try:
         ch = await BOT.fetch_channel(last["channel_id"])
         msg = await ch.fetch_message(last["message_id"])
-        await msg.edit(embed=embed)
-        active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": ch.id, "message_id": msg.id}
+        # 기존에 첨부를 썼던 메시지면 동일 방식 유지
+        use_attachment = bool(active_updates.get(str(uid), {}).get("use_attachment", False))
+        embed = build_embed(inter.guild, bal, total, use_attachment)
+        if use_attachment:
+            image_bytes = await download_image_bytes()
+            if image_bytes:
+                file = File(io.BytesIO(image_bytes), filename="stock.png")
+                await msg.edit(embed=embed, attachments=[file])
+            else:
+                await msg.edit(embed=embed)
+        else:
+            await msg.edit(embed=embed)
+        active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": ch.id, "message_id": msg.id, "use_attachment": use_attachment}
     except Exception:
-        msg = await inter.channel.send(embed=embed)
-        set_last_embed(uid, inter.channel.id, msg.id)
-        active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": inter.channel.id, "message_id": msg.id}
+        # 메시지 없으면 새로 생성
+        await send_or_edit_embed(inter, uid, force_new=True)
 
 @tasks.loop(seconds=UPDATE_INTERVAL_SEC)
 async def updater_loop():
     for uid, loc in list(active_updates.items()):
         try:
             user_id = int(uid)
-            bal = await fetch_balance(user_id)
-            total = get_total_sold()
             ch = await BOT.fetch_channel(loc["channel_id"])
             msg = await ch.fetch_message(loc["message_id"])
+            bal = await fetch_balance(user_id)
+            total = get_total_sold()
+            use_attachment = bool(loc.get("use_attachment", False))
             guild = getattr(msg, "guild", None)
-            embed = build_embed(guild, bal, total)
-            await msg.edit(embed=embed)
+            embed = build_embed(guild, bal, total, use_attachment)
+            if use_attachment:
+                image_bytes = await download_image_bytes()
+                if image_bytes:
+                    file = File(io.BytesIO(image_bytes), filename="stock.png")
+                    await msg.edit(embed=embed, attachments=[file])
+                else:
+                    await msg.edit(embed=embed)
+            else:
+                await msg.edit(embed=embed)
         except Exception:
             continue
 
@@ -401,36 +452,40 @@ async def on_ready():
 async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None, id: Optional[str] = None, pw: Optional[str] = None):
     await inter.response.defer(ephemeral=True, thinking=True)
     mode = (mode or "").lower().strip()
-    ok = False
-    reason = None
-    bal_value = 0
+    if mode not in ("cookie", "login"):
+        await inter.followup.send(embed=Embed(title="실패", description="mode는 cookie 또는 login", colour=discord.Colour.red()), ephemeral=True)
+        return
 
     if mode == "cookie":
         if not cookie:
             await inter.followup.send(embed=Embed(title="실패", description="cookie(.ROBLOSECURITY) 값 필요", colour=discord.Colour.red()), ephemeral=True)
             return
         set_user_cookie(inter.user.id, cookie)
-        bal_value = await fetch_balance(inter.user.id)  # 0 또는 숫자
-        ok = True
-    elif mode == "login":
+        bal = await fetch_balance(inter.user.id)  # 실패 시 0
+        await inter.followup.send(embed=Embed(title="연동 완료", description=f"현재 잔액: {bal:,} 로벅스", colour=discord.Colour.green()), ephemeral=True)
+        await send_or_edit_embed(inter, inter.user.id, force_new=False)
+        return
+
+    if mode == "login":
         if not id or not pw:
             await inter.followup.send(embed=Embed(title="실패", description="login 모드는 id, pw 필요", colour=discord.Colour.red()), ephemeral=True)
             return
         set_user_login(inter.user.id, id, pw)
-        # 브라우저 상세 시도(실패 이유 보고)
+
+        # 상세 로그인 시도(사유 제공)
         tried_ok = False
         last_reason = None
+        bal_value = 0
         try:
             async with async_playwright() as p:
                 browser = await launch_browser(p)
                 if not browser:
-                    last_reason = "브라우저 실행 오류(런타임/권한 확인)"
+                    last_reason = "브라우저 실행 오류(install chromium / install-deps 확인)"
                 else:
                     ctx = await new_context(browser)
                     if not ctx:
-                        last_reason = "컨텍스트 생성 실패(권한/샌드박스)"
+                        last_reason = "브라우저 컨텍스트 실패(샌드박스/권한)"
                     else:
-                        # 리트라이
                         for _ in range(LOGIN_RETRY):
                             _ok, _bal, new_cookie, uname_hint, fail_reason = await _login_with_idpw(ctx, id, pw)
                             if _ok and isinstance(_bal, int):
@@ -444,24 +499,16 @@ async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None,
         except Exception:
             last_reason = "Playwright 실행 예외"
 
-        ok = tried_ok
-        reason = None if tried_ok else (last_reason or "로그인 실패")
-
-    else:
-        await inter.followup.send(embed=Embed(title="실패", description="mode는 cookie 또는 login", colour=discord.Colour.red()), ephemeral=True)
-        return
-
-    if ok:
-        await inter.followup.send(embed=Embed(title="연동 완료", description=f"현재 잔액: {bal_value:,} 로벅스", colour=discord.Colour.green()), ephemeral=True)
-        # 공개 임베드 즉시 새로고침/생성
-        await upsert_public_embed(inter, inter.user.id, force_new=False)
-    else:
-        await inter.followup.send(embed=Embed(title="로그인 실패", description=str(reason), colour=discord.Colour.red()), ephemeral=True)
+        if tried_ok:
+            await inter.followup.send(embed=Embed(title="로그인 완료", description=f"현재 잔액: {bal_value:,} 로벅스", colour=discord.Colour.green()), ephemeral=True)
+            await send_or_edit_embed(inter, inter.user.id, force_new=False)
+        else:
+            await inter.followup.send(embed=Embed(title="로그인 실패", description=str(last_reason), colour=discord.Colour.red()), ephemeral=True)
 
 @TREE.command(name="재고표시", description="실시간 로벅스 재고를 공개 임베드로 표시합니다.")
 async def cmd_show(inter: Interaction):
     await inter.response.defer(thinking=True, ephemeral=False)
-    await upsert_public_embed(inter, inter.user.id, force_new=True)
+    await send_or_edit_embed(inter, inter.user.id, force_new=True)
     await inter.followup.send("재고 임베드 공개 완료. 60초마다 자동 갱신해.", ephemeral=True)
 
 def main():
