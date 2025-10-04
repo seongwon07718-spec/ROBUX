@@ -1,7 +1,4 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ComponentType } = require('discord.js');
-// discord.js에서 MessageFlags는 MessageType이므로, V2 플래그는 수동으로 처리합니다.
-const COMPONENTS_V2_FLAG = 1 << 15; 
-
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ComponentType, codeBlock } = require('discord.js');
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -40,95 +37,41 @@ function pushTxn(uid, amount, desc) {
   db.users[uid] = u; saveDB(db);
 }
 
-// ----------------------------------------------------
-// Component V2 (Display Components) API 구조체 생성 함수
-// ----------------------------------------------------
+/* ====== 임베드(카드풍) / 컴포넌트 ====== */
+const colorPink = 0xff5dd6;
+const colorGray = 0x2f3136;
 
 /**
- * Components V2 스타일의 재고 카드를 JSON 구조체로 반환합니다.
+ * 재고 현황을 카드 형태로 표시하는 Embed를 생성합니다. (V2 스타일 반영)
  */
-function stockV2Components(title, subtitle, stock, tokens, soldCount, soldAmount, updatedSec) {
-    const formatCount = (count) => `**${count ?? 0}**`;
+function stockEmbed(title, subtitle, stock, tokens, soldCount, soldAmount, updatedSec, guild) {
+  const emb = new EmbedBuilder()
+    .setColor(colorPink)
+    .setTitle(`## ${title}`) 
+    .setDescription(subtitle + `\n\n최종 업데이트: **${updatedSec}초 전**`)
+    .addFields(
+      // 1개월 부스트 섹션 - inline: true로 나란히 배치하여 카드형 레이아웃
+      { name: '### 🎁 1개월 부스트', value: `재고: **${stock['1m'] ?? 0}**개\n토큰: **${tokens['1m'] ?? 0}**개`, inline: true },
+      // 2개월 부스트 섹션
+      { name: '### ### 🎁 2개월 부스트', value: `재고: **${stock['2m'] ?? 0}**개\n토큰: **${tokens['2m'] ?? 0}**개`, inline: true },
+      // 3개월 부스트 섹션
+      { name: '### 🎁 3개월 부스트', value: `재고: **${stock['3m'] ?? 0}**개\n토큰: **${tokens['3m'] ?? 0}**개`, inline: true },
 
-    // 섹션 컴포넌트를 사용한 재고 정보 (2열 레이아웃 모방)
-    const stockContainer = {
-        type: 6, // CONTAINER
-        components: [
-            // 1개월 부스트
-            { type: 5, components: [ // SECTION
-                { type: 1, content: `### 🎁 1개월 부스트\n재고: ${formatCount(stock['1m'])}개 | 토큰: ${formatCount(tokens['1m'])}개` }
-            ]},
-            // 2개월 부스트
-            { type: 5, components: [ // SECTION
-                { type: 1, content: `### 🎁 2개월 부스트\n재고: ${formatCount(stock['2m'])}개 | 토큰: ${formatCount(tokens['2m'])}개` }
-            ]},
-            // 3개월 부스트
-            { type: 5, components: [ // SECTION
-                { type: 1, content: `### 🎁 3개월 부스트\n재고: ${formatCount(stock['3m'])}개 | 토큰: ${formatCount(tokens['3m'])}개` }
-            ]},
-        ],
-    };
+      // 판매 현황 섹션
+      { name: '\u200B', value: '\u200B', inline: false }, // 줄 바꿈 역할
+      { name: '### 📈 판매 현황', value: `거래 횟수: **${soldCount.toLocaleString()}**회`, inline: true },
+      { name: '\u200B', value: `누적 판매액: **${soldAmount.toLocaleString()}**원`, inline: true },
+      { name: '\u200B', value: '\u200B', inline: true } // 3열 채우기
+    )
+    .setFooter({ text: 'CopyRight 2025. 최상급 부스트. All rights reserved.' });
 
-    // 판매 현황 섹션
-    const statsSection = {
-        type: 5, // SECTION
-        components: [
-            { type: 1, content: `### 📈 판매 현황\n거래 횟수: **${soldCount.toLocaleString()}**회\n누적 판매액: **${soldAmount.toLocaleString()}**원` }
-        ]
-    };
+  if (guild?.iconURL()) {
+    emb.setAuthor({ name: guild.name, iconURL: guild.iconURL() });
+  }
 
-    // Footer 섹션
-    const footerSection = {
-        type: 5, // SECTION
-        components: [
-             { type: 1, content: `업데이트: **${updatedSec}초 전**\n\n\`CopyRight 2025. 최상급 부스트. All rights reserved.\`` }
-        ]
-    };
-    
-    // 전체 메시지 구조
-    return [
-        { type: 1, content: `## ${title}\n${subtitle}` }, // TEXT_DISPLAY (Title)
-        { type: 2, spacing: 3 }, // SEPARATOR
-        stockContainer,
-        { type: 2, spacing: 3 }, // SEPARATOR
-        statsSection,
-        { type: 2, spacing: 3 }, // SEPARATOR
-        footerSection
-    ];
+  return emb;
 }
 
-/**
- * 사용자 정보 카드를 JSON 구조체로 반환합니다.
- */
-function myInfoV2Components(user, stats) {
-    const avatarUrl = user.displayAvatarURL ? user.displayAvatarURL() : null;
-
-    // 통계 정보 섹션 (3열 레이아웃 모방)
-    const walletSection = { type: 5, components: [ { type: 1, content: `### 💳 보유 금액\n\`${Number(stats.wallet||0).toLocaleString()} 원\`` } ] };
-    const totalSection = { type: 5, components: [ { type: 1, content: `### 💰 누적 금액\n\`${Number(stats.total||0).toLocaleString()} 원\`` } ] };
-    const countSection = { type: 5, components: [ { type: 1, content: `### 🛒 거래 횟수\n\`${Number(stats.count||0).toLocaleString()} 회\`` } ] };
-
-    return [
-        { type: 1, content: `## ${user.displayName || user.username}님 정보` }, // TEXT_DISPLAY (Title)
-        { 
-            type: 5, // SECTION
-            components: [
-                { type: 1, content: '현재 계정의 자판기 이용 현황입니다.' }, // TEXT_DISPLAY
-                ...(avatarUrl ? [{ type: 4, url: avatarUrl, alt_text: 'Avatar' }] : []) // THUMBNAIL (있는 경우)
-            ]
-        },
-        { type: 2, spacing: 3 }, // SEPARATOR
-        { 
-            type: 6, // CONTAINER (통계 정보)
-            components: [walletSection, totalSection, countSection]
-        },
-        { type: 2, spacing: 3 }, // SEPARATOR
-        { type: 1, content: '--- **최근 거래내역 5개** ---' }
-    ];
-}
-
-
-// 기존 버튼 컴포넌트는 ActionRowBuilder로 생성 가능
 function panelButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('p_notice').setStyle(ButtonStyle.Secondary).setLabel('공지사항'),
@@ -138,7 +81,6 @@ function panelButtons() {
   );
 }
 
-// 기존 SelectMenu는 ActionRowBuilder로 생성 가능
 function txSelect(stats) {
   const items = stats.recent || [];
   const options = items.length
@@ -153,14 +95,39 @@ function txSelect(stats) {
   );
 }
 
-// 공지 V2 컴포넌트
-function noticeV2Components() {
-    return [
-        { type: 1, content: '## 📢 공지사항' },
-        { type: 1, content: '### <#1419230737244229653> 채널 필독 부탁드립니다.\n\n필독하지 않아 발생하는 불이익은 책임지지 않습니다.' },
-        { type: 2, spacing: 3 }, // SEPARATOR
-        { type: 1, content: '⚠️ 중요 정보' }
-    ];
+function noticeEmbed(guild) {
+  const emb = new EmbedBuilder()
+    .setColor(colorGray)
+    .setTitle('📢 공지사항')
+    .setDescription('<#1419230737244229653> 채널을 필독 부탁드립니다.\n\n필독하지 않아 발생하는 불이익은 책임지지 않습니다.')
+    .setFooter({ text: '⚠️ 중요 정보' });
+    
+  if (guild?.iconURL()) {
+    emb.setAuthor({ name: guild.name, iconURL: guild.iconURL() });
+  }
+  return emb;
+}
+
+/**
+ * 사용자 정보를 카드 형태로 표시하는 Embed를 생성합니다. (V2 스타일 반영)
+ */
+function myInfoEmbed(guild, user, stats) {
+  const emb = new EmbedBuilder()
+    .setColor(colorPink)
+    .setTitle(`${user.displayName || user.username}님 정보`)
+    .setDescription('현재 계정의 자판기 이용 현황입니다.')
+    .addFields(
+      // codeBlock으로 금액 정보를 회색 박스(카드)처럼 분리
+      { name: '### 💳 보유 금액', value: codeBlock(`${Number(stats.wallet||0).toLocaleString()} 원`), inline: true },
+      { name: '### 💰 누적 금액', value: codeBlock(`${Number(stats.total||0).toLocaleString()} 원`), inline: true },
+      { name: '### 🛒 거래 횟수', value: codeBlock(`${Number(stats.count||0).toLocaleString()} 회`), inline: true },
+      { name: '\u200B', value: '--- **최근 거래내역 5개** ---', inline: false }
+    );
+
+  if (user.displayAvatarURL) {
+    emb.setThumbnail(user.displayAvatarURL());
+  }
+  return emb;
 }
 
 /* ====== Slash Commands ====== */
@@ -175,9 +142,11 @@ client.once('ready', async () => {
   try {
     const app = await client.application.fetch();
     if (GUILD_ID) {
+      // 길드 명령어 동기화
       await rest.put(Routes.applicationGuildCommands(app.id, GUILD_ID), { body: cmdDefs });
       console.log('[SYNC] guild sync ok', GUILD_ID);
     } else {
+      // 글로벌 명령어 동기화
       await rest.put(Routes.applicationCommands(app.id), { body: cmdDefs });
       console.log('[SYNC] global sync ok');
     }
@@ -188,52 +157,44 @@ client.on('interactionCreate', async (i) => {
   try {
     if (i.isChatInputCommand()) {
       if (i.commandName === '재고카드') {
-        const v2_components = stockV2Components(
+        const emb = stockEmbed(
           '24시간 자동 자판기',
           '아래 원하시는 버튼을 눌러 이용해주세요',
           { '1m':624, '2m':0, '3m':0 },
           { '1m':312, '2m':0, '3m':0 },
-          411, 1200300, 19
+          411, 1200300, 19, i.guild
         );
-        // V2 컴포넌트와 버튼을 함께 전송
-        await i.reply({ components: v2_components.concat(panelButtons().toJSON()), flags: COMPONENTS_V2_FLAG, ephemeral:false });
+        // 안정적인 Embed와 ActionRow 전송
+        await i.reply({ embeds:[emb], components:[panelButtons()], ephemeral:false });
         return;
       }
       if (i.commandName === '재고패널') {
-        const v2_components1 = stockV2Components('24시간 자동 자판기', '현재 재고 현황입니다.', { '1m':624, '2m':0, '3m':0 }, { '1m':312,'2m':0,'3m':0 }, 411, 1200300, 19);
-        const v2_components2 = stockV2Components('부스트 현황(백업)', '보조 재고판', { '1m':120,'2m':32,'3m':4 }, { '1m':60,'2m':16,'3m':2 }, 157, 420000, 5);
-        
-        // 두 개의 V2 컴포넌트 세트를 합쳐 전송
-        const all_components = v2_components1.concat([{ type: 2, spacing: 5 }]).concat(v2_components2); // 구분선 추가
-        
-        await i.reply({ components: all_components.concat(panelButtons().toJSON()), flags: COMPONENTS_V2_FLAG, ephemeral:false });
+        const emb1 = stockEmbed('24시간 자동 자판기', '현재 재고 현황입니다.', { '1m':624, '2m':0, '3m':0 }, { '1m':312,'2m':0,'3m':0 }, 411, 1200300, 19, i.guild);
+        const emb2 = stockEmbed('부스트 현황(백업)', '보조 재고판', { '1m':120,'2m':32,'3m':4 }, { '1m':60,'2m':16,'3m':2 }, 157, 420000, 5, i.guild);
+        // 임베드 2개 + 버튼 1세트 전송
+        await i.reply({ embeds:[emb1, emb2], components:[panelButtons()], ephemeral:false });
         return;
       }
     }
 
-    // 버튼 인터랙션 (기존 ActionRowBuilder와 ButtonBuilder 사용)
     if (i.isButton()) {
+      // 버튼 인터랙션은 Embed로 안정적으로 처리
       try { await i.deferUpdate(); } catch {}
       const cid = i.customId;
       
       if (cid === 'p_notice') {
-        const v2_components = noticeV2Components();
-        await i.followUp({ components: v2_components, flags: COMPONENTS_V2_FLAG, ephemeral:true });
+        await i.followUp({ embeds:[noticeEmbed(i.guild)], ephemeral:true });
       } else if (cid === 'p_me') {
         const stats = getUser(i.user.id);
-        const v2_components = myInfoV2Components(i.user, stats);
-        // 내 정보 V2 컴포넌트와 SelectMenu 버튼을 함께 전송
-        await i.followUp({ components: v2_components.concat(txSelect(stats).toJSON()), flags: COMPONENTS_V2_FLAG, ephemeral:true });
+        await i.followUp({ embeds:[myInfoEmbed(i.guild, i.user, stats)], components:[txSelect(stats)], ephemeral:true });
       } else if (cid === 'p_charge') {
         pushTxn(i.user.id, 1000, '충전');
         const stats = getUser(i.user.id);
-        const v2_components = myInfoV2Components(i.user, stats);
-        await i.followUp({ content:'충전 완료!', components: v2_components.concat(txSelect(stats).toJSON()), flags: COMPONENTS_V2_FLAG, ephemeral:true });
+        await i.followUp({ content:'충전 완료!', embeds:[myInfoEmbed(i.guild, i.user, stats)], components:[txSelect(stats)], ephemeral:true });
       } else if (cid === 'p_buy') {
         pushTxn(i.user.id, -500, '구매');
         const stats = getUser(i.user.id);
-        const v2_components = myInfoV2Components(i.user, stats);
-        await i.followUp({ content:'구매 처리 완료!', components: v2_components.concat(txSelect(stats).toJSON()), flags: COMPONENTS_V2_FLAG, ephemeral:true });
+        await i.followUp({ content:'구매 처리 완료!', embeds:[myInfoEmbed(i.guild, i.user, stats)], components:[txSelect(stats)], ephemeral:true });
       }
       return;
     }
@@ -249,7 +210,6 @@ client.on('interactionCreate', async (i) => {
         const txnTime = new Date(txn.ts).toLocaleString();
         const desc = txn.amount > 0 ? '충전' : '구매';
         
-        // 거래 내역 상세 정보는 임베드로 빠르게 표시
         await i.followUp({
           embeds: [
             new EmbedBuilder()
@@ -270,12 +230,9 @@ client.on('interactionCreate', async (i) => {
       return;
     }
   } catch (e) {
-    console.error('[INT] Component V2 error', e);
-    try { 
-        if (!i.replied && !i.deferred) {
-            await i.reply({ content:'**[V2 오류]** 컴포넌트 V2 처리 중 에러가 발생했습니다. 잠시 후 다시 시도하거나, 서버 관리자에게 문의하세요.', ephemeral:true }); 
-        }
-    } catch {}
+    console.error('[INT] error', e);
+    // 명령어 타임아웃 방지 및 안정적인 오류 응답
+    try { if (!i.replied && !i.deferred) await i.reply({ content:'처리 중 예상치 못한 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.', ephemeral:true }); } catch {}
   }
 });
 
