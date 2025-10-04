@@ -4,35 +4,34 @@ from discord import app_commands, Interaction, Embed
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# .env 로드
+# ===== env =====
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 
+# ===== client =====
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# PartialEmoji 헬퍼
-def pe(emoji_id: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
-    return discord.PartialEmoji(name=name, id=emoji_id, animated=animated)
+# ===== emoji helper =====
+def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
+    return discord.PartialEmoji(name=name, id=eid, animated=animated)
 
-# 이모지(PartialEmoji)
-EMOJI_NOTICE = pe(1424003478275231916, name="emoji_5", animated=False)   # <:emoji_5:1424003478275231916>
-EMOJI_CHARGE = pe(1381244136627245066, name="charge",  animated=False)   # <:charge:1381244136627245066>
-EMOJI_INFO   = pe(1381244138355294300, name="info",    animated=False)   # <:info:1381244138355294300>
-EMOJI_BUY    = pe(1381244134680957059, name="category",animated=False)   # <:category:1381244134680957059>
+EMOJI_NOTICE = pe(1424003478275231916, name="emoji_5", animated=False)
+EMOJI_CHARGE = pe(1381244136627245066, name="charge",  animated=False)
+EMOJI_INFO   = pe(1381244138355294300, name="info",    animated=False)
+EMOJI_BUY    = pe(1381244134680957059, name="category",animated=False)
 
-# 임베드(서버명/서버프사 표시 안 함)
+# ===== embed =====
 def make_panel_embed() -> Embed:
-    colour = discord.Colour(int("ff5dd6", 16))  # 핑크
     return Embed(
         title="자동 로벅스 자판기",
         description="아래 버튼을 눌려 이용해주세요!",
-        colour=colour
+        colour=discord.Colour(int("ff5dd6", 16))
     )
 
-# 2x2 회색 버튼
+# ===== view =====
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -48,56 +47,59 @@ class PanelView(discord.ui.View):
             pass
         return False
 
-# 슬래시 명령: /버튼패널만 등록
+# ===== slash: 패널만 등록 =====
 @tree.command(name="버튼패널", description="자동 로벅스 자판기 패널을 공개로 표시합니다.")
 async def cmd_button_panel(inter: Interaction):
     await inter.response.send_message(embed=make_panel_embed(), view=PanelView(), ephemeral=False)
 
-async def remove_old_commands():
-    try:
-        # 길드 범위 우선 삭제(즉시 반영)
-        if GUILD_ID:
-            guild_obj = discord.Object(id=GUILD_ID)
-            cmds = await tree.fetch_commands(guild=guild_obj)
-            to_delete = [c for c in cmds if c.name in ("재고카드", "재고패널")]
-            for c in to_delete:
-                await tree.remove_command(c.name, guild=guild_obj)
-            if to_delete:
-                await tree.sync(guild=guild_obj)
-                print(f"[CLEAN] removed {[c.name for c in to_delete]} from guild {GUILD_ID}")
-        # 전역에 등록돼 있었던 흔적도 제거(전파 지연 가능)
-        global_cmds = await tree.fetch_commands()
-        to_delete_g = [c for c in global_cmds if c.name in ("재고카드", "재고패널")]
-        for c in to_delete_g:
-            await tree.remove_command(c.name)
-        if to_delete_g:
-            await tree.sync()
-            print(f"[CLEAN] removed global {[c.name for c in to_delete_g]}")
-    except Exception as e:
-        print("[CLEAN] error:", e)
+# ===== command cleanup =====
+TARGET_HIDE = {"재고카드", "재고패널"}  # 절대 보이면 안 되는 이름들
+KEEP_ONLY  = {"버튼패널"}              # 유지할 것
 
-async def sync_only_panel():
+async def purge_commands_everywhere():
     try:
-        # 먼저 깨끗하게 청소
-        await remove_old_commands()
-        # 패널만 등록되도록 최종 싱크
+        # 1) 길드 커맨드 가져와서 제거
+        if GUILD_ID:
+            g = discord.Object(id=GUILD_ID)
+            guild_cmds = await tree.fetch_commands(guild=g)
+            removed = []
+            for c in guild_cmds:
+                if (c.name in TARGET_HIDE) or (c.name not in KEEP_ONLY and c.name != "버튼패널"):
+                    await tree.remove_command(c.name, guild=g)
+                    removed.append(c.name)
+            if removed:
+                await tree.sync(guild=g)
+                print(f"[CLEAN] guild removed: {removed}")
+
+        # 2) 전역 커맨드도 가져와서 제거(전파 지연 가능)
+        global_cmds = await tree.fetch_commands()
+        removed_g = []
+        for c in global_cmds:
+            if c.name in TARGET_HIDE:
+                await tree.remove_command(c.name)
+                removed_g.append(c.name)
+        if removed_g:
+            await tree.sync()
+            print(f"[CLEAN] global removed: {removed_g}")
+
+        # 3) 최종: 패널만 등록 상태로 맞추기
         if GUILD_ID:
             await tree.sync(guild=discord.Object(id=GUILD_ID))
-            print(f"[SYNC] guild {GUILD_ID} sync ok (panel only)")
+            print(f"[SYNC] guild {GUILD_ID} → panel-only")
         else:
             await tree.sync()
-            print("[SYNC] global sync ok (panel only, may delay)")
+            print("[SYNC] global → panel-only (may delay)")
     except Exception as e:
-        print("[SYNC] error:", e)
+        print("[CLEAN][ERR]", e)
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    await sync_only_panel()
+    await purge_commands_everywhere()
 
 def main():
     if not TOKEN or len(TOKEN) < 10:
-        raise RuntimeError("DISCORD_TOKEN 비어있거나 형식 이상")
+        raise RuntimeError("DISCORD_TOKEN 비정상")
     bot.run(TOKEN)
 
 if __name__ == "__main__":
