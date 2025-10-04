@@ -9,14 +9,27 @@ GUILD = discord.Object(id=GUILD_ID)
 INTENTS = discord.Intents.default()
 GRAY = discord.Color.from_str("#808080")
 
+APP_ID_ENV = os.getenv("DISCORD_APP_ID", "").strip()
+TOKEN_ENV = os.getenv("DISCORD_TOKEN", "").strip()
+
 # ===== Bot: application_id 필수 =====
+def parse_app_id(x: str) -> int:
+    try:
+        return int(x)
+    except:
+        return 0
+
 bot = commands.Bot(
     command_prefix="!",
     intents=INTENTS,
-    application_id=int(os.getenv("DISCORD_APP_ID", "0"))
+    application_id=parse_app_id(APP_ID_ENV)
 )
 
-# ===== DB (아주 단순 JSON) =====
+# ===== 콘솔 로그 도움 함수 =====
+def log(msg: str):
+    print(msg, flush=True)
+
+# ===== DB =====
 DB_PATH = "stock_data.json"
 _db_lock = threading.Lock()
 
@@ -46,7 +59,7 @@ def slot(gid: int):
 
 def now(): return int(time.time())
 
-# ===== 테스트용 인코딩(운영 땐 교체) =====
+# ===== 테스트용 인코딩 =====
 def enc(s: str) -> str: return base64.b64encode((s or "").encode()).decode()
 def dec(s: str) -> str:
     try: return base64.b64decode((s or "").encode()).decode()
@@ -55,6 +68,9 @@ def dec(s: str) -> str:
 # ===== 권한 =====
 def is_admin():
     async def pred(inter: discord.Interaction):
+        if not inter.guild:
+            await inter.response.send_message("길드에서만 사용 가능해.", ephemeral=True)
+            return False
         if inter.user.guild_permissions.manage_guild:
             return True
         await inter.response.send_message("관리자만 사용 가능해.", ephemeral=True)
@@ -147,7 +163,6 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             await page.wait_for_timeout(1200)
             html2 = await page.content()
 
-            # 우선 패턴
             bal = None
             for pat in [r"(내\s*잔액|balance|robux)\D+([0-9][0-9,\.]*)", r"([0-9][0-9,\.]*)\s*(robux|rbx)"]:
                 m = re.search(pat, html2, re.IGNORECASE)
@@ -176,7 +191,7 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             with contextlib.suppress(Exception): await context.close()
             with contextlib.suppress(Exception): await browser.close()
 
-# ===== Cog: 명령어 2개 =====
+# ===== Cog: /재고표시, /실시간_재고_설정 =====
 class StockCog(commands.Cog):
     def __init__(self, bot_: commands.Bot):
         self.bot = bot_
@@ -246,29 +261,37 @@ class StockCog(commands.Cog):
         else:
             await it.followup.send(f"설정 실패: {reason or '확인 불가'}. 잠시 후 다시 시도해줘.", ephemeral=True)
 
-# ===== 싱크: setup_hook에서 길드 한정 1회만 =====
+# ===== 싱크: setup_hook에서 길드 한정 1회만 + 로그 상세 =====
 @bot.event
 async def setup_hook():
+    log(f"[boot] APP_ID={APP_ID_ENV or 'missing'}, GUILD_ID={GUILD_ID}")
     if not bot.application_id:
-        print("DISCORD_APP_ID 누락 또는 잘못됨"); return
+        log("[error] DISCORD_APP_ID 누락/비정상. 환경변수 확인해줘.")
+        return
     await bot.add_cog(StockCog(bot))
     try:
-        await bot.tree.sync(guild=GUILD)
-        print("길드 싱크 완료")
+        log(f"[setup_hook] 길드 싱크 시작: {GUILD_ID}")
+        cmds = await bot.tree.sync(guild=GUILD)
+        names = ", ".join(f"/{c.name}" for c in cmds)
+        log(f"[setup_hook] 길드 싱크 완료: {len(cmds)}개 등록 → {names}")
     except Exception as e:
-        print("명령어 싱크 실패 :", e)
+        log(f"[error] 명령어 싱크 실패: {e}")
 
 @bot.event
 async def on_ready():
-    print(f"로그인: {bot.user} 준비완료")
+    log(f"[ready] 로그인: {bot.user} 준비완료")
+    guild = bot.get_guild(GUILD_ID)
+    if guild:
+        log(f"[ready] 현재 길드 OK: {guild.name}({guild.id}) — 슬래시 명령 사용 가능")
+    else:
+        log(f"[warn] 봇이 길드({GUILD_ID})에 없는 것 같아. 초대 링크/스코프 확인해줘.")
 
 # ===== 실행 =====
 async def main():
-    token = os.getenv("DISCORD_TOKEN", "")
-    if not token:
-        print("DISCORD_TOKEN 누락"); return
+    if not TOKEN_ENV:
+        log("[error] DISCORD_TOKEN 누락"); return
     async with bot:
-        await bot.start(token)
+        await bot.start(TOKEN_ENV)
 
 if __name__ == "__main__":
     asyncio.run(main())
