@@ -1,9 +1,4 @@
-import os
-import io
-import json
-import time
-import re
-import asyncio
+import os, io, json, time, re, asyncio
 from typing import Dict, Any, List, Optional, Tuple
 
 import discord
@@ -12,16 +7,13 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
-# ===== ENV =====
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# ===== BOT =====
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ===== DB =====
 DATA_PATH = "data.json"
 
 def _load_db() -> Dict[str, Any]:
@@ -47,19 +39,6 @@ def _ensure_user(uid: int) -> Dict[str, Any]:
         _save_db(db)
     return _load_db()["users"][str(uid)]
 
-def add_tx(uid: int, amount: int, desc: str, ttype: str = "other"):
-    db = _load_db()
-    u = db["users"].setdefault(str(uid), _ensure_user(uid))
-    u["wallet"] = max(0, int(u.get("wallet", 0) + amount))
-    if amount > 0:
-        u["total"] = int(u.get("total", 0) + amount)
-    u["count"] = int(u.get("count", 0) + 1)
-    rec = u.get("recent", [])
-    rec.insert(0, {"desc": desc, "amount": int(amount), "ts": int(time.time()), "type": ttype})
-    u["recent"] = rec[:5]
-    db["users"][str(uid)] = u
-    _save_db(db)
-
 def set_login_info(uid: int, cookie: Optional[str], username: Optional[str], password: Optional[str]):
     db = _load_db()
     u = _ensure_user(uid)
@@ -76,13 +55,11 @@ def set_login_result(uid: int, robux: int, username_hint: Optional[str]):
     u = _ensure_user(uid)
     r = u["roblox"]
     r["last_robux"] = int(robux)
-    if username_hint:
-        r["last_username"] = username_hint
+    if username_hint: r["last_username"] = username_hint
     u["roblox"] = r
     db["users"][str(uid)] = u
     _save_db(db)
 
-# ===== PartialEmoji =====
 def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
     return discord.PartialEmoji(name=name, id=eid, animated=animated)
 
@@ -91,7 +68,6 @@ EMOJI_CHARGE = pe(1381244136627245066, name="charge")
 EMOJI_INFO   = pe(1381244138355294300, name="info")
 EMOJI_BUY    = pe(1381244134680957059, name="category")
 
-# ===== Roblox =====
 ROBLOX_HOME_URLS = ["https://www.roblox.com/ko/home", "https://www.roblox.com/home"]
 ROBLOX_LOGIN_URLS= ["https://www.roblox.com/ko/Login", "https://www.roblox.com/Login"]
 ROBLOX_TX_URL    = "https://www.roblox.com/ko/transactions"
@@ -103,13 +79,7 @@ BADGE_SELECTORS = [
     "span[title*='Robux']",
     "span[title*='로벅스']",
 ]
-
-BALANCE_LABEL_SELECTORS = [
-    "text=내 잔액",
-    "text=My Balance",
-    "text=Balance",
-]
-
+BALANCE_LABEL_SELECTORS = ["text=내 잔액", "text=My Balance", "text=Balance"]
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
 def _to_int(text: str) -> Optional[int]:
@@ -215,7 +185,6 @@ async def screenshot_bytes(page: Page) -> Optional[bytes]:
     except Exception:
         return None
 
-# ----- 로그인 검증 -----
 async def cookie_session_login(ctx: BrowserContext, cookie: str) -> Tuple[bool, Optional[str]]:
     try:
         await ctx.add_cookies([{"name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"}])
@@ -250,22 +219,16 @@ async def robux_with_cookie(cookie: str) -> Tuple[bool, Optional[int], Optional[
 
             page = await ctx.new_page()
             v_tx, v_home, shot = None, None, None
-
             if await _goto(page, ROBLOX_TX_URL):
                 v_tx = await parse_transactions_balance(page)
                 shot = await screenshot_bytes(page)
-
             if not isinstance(v_tx, int):
                 if await _goto(page, ROBLOX_HOME_URLS[0]) or await _goto(page, ROBLOX_HOME_URLS[1]):
-                    await _wait_nav_ready(page)
-                    v_home = await parse_home_badge(page)
-
+                    await _wait_nav_ready(page); v_home = await parse_home_badge(page)
             v_final = v_tx if isinstance(v_tx, int) else v_home
             src = "transactions" if isinstance(v_tx, int) else ("home" if isinstance(v_home, int) else None)
-
             await page.close(); await browser.close()
-            if isinstance(v_final, int):
-                return True, v_final, uname, src, shot
+            if isinstance(v_final, int): return True, v_final, uname, src, shot
             return False, None, uname, "로벅스 파싱 실패", shot
     except Exception:
         return False, None, None, "예외", None
@@ -277,8 +240,8 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
             if not browser: return False, None, "브라우저 오류", None
             ctx = await new_context(browser)
             if not ctx: await browser.close(); return False, None, "컨텍스트 오류", None
-
             page = await ctx.new_page()
+
             if not (await _goto(page, ROBLOX_LOGIN_URLS[0]) or await _goto(page, ROBLOX_LOGIN_URLS[1])):
                 await browser.close(); return False, None, "로그인 페이지 이동 실패", None
 
@@ -291,44 +254,40 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
             except Exception:
                 await browser.close(); return False, None, "로그인 입력/전송 실패", None
 
-            # 에러 배너/폼 에러 문구 감지
+            # 에러 배너/폼 에러/토스트 감지(ko/en 확대)
             await asyncio.sleep(1.2)
             html = await page.content()
             error_keys = [
-                "비밀번호가", "잘못", "일치하지 않", "로그인 실패", "오류", "재시도",
-                "incorrect", "wrong password", "Try again", "blocked",
-                "Two-step", "2단계", "Authenticator", "device verification", "Verify your device"
+                "비밀번호", "잘못", "일치하지 않", "계정이 잠김", "로그인 실패", "오류", "재시도", "다시 시도",
+                "incorrect", "wrong password", "invalid", "try again", "blocked",
+                "Two-step", "2단계", "Authenticator", "device verification", "Verify your device", "captcha"
             ]
             if any(k.lower() in html.lower() for k in error_keys):
-                await browser.close(); return False, None, "자격증명 오류/2FA/장치인증", None
+                await browser.close(); return False, None, "자격증명 오류/보안인증", None
 
             # 거래 페이지에서 잔액을 얻어야 ‘성공’
             v_tx, v_home, shot = None, None, None
             if await _goto(page, ROBLOX_TX_URL):
                 v_tx = await parse_transactions_balance(page)
                 shot = await screenshot_bytes(page)
+            # 보조: 홈
             if not isinstance(v_tx, int):
                 if await _goto(page, ROBLOX_HOME_URLS[0]) or await _goto(page, ROBLOX_HOME_URLS[1]):
-                    await _wait_nav_ready(page)
-                    v_home = await parse_home_badge(page)
+                    await _wait_nav_ready(page); v_home = await parse_home_badge(page)
 
             v_final = v_tx if isinstance(v_tx, int) else v_home
-
             await page.close(); await browser.close()
-            if isinstance(v_final, int):
-                return True, v_final, "transactions" if isinstance(v_tx, int) else "home", shot
+            if isinstance(v_final, int): return True, v_final, "transactions" if isinstance(v_tx, int) else "home", shot
             return False, None, "자격증명 오류/2FA/장치인증 또는 파싱 실패", shot
     except Exception:
         return False, None, "예외", None
 
-# ===== COLORS =====
 PINK   = discord.Colour(int("ff5dd6", 16))
 GRAY   = discord.Colour.dark_grey()
 ORANGE = discord.Colour.orange()
 GREEN  = discord.Colour.green()
 RED    = discord.Colour.red()
 
-# ===== 임베드/뷰 =====
 def embed_panel() -> Embed:
     return Embed(title="자동 로벅스 자판기", description="아래 버튼을 눌려 이용해주세요!", colour=PINK)
 
@@ -366,7 +325,6 @@ def make_tx_select(stats: Dict[str, Any]) -> discord.ui.View:
             except Exception: pass
     v = discord.ui.View(timeout=None); v.add_item(TxSelect()); return v
 
-# 버튼 응답 경합 방지용 락 + 폴백
 button_lock = asyncio.Lock()
 
 class PanelView(discord.ui.View):
@@ -390,6 +348,8 @@ class PanelView(discord.ui.View):
                     stats = _ensure_user(uid)
                     await interaction.followup.send(embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
                 elif cid == "panel_charge":
+                    # 예시 로직: 1000 증가
+                    db = _load_db(); _ = db
                     add_tx(uid, 1000, "충전", "charge")
                     stats = _ensure_user(uid)
                     await interaction.followup.send(content="충전 완료!", embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
@@ -402,12 +362,10 @@ class PanelView(discord.ui.View):
                 except Exception: pass
         return False
 
-# ===== /버튼패널 =====
 @tree.command(name="버튼패널", description="자동 로벅스 자판기 패널을 공개로 표시합니다.")
 async def 버튼패널(inter: Interaction):
     await inter.response.send_message(embed=embed_panel(), view=PanelView(), ephemeral=False)
 
-# ===== /재고 =====
 class StockLoginModal(discord.ui.Modal, title="로그인"):
     cookie = discord.ui.TextInput(label="cookie(.ROBLOSECURITY)", required=False, style=discord.TextStyle.short, max_length=4000, placeholder="쿠키값(선택)")
     uid    = discord.ui.TextInput(label="아이디", required=False, style=discord.TextStyle.short, max_length=100)
@@ -418,7 +376,7 @@ class StockLoginModal(discord.ui.Modal, title="로그인"):
         self.inter = inter
 
     async def on_submit(self, interaction: Interaction):
-        loading = Embed(title="로그인 중..", description="로그인 중입니다 조금만 기다려주세요", colour=ORANGE)
+        loading = Embed(title="로그인 중..", description="로그인 중입니다 조금만 기다려주세요", colour=discord.Colour.orange())
         await interaction.response.send_message(embed=loading, ephemeral=True)
         _ = await interaction.original_response()
 
@@ -428,7 +386,7 @@ class StockLoginModal(discord.ui.Modal, title="로그인"):
         pw_val    = (self.pw.value or "").strip()
 
         if not cookie_val and not (id_val and pw_val):
-            fail = Embed(title="로그인 실패", description="쿠키나 아이디/비밀번호 중 하나 이상을 입력해줘.", colour=RED)
+            fail = Embed(title="로그인 실패", description="쿠키나 아이디/비밀번호 중 하나 이상을 입력해줘.", colour=discord.Colour.red())
             await interaction.edit_original_response(embed=fail)
             return
 
@@ -452,7 +410,7 @@ class StockLoginModal(discord.ui.Modal, title="로그인"):
             succ = Embed(
                 title="로그인 성공",
                 description=f"{(name_hint or id_val or '알 수 없음')}계정에 로그인 성공 되었습니다\n로벅스 수량 {robux:,}\n쿠키값 저장 완료되었습니다",
-                colour=GREEN
+                colour=discord.Colour.green()
             )
             files = []
             if shot:
@@ -460,14 +418,13 @@ class StockLoginModal(discord.ui.Modal, title="로그인"):
                 succ.set_image(url="attachment://robux_balance.png")
             await interaction.edit_original_response(embed=succ, attachments=files)
         else:
-            fail = Embed(title="로그인 실패", description="자격증명 오류/2FA/장치인증 또는 로벅스 파싱 실패", colour=RED)
+            fail = Embed(title="로그인 실패", description="자격증명 오류/2FA/장치인증 또는 로벅스 파싱 실패", colour=discord.Colour.red())
             await interaction.edit_original_response(embed=fail)
 
 @tree.command(name="재고", description="쿠키 또는 계정으로 로그인하고 로벅스 수량을 확인합니다.")
 async def 재고(inter: Interaction):
     await inter.response.send_modal(StockLoginModal(inter))
 
-# ===== READY =====
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
