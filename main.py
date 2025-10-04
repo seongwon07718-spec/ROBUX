@@ -97,8 +97,6 @@ EMOJI_INFO   = pe(1381244138355294300, name="info")
 EMOJI_BUY    = pe(1381244134680957059, name="category")
 
 # ========== Roblox 파싱/로그인 (omitted for brevity, assume content is unchanged) ==========
-# ... [ROBLOX_HOME_URLS to robux_with_login functions remain here] ...
-
 ROBLOX_HOME_URLS = ["https://www.roblox.com/ko/home", "https://www.roblox.com/home"]
 ROBLOX_LOGIN_URLS= ["https://www.roblox.com/ko/Login", "https://www.roblox.com/Login"]
 ROBLOX_TX_URL    = "https://www.roblox.com/ko/transactions"
@@ -380,13 +378,9 @@ class PanelView(discord.ui.View):
 
     async def interaction_check(self, interaction: Interaction) -> bool:
         async with button_lock:
-            # We explicitly confirm the imports and function access here
-            # The functions add_tx and _ensure_user are defined globally above this class
-            # and should be accessible.
             try:
                 await interaction.response.defer_update()
             except Exception:
-                # Timeouts or already responded issues are caught here
                 pass
             cid = (interaction.data or {}).get("custom_id")
             uid = interaction.user.id
@@ -394,25 +388,22 @@ class PanelView(discord.ui.View):
                 if cid == "panel_notice":
                     await interaction.followup.send(embed=embed_notice(), ephemeral=True)
                 elif cid == "panel_info":
-                    # Ensure the user exists before getting stats
-                    stats = _ensure_user(uid) 
+                    stats = _ensure_user(uid)
                     await interaction.followup.send(embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
                 elif cid == "panel_charge":
-                    # Call the globally defined function
                     add_tx(uid, 1000, "충전", "charge")
                     stats = _ensure_user(uid)
                     await interaction.followup.send(content="충전 완료!", embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
                 elif cid == "panel_buy":
-                    # Call the globally defined function
                     add_tx(uid, -500, "구매", "buy")
                     stats = _ensure_user(uid)
                     await interaction.followup.send(content="구매 처리 완료!", embed=embed_myinfo(interaction.user, stats), view=make_tx_select(stats), ephemeral=True)
             except discord.NotFound:
-                # Unknown Webhook 폴백 (If interaction token is invalid/expired)
+                # Unknown Webhook 폴백
                 try: await interaction.edit_original_response(content="요청 처리 완료!")
                 except Exception: pass
             except NameError as e:
-                # A fallback error message for NameError, though it should not happen now
+                # Fallback in case the NameError persists unexpectedly
                 print(f"NameError caught in PanelView: {e}")
                 try: 
                     await interaction.followup.send(content=f"❌ 오류 발생: 함수를 찾을 수 없습니다. 봇 코드를 확인해주세요. ({e})", ephemeral=True)
