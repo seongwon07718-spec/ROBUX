@@ -1,383 +1,371 @@
-import os, json, threading, time, base64, sys, asyncio, re, contextlib
+import os
+import json
+import re
+import shutil
+import asyncio
+import datetime as dt
+from typing import Any, Dict, Optional
+
 import discord
-from discord import app_commands
+from discord import app_commands, Interaction, Embed, Colour
 from discord.ext import commands
 
-# ===== 강제 디버그 로그(경고/정보 보이게) =====
-import logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("robux-stock")
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
-def LOG(msg): print(msg, flush=True)
+# ===================== 설정 =====================
+DATA_PATH = "data.json"
+TOKEN = os.getenv("DISCORD_TOKEN")
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 
-# ===== 고정 환경 =====
-# GUILD_ID는 환경 변수에서 가져오는 것이 더 안전할 수 있지만, 일단 코드를 유지합니다.
-GUILD_ID = 1419200424636055592
-INTENTS = discord.Intents.default()
-INTENTS.guilds = True  # 길드 목록 보이게
-GRAY = discord.Color.from_str("#808080")
+ROBLOX_LOGIN_URLS = [
+    "https://www.roblox.com/ko/Login",
+    "https://www.roblox.com/Login",
+]
+ROBLOX_TX_URLS = [
+    "https://www.roblox.com/ko/transactions",
+    "https://www.roblox.com/transactions",
+]
 
-APP_ID = os.getenv("DISCORD_APP_ID", "").strip()
-TOKEN  = os.getenv("DISCORD_TOKEN", "").strip()
+BALANCE_CACHE_TTL_SEC = 30  # 재고 조회 캐시 TTL
+PAGE_TIMEOUT = 15000
 
-# ===== Bot: application_id 필수 =====
-def _as_int(x: str) -> int:
-    try: return int(x)
-    except: return 0
+# ===================== 유틸(파일/저장) =====================
+def _default_data() -> Dict[str, Any]:
+    return {
+        "users": {},     # { discordUserId: { "roblox": { "username": "...", "masked_cookie": "...", "cookie_raw": "...", "cookie_set_at": "ISO8601" } } }
+        "stats": {"total_sold": 0},
+        "cache": {"balances": {}},  # { discordUserId: { "value": int, "ts": "ISO8601" } }
+        "meta": {"version": 1}
+    }
 
-# application_id를 명시적으로 전달
-bot = commands.Bot(
-    command_prefix="!",
-    intents=INTENTS,
-    application_id=_as_int(APP_ID)
-)
+def _atomic_write(path: str, data: Dict[str, Any]):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    shutil.move(tmp, path)
 
-# ===== DB =====
-DB_PATH = "stock_data.json"
-_db_lock = threading.Lock()
-
-def load_db():
-    if not os.path.exists(DB_PATH):
-        return {"guilds": {}}
+def load_data() -> Dict[str, Any]:
+    if not os.path.exists(DATA_PATH):
+        data = _default_data()
+        _atomic_write(DATA_PATH, data)
+        return data
     try:
-        with open(DB_PATH, "r", encoding="utf-8") as f:
+        with open(DATA_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        LOG(f"[error] DB 로드 실패: {e}")
-        return {"guilds": {}}
+    except Exception:
+        data = _default_data()
+        _atomic_write(DATA_PATH, data)
+        return data
 
-def save_db():
+def save_data(data: Dict[str, Any]):
+    _atomic_write(DATA_PATH, data)
+
+def mask_cookie(cookie: str) -> str:
+    if not cookie or len(cookie) < 7:
+        return "***"
+    return cookie[:3] + "***" + cookie[-3:]
+
+def set_user_cookie(user_id: int, cookie: str, username_hint: Optional[str] = None):
+    data = load_data()
+    u = data["users"].get(str(user_id), {})
+    roblox = u.get("roblox", {})
+    roblox["cookie_raw"] = cookie  # 주의: 요구사항상 단일 파일에 저장. 실제 서비스라면 암호화 필요
+    roblox["masked_cookie"] = mask_cookie(cookie)
+    roblox["cookie_set_at"] = dt.datetime.utcnow().isoformat()
+    if username_hint:
+        roblox["username"] = username_hint
+    u["roblox"] = roblox
+    data["users"][str(user_id)] = u
+    save_data(data)
+
+def set_user_login(user_id: int, username: str, password: str):
+    data = load_data()
+    u = data["users"].get(str(user_id), {})
+    roblox = u.get("roblox", {})
+    roblox["username"] = username
+    roblox["password"] = password  # 요구사항상 data.json 단일 저장. 실제 서비스라면 비권장(암호화 필요)
+    u["roblox"] = roblox
+    data["users"][str(user_id)] = u
+    save_data(data)
+
+def get_user_info(user_id: int) -> Dict[str, Any]:
+    data = load_data()
+    return data["users"].get(str(user_id), {}).get("roblox", {})
+
+def set_total_sold(value: int):
+    data = load_data()
+    data["stats"]["total_sold"] = int(value)
+    save_data(data)
+
+def get_total_sold() -> int:
+    data = load_data()
+    return int(data.get("stats", {}).get("total_sold", 0))
+
+def set_cached_balance(user_id: int, value: int):
+    data = load_data()
+    data["cache"].setdefault("balances", {})
+    data["cache"]["balances"][str(user_id)] = {"value": int(value), "ts": dt.datetime.utcnow().isoformat()}
+    save_data(data)
+
+def get_cached_balance(user_id: int) -> Optional[int]:
+    data = load_data()
+    bal = data.get("cache", {}).get("balances", {}).get(str(user_id))
+    if not bal:
+        return None
     try:
-        with open(DB_PATH, "w", encoding="utf-8") as f:
-            json.dump(DB, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        LOG(f"[error] DB 저장 실패: {e}")
+        ts = dt.datetime.fromisoformat(bal["ts"])
+    except Exception:
+        return None
+    if (dt.datetime.utcnow() - ts).total_seconds() <= BALANCE_CACHE_TTL_SEC:
+        return int(bal["value"])
+    return None
 
-DB = load_db()
+# ===================== Roblox 조회(Playwright) =====================
+NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
-def slot(gid: int):
-    # DB 접근 시 lock 사용을 보장하는 것이 더 안전함 (여기서는 함수 밖에서 lock을 사용)
-    # 다만, `slot` 함수 자체는 스레드 안전하게 설계
-    DB["guilds"].setdefault(str(gid), {
-        "inventory": 0,
-        "totalSold": 0,
-        "lastMessage": {"channelId": 0, "messageId": 0},
-        "account": {"idEnc":"", "pwEnc":"", "cookies":[], "cookiesAt":0, "optionsApplied": True}
-    })
-    return DB["guilds"][str(gid)]
+async def _extract_numbers_from_page(page: Page) -> Optional[int]:
+    content = await page.content()
+    nums = []
+    for m in NUM_RE.finditer(content):
+        raw = m.group(1)
+        val = int(re.sub(r"[,\.\s]", "", raw))
+        nums.append(val)
+    if not nums:
+        return None
+    return max(nums)  # 가장 그럴듯한 큰 숫자 사용(잔액 배지/표 상단이 대개 최대)
 
-def now(): return int(time.time())
-
-# ===== 테스트용 인코딩 =====
-def enc(s: str) -> str: return base64.b64encode((s or "").encode()).decode()
-def dec(s: str) -> str:
-    try: return base64.b64decode((s or "").encode()).decode()
-    except: return ""
-
-# ===== 권한 =====
-def is_admin():
-    async def pred(inter: discord.Interaction):
-        if not inter.guild:
-            await inter.response.send_message("길드에서만 사용 가능해.", ephemeral=True); return False
-        # 관리자 권한 확인 (manage_guild는 서버 관리 권한 중 하나)
-        if inter.user.guild_permissions.administrator or inter.user.guild_permissions.manage_guild:
-            return True
-        await inter.response.send_message("관리자만 사용 가능해. (서버 관리 권한 필요)", ephemeral=True); return False
-    return app_commands.check(pred)
-
-# ===== 임베드 =====
-def build_stock_embed(inv: int, sold: int) -> discord.Embed:
-    desc = (
-        "**로벅스 수량**\n"
-        f"`{inv:0,}`로벅스\n" # 콤마 포맷 추가
-        "——————————\n"
-        "**총 판매량**\n"
-        f"`{sold:0,}`로벅스\n" # 콤마 포맷 추가
-        "——————————\n"
-        "[로벅스 구매 바로가기](https://discord.com/channels/1419200424636055592/1419235238512427083)"
-    )
-    return discord.Embed(title="실시간 로벅스 재고", description=desc, color=GRAY)
-
-# ===== Playwright 준비 =====
-PLAYWRIGHT_AVAILABLE = False
-try:
-    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
-    PLAYWRIGHT_AVAILABLE = True
-except Exception as e:
-    LOG(f"[warn] Playwright import 실패. 실시간 잔액 확인 기능을 사용할 수 없습니다: {e}")
-    LOG("Playwright를 설치하려면 다음 명령어를 사용하세요: pip install playwright && playwright install chromium")
-
-# 일부 환경 child watcher 방어
-try:
-    if sys.platform != "win32" and hasattr(asyncio, "get_child_watcher"):
-        try: asyncio.get_child_watcher()
-        except NotImplementedError:
-            from asyncio import SafeChildWatcher, set_child_watcher
-            set_child_watcher(SafeChildWatcher())
-except Exception as e:
-    LOG(f"[warn] child_watcher 설정 스킵: {e}")
-
-# ===== 로블록스 URL/셀렉터 =====
-LOGIN_URL = "https://www.roblox.com/vi/Login" # vi는 아마도 베트남어? ko로 통일하는 것이 안정적일 수 있음.
-TX_URL    = "https://www.roblox.com/ko/transactions" # ko로 통일
-
-SEL_ID      = "input#login-username, input[name='username'], input[type='text']"
-SEL_PW      = "input#login-password, input[name='password'], input[type='password']"
-SEL_LOGIN   = "button#login-button, button[type='submit'], button:has-text('로그인'), button:has-text('Đăng nhập'), button:has-text('Log In')" # Log In 추가
-
-RE_BAL = re.compile(r"([0-9][0-9,\.]*)")
-LAUNCH_KW = dict(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]) # --disable-gpu 추가
-
-async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, int, str]:
-    if not PLAYWRIGHT_AVAILABLE:
-        return False, 0, "자동화 모듈(Playwright) 미설치"
-    ID = dec(enc_id); PW = dec(enc_pw)
-    if not ID or not PW:
-        return False, 0, "계정 정보 오류"
-
-    from playwright.async_api import async_playwright
-
-    async with async_playwright() as pw:
-        # chromium 대신 firefox나 webkit을 시도해볼 수도 있음
-        try:
-            browser = await pw.chromium.launch(**LAUNCH_KW)
-        except Exception as e:
-            # Playwright 설치 관련 오류가 있을 경우를 대비
-            return False, 0, f"브라우저 실행 실패. Playwright 재설치 필요: {str(e)[:120]}"
-
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36"
-        )
+async def _open_with_cookie(context: BrowserContext, cookie_raw: str) -> Optional[int]:
+    # Roblox 도메인에 보안 쿠키 주입 → 잔액 페이지에서 숫자 파싱
+    try:
+        # Set cookie
+        await context.add_cookies([{
+            "name": ".ROBLOSECURITY",
+            "value": cookie_raw,
+            "domain": ".roblox.com",
+            "path": "/",
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "Lax",
+        }])
         page = await context.new_page()
+        # 바로 거래/잔액 페이지로
+        for url in ROBLOX_TX_URLS:
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+                break
+            except Exception:
+                continue
+        # 간단 배지/텍스트에서도 숫자 스캔
+        balance = await _extract_numbers_from_page(page)
+        await page.close()
+        return balance
+    except Exception:
+        return None
+
+async def _login_with_idpw(context: BrowserContext, username: str, password: str) -> Dict[str, Any]:
+    # 반환: {"ok": bool, "balance": Optional[int], "cookie": Optional[str], "username": Optional[str]}
+    result = {"ok": False, "balance": None, "cookie": None, "username": None}
+    page = await context.new_page()
+    # 로그인 페이지 시도
+    for url in ROBLOX_LOGIN_URLS:
         try:
-            # 1. 로그인 시도
-            await page.goto(LOGIN_URL, timeout=30000)
-            await page.wait_for_timeout(1000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+            break
+        except Exception:
+            continue
 
-            id_el = await page.query_selector(SEL_ID)
-            if not id_el: 
-                # fallback 로직 제거하고 명확하게
-                return False, 0, "ID 입력칸 찾기 실패"
-            await id_el.fill(ID)
+    # 입력 필드 후보
+    user_sel = "input[name='username'], input#login-username, input[type='text']"
+    pass_sel = "input[name='password'], input#login-password, input[type='password']"
 
-            pw_el = await page.query_selector(SEL_PW)
-            if not pw_el: 
-                return False, 0, "PW 입력칸 찾기 실패"
-            await pw_el.fill(PW)
+    try:
+        await page.wait_for_selector(user_sel, timeout=PAGE_TIMEOUT)
+        await page.fill(user_sel, username)
+        await page.wait_for_selector(pass_sel, timeout=PAGE_TIMEOUT)
+        await page.fill(pass_sel, password)
+        login_btn = "button[type='submit'], button[aria-label], button:has-text('로그인'), button:has-text('Log In')"
+        await page.click(login_btn)
+    except Exception:
+        await page.close()
+    else:
+        # 대기
+        try:
+            await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT)
+        except Exception:
+            pass
 
-            btn = await page.query_selector(SEL_LOGIN)
-            if not btn: 
-                return False, 0, "로그인 버튼 찾기 실패"
-            await btn.click()
-
-            await page.wait_for_timeout(3000) # 로그인 후 로딩 대기 시간 증가
-            
-            # 보안 인증 확인
-            html = await page.content()
-            if any(k in html.lower() for k in ["hcaptcha","recaptcha","two-step","mfa","verify","login verification"]):
-                return False, 0, "보안 인증 발생(캡차/2FA/이메일 인증 등)"
-
-            # 2. 거래 내역 페이지로 이동 및 잔액 파싱
-            await page.goto(TX_URL, timeout=30000)
-            await page.wait_for_timeout(3000) # 페이지 로딩 대기 시간 증가
-            html2 = await page.content()
-
-            # 잔액 파싱 로직 강화
-            bal = None
-            for pat in [
-                r"(내\s*잔액|balance|robux)\D+([0-9][0-9,\.]*)", 
-                r"([0-9][0-9,\.]*)\s*(robux|rbx)",
-                r'data-amount="([0-9]+)"' # HTML 속성에서 잔액을 직접 가져오는 패턴
-            ]:
-                m = re.search(pat, html2, re.IGNORECASE)
-                if m:
-                    # 그룹 1 또는 2에서 숫자 추출
-                    cand = m.group(1) if (m.lastindex < 2 and m.group(1)) or m.group(1) not in ["robux", "rbx"] else m.group(m.lastindex)
-                    cand = cand.replace(",", "").replace(".", "")
-                    if cand.isdigit():
-                        bal = int(cand); break
-            
-            # 로벅스 잔액 엘리먼트 텍스트 직접 찾기 시도 (예시 셀렉터: 'div[class*="robux-amount"]')
-            # 이 부분은 로블록스 HTML 구조에 의존하므로, 위 정규식 파싱이 실패할 경우를 대비하여 유지
-            if bal is None:
-                 # 모든 숫자를 추출하여 합리적인 로벅스 잔액으로 추정
-                nums = [n.replace(",", "").replace(".", "") for n in re.findall(RE_BAL, html2)]
-                nums = [n for n in nums if n.isdigit()]
-                cands = [int(n) for n in nums if 0 <= int(n) <= 100_000_000]
-                if cands: bal = max(cands) # 가장 큰 숫자를 잔액으로 추정
-                
-            if bal is None:
-                return False, 0, "잔액 파싱 실패 (로블록스 페이지 구조 변경 가능성)"
-            
-            return True, int(bal), ""
-        
-        except PwTimeout:
-            return False, 0, "로블록스 응답 지연 (Timeout)"
-        except Exception as e:
-            return False, 0, f"자동화 예외: {type(e).__name__} - {str(e)[:120]}"
+        # 로그인 성공 가정 후 거래 페이지 진입
+        try:
+            for url in ROBLOX_TX_URLS:
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+                    break
+                except Exception:
+                    continue
+            # 잔액 스캔
+            balance = await _extract_numbers_from_page(page)
+            result["balance"] = balance
+            # 쿠키 획득 시도
+            cookies = await context.cookies()
+            cookie_val = None
+            for c in cookies:
+                if c.get("name") == ".ROBLOSECURITY":
+                    cookie_val = c.get("value")
+                    break
+            if cookie_val:
+                result["cookie"] = cookie_val
+            # 유저명 힌트(상단 프로필 텍스트 등)
+            try:
+                # 간단히 타이틀이나 상단 텍스트에서 아무 영숫자 핸들 추정
+                title = await page.title()
+                if title:
+                    m = re.search(r"[A-Za-z0-9_]{3,20}", title)
+                    if m:
+                        result["username"] = m.group(0)
+            except Exception:
+                pass
+            result["ok"] = True if balance is not None else False
         finally:
-            with contextlib.suppress(Exception): await context.close()
-            with contextlib.suppress(Exception): await browser.close()
+            await page.close()
 
-# ===== Cog: /재고표시, /실시간_재고_설정 =====
-class StockCog(commands.Cog):
-    def __init__(self, bot_: commands.Bot):
-        self.bot = bot_
+    return result
 
-    @app_commands.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
-    async def show_stock(self, it: discord.Interaction):
-        if not it.guild:
-            await it.response.send_message("길드에서만 사용 가능해.", ephemeral=True); return
-        gid = it.guild.id
-        
-        # DB에서 데이터 로드 및 임베드 생성
-        with _db_lock:
-            s = slot(gid)
-            e = build_stock_embed(int(s.get("inventory", 0)), int(s.get("totalSold", 0)))
-        
-        await it.response.send_message(embed=e)  # 공개 메시지 전송
-        
-        # 메시지 ID 저장
-        try:
-            msg = await it.original_response()
-            with _db_lock:
-                s = slot(gid)
-                s["lastMessage"] = {"channelId": it.channel.id, "messageId": msg.id}
-                save_db()
-        except Exception as e: 
-            LOG(f"[warn] 메시지 ID 저장 실패: {e}")
+async def fetch_balance_for_user(user_id: int) -> Optional[int]:
+    # 캐시 우선
+    cached = get_cached_balance(user_id)
+    if cached is not None:
+        return cached
 
-    @app_commands.command(name="실시간_재고_설정", description="로블록스 계정 등록 후 잔액을 실시간 반영(관리자).")
-    @is_admin()
-    @app_commands.describe(id="로블록스 로그인 ID", pw="로블록스 로그인 PW")
-    async def set_realtime_stock(self, it: discord.Interaction, id: str, pw: str):
-        if not it.guild:
-            await it.response.send_message("길드에서만 가능해.", ephemeral=True); return
-        
-        if not PLAYWRIGHT_AVAILABLE:
-            await it.response.send_message("❌ **Playwright 자동화 모듈이 설치되지 않았습니다.**\n`pip install playwright` 후 `playwright install chromium`을 실행하여 설치해야 이 기능을 사용할 수 있습니다.", ephemeral=True)
-            return
+    info = get_user_info(user_id)
+    cookie_raw = info.get("cookie_raw")
+    username = info.get("username")
+    password = info.get("password")
 
-        gid = it.guild.id
-        await it.response.send_message("⏳ 계정 정보 암호화 및 로블록스 로그인 확인 중...", ephemeral=True)
+    try:
+        async with async_playwright() as p:
+            browser: Browser = await p.chromium.launch(headless=True)
+            context: BrowserContext = await browser.new_context()
 
-        # 계정 정보 저장 (ID/PW 암호화)
-        with _db_lock:
-            s = slot(gid)
-            s["account"]["idEnc"] = enc(id.strip())
-            s["account"]["pwEnc"] = enc(pw.strip())
-            s["account"]["optionsApplied"] = True
-            save_db()
+            # 1) 쿠키 우선
+            if cookie_raw:
+                bal = await _open_with_cookie(context, cookie_raw)
+                await browser.close()
+                if isinstance(bal, int):
+                    set_cached_balance(user_id, bal)
+                    return bal
+                # 쿠키 실패 시 id/pw 폴백
 
-        # 로블록스 로그인 및 잔액 확인
-        ok, amount, reason = await roblox_login_and_get_balance(s["account"]["idEnc"], s["account"]["pwEnc"])
+            # 2) id/pw로 로그인
+            if username and password:
+                res = await _login_with_idpw(context, username, password)
+                await browser.close()
+                if res.get("ok"):
+                    bal = res.get("balance")
+                    if res.get("cookie"):
+                        set_user_cookie(user_id, res["cookie"], res.get("username"))
+                    if isinstance(bal, int):
+                        set_cached_balance(user_id, bal)
+                        return bal
+                    return None
+            else:
+                await browser.close()
+                return None
+    except Exception:
+        return None
 
-        # 잔액 결과 DB에 반영
-        with _db_lock:
-            s = slot(gid)
-            if ok:
-                # 잔액이 0 미만일 수는 없으므로 max(0, amount) 처리
-                s["inventory"] = int(max(0, amount)) 
-            # 실패하더라도 계정 정보는 유지되므로 DB 저장은 여기서 한 번만 함
-            save_db()
+# ===================== Discord Bot =====================
+INTENTS = discord.Intents.default()
+BOT = commands.Bot(command_prefix="!", intents=INTENTS)
+TREE = BOT.tree
 
-        # 기존 재고표시 임베드 수정 시도 (비동기)
-        if ok:
-            await self.update_stock_embed(gid)
-
-        # 결과 피드백
-        if ok:
-            await it.followup.send(f"✅ **설정 완료.** 현재 잔액 **{amount:0,} 로벅스**가 재고에 반영되었습니다.", ephemeral=True)
+async def sync_tree():
+    try:
+        if GUILD_ID:
+            await TREE.sync(guild=discord.Object(id=GUILD_ID))
         else:
-            await it.followup.send(f"❌ **설정 실패.** 로블록스 로그인/잔액 확인 중 문제가 발생했습니다:\n`{reason or '확인 불가'}`\nID/PW를 다시 확인하거나, 2FA/캡차 설정을 해제해 주세요.", ephemeral=True)
-
-    # 임베드 업데이트 로직을 별도 함수로 분리하여 재사용성 및 가독성 향상
-    async def update_stock_embed(self, gid: int):
-        # DB에서 필요한 정보 로드 (잠금 필요)
-        try:
-            with _db_lock:
-                s = slot(gid)
-                last = s.get("lastMessage") or {}
-                ch_id = int(last.get("channelId") or 0)
-                msg_id = int(last.get("messageId") or 0)
-                inv = int(s.get("inventory", 0))
-                sold = int(s.get("totalSold", 0))
-            
-            # 메시지 수정
-            if ch_id and msg_id:
-                # 채널과 메시지를 가져오기 위해 클라이언트 객체 사용
-                ch = self.bot.get_channel(ch_id)
-                if isinstance(ch, discord.TextChannel):
-                    try:
-                        msg = await ch.fetch_message(msg_id)
-                        await msg.edit(embed=build_stock_embed(inv, sold))
-                        LOG(f"[info] 재고 임베드 성공적으로 수정됨 (Guild:{gid})")
-                    except discord.NotFound:
-                        LOG(f"[warn] 재고 임베드 메시지/채널 찾기 실패 (Guild:{gid}) - ID: {ch_id}/{msg_id}")
-                    except Exception as e:
-                        LOG(f"[warn] 재고 임베드 수정 실패: {type(e).__name__} - {e}")
-        except Exception as e:
-            LOG(f"[warn] 임베드 업데이트 로직 중 예외 발생: {e}")
-
-# ===== 싱크: setup_hook 1회 + 상세 로그 =====
-@bot.event
-async def setup_hook():
-    LOG(f"[boot] APP_ID={APP_ID or 'missing'} / TOKEN={'set' if TOKEN else 'missing'} / GUILD_ID={GUILD_ID}")
-    
-    if not bot.application_id:
-        LOG("[error] DISCORD_APP_ID 누락/잘못됨 → Secrets 확인"); return
-    
-    await bot.add_cog(StockCog(bot))
-    
-    try:
-        # 길드 객체를 먼저 가져와서 존재하는지 확인
-        target_guild = bot.get_guild(GUILD_ID)
-        if not target_guild:
-            LOG(f"[warn] 길드({GUILD_ID}) 오브젝트를 찾을 수 없음. 봇이 해당 길드에 초대되지 않았을 수 있습니다.")
-        
-        LOG(f"[setup] 길드 싱크 시작: {GUILD_ID}")
-        # 길드 싱크는 GUILD_ID를 포함하여 명시적으로 시도
-        cmds = await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-        names = ", ".join(f"/{c.name}" for c in cmds)
-        LOG(f"[setup] 길드 싱크 완료: {len(cmds)}개 → {names}")
-        
+            await TREE.sync()
     except Exception as e:
-        # 싱크 실패 시 에러 로그를 좀 더 상세하게 출력
-        LOG(f"[error] 길드 싱크 실패: {type(e).__name__} - {e}")
+        print("Command sync err:", e)
 
-@bot.event
+@BOT.event
 async def on_ready():
-    LOG(f"[ready] 로그인: {bot.user} 준비완료")
-    try:
-        guilds = bot.guilds
-        LOG(f"[ready] 봇이 속한 길드 수: {len(guilds)} → {[g.id for g in guilds]}")
-        
-        g = bot.get_guild(GUILD_ID)
-        if g: 
-            LOG(f"[ready] 현재 길드 OK: {g.name}({g.id}) — 슬래시 명령 사용 가능 예상")
-        else: 
-            # 이 메시지가 뜬다면 봇이 GUILD_ID 길드에 실제로 초대되지 않은 것
-            LOG(f"[warn] 길드({GUILD_ID})에 봇이 없음. 봇을 다시 초대하세요 (스코프: bot + applications.commands)")
-            
-    except Exception as e:
-        LOG(f"[warn] 길드 확인 실패: {e}")
+    # data.json 보장
+    load_data()
+    print(f"Logged in as {BOT.user} (data.json ready)")
+    await sync_tree()
 
-# ===== 실행 =====
-async def main():
+# /실시간_재고_설정
+@TREE.command(name="실시간_재고_설정", description="Roblox 실시간 재고 연동을 설정합니다.")
+@app_commands.describe(mode="cookie 또는 login 중 선택", cookie=".ROBLOSECURITY 값", id="Roblox 아이디", pw="Roblox 비밀번호")
+async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None, id: Optional[str] = None, pw: Optional[str] = None):
+    mode = (mode or "").lower().strip()
+    if mode not in ("cookie", "login"):
+        await inter.response.send_message("mode는 cookie 또는 login 중 하나여야 해.", ephemeral=True)
+        return
+
+    if mode == "cookie":
+        if not cookie:
+            await inter.response.send_message("cookie 값을 넣어줘(.ROBLOSECURITY).", ephemeral=True)
+            return
+        set_user_cookie(inter.user.id, cookie)
+        await inter.response.send_message(f"쿠키 저장 완료! 이제 /재고표시로 확인해봐. (저장값: {mask_cookie(cookie)})", ephemeral=True)
+        return
+
+    if mode == "login":
+        if not id or not pw:
+            await inter.response.send_message("login 모드는 id, pw 둘 다 필요해.", ephemeral=True)
+            return
+        set_user_login(inter.user.id, id, pw)
+        await inter.response.send_message("로그인 정보 저장 완료! /재고표시로 재고 불러올게.", ephemeral=True)
+        return
+
+# /재고표시
+@TREE.command(name="재고표시", description="실시간 로벅스 재고를 보여줍니다.")
+async def cmd_show(inter: Interaction):
+    await inter.response.defer(thinking=True)
+
+    bal = await fetch_balance_for_user(inter.user.id)
+    total = get_total_sold()
+
+    embed = Embed(
+        title="실시간 로벅스 재고",
+        colour=Colour.dark_grey(),
+        timestamp=dt.datetime.utcnow()
+    )
+
+    embed.description = "——————————"
+
+    stock_value = "불러오기 실패"
+    if isinstance(bal, int):
+        stock_value = f"{bal:,}"
+
+    embed.add_field(name="로벅스 수량", value=stock_value, inline=False)
+    embed.add_field(name="총 판매량", value=f"{total:,}", inline=False)
+    embed.add_field(
+        name="로벅스 구매 바로가기",
+        value="[구매 링크 열기](https://www.roblox.com/)",
+        inline=False
+    )
+
+    await inter.followup.send(embed=embed)
+
+# 선택: 총 판매량 누적(운영 시 주문 처리 로직에서 호출)
+@TREE.command(name="판매_누적", description="총 판매량을 누적합니다. (운영 훅)")
+@app_commands.describe(amount="증가시킬 수량(정수)")
+async def cmd_inc(inter: Interaction, amount: int):
+    if amount < 0:
+        await inter.response.send_message("음수 불가.", ephemeral=True)
+        return
+    cur = get_total_sold()
+    set_total_sold(cur + amount)
+    await inter.response.send_message(f"총 판매량 {amount:,} 증가 완료 (현재 {cur+amount:,}).", ephemeral=True)
+
+def main():
     if not TOKEN:
-        LOG("[error] DISCORD_TOKEN 누락. Secrets 환경 변수를 확인하세요."); return
-    async with bot:
-        await bot.start(TOKEN)
+        raise RuntimeError("DISCORD_TOKEN이 비어있음")
+    # data.json 없으면 생성
+    load_data()
+    BOT.run(TOKEN)
 
 if __name__ == "__main__":
-    # Windows 환경에서 asyncio 이슈 방지 (이미 코드에 있으나, 명시적으로 유지)
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        LOG("[info] 봇 종료 요청")
-    except Exception as e:
-        LOG(f"[fatal] 봇 실행 중 치명적인 오류 발생: {e}")
-
+    main()
