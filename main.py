@@ -3,32 +3,22 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-# Playwright 체크
-PLAYWRIGHT_AVAILABLE = False
-try:
-    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
-    PLAYWRIGHT_AVAILABLE = True
-except:
-    PLAYWRIGHT_AVAILABLE = False
-
-# 일부 호스트에서 child watcher 방어
-try:
-    if sys.platform != "win32" and hasattr(asyncio, "get_child_watcher"):
-        try:
-            asyncio.get_child_watcher()
-        except NotImplementedError:
-            from asyncio import SafeChildWatcher, set_child_watcher
-            set_child_watcher(SafeChildWatcher())
-except:
-    pass
-
+# ===== 환경/상수 =====
+GUILD_ID = 1419200424636055592
+GUILD = discord.Object(id=GUILD_ID)
 INTENTS = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=INTENTS)
+GRAY = discord.Color.from_str("#808080")
 
+# ===== Bot 생성: application_id 필수 =====
+bot = commands.Bot(
+    command_prefix="!",
+    intents=INTENTS,
+    application_id=int(os.getenv("DISCORD_APP_ID", "0"))
+)
+
+# ===== DB =====
 DB_PATH = "stock_data.json"
 _db_lock = threading.Lock()
-
-GRAY = discord.Color.from_str("#808080")
 
 def load_db():
     if not os.path.exists(DB_PATH):
@@ -47,8 +37,8 @@ DB = load_db()
 
 def slot(gid: int):
     DB["guilds"].setdefault(str(gid), {
-        "inventory": 0,         # 현재 로벅스 재고
-        "totalSold": 0,         # 총 판매량
+        "inventory": 0,         # 현재 로벅스 잔액(=재고)
+        "totalSold": 0,         # 총 판매량(누적)
         "lastMessage": {"channelId": 0, "messageId": 0},
         "account": {"idEnc":"", "pwEnc":"", "cookies":[], "cookiesAt":0, "optionsApplied": True}
     })
@@ -56,6 +46,7 @@ def slot(gid: int):
 
 def now(): return int(time.time())
 
+# ===== 간단 인코딩(테스트용) =====
 def enc(s: str) -> str:
     return base64.b64encode((s or "").encode()).decode()
 
@@ -63,6 +54,7 @@ def dec(s: str) -> str:
     try: return base64.b64decode((s or "").encode()).decode()
     except: return ""
 
+# ===== 권한 =====
 def is_admin():
     async def pred(inter: discord.Interaction):
         if inter.user.guild_permissions.manage_guild:
@@ -71,6 +63,7 @@ def is_admin():
         return False
     return app_commands.check(pred)
 
+# ===== 임베드 =====
 def build_embed(inv: int, sold: int) -> discord.Embed:
     desc = (
         "**로벅스 수량**\n"
@@ -83,20 +76,34 @@ def build_embed(inv: int, sold: int) -> discord.Embed:
     )
     return discord.Embed(title="실시간 로벅스 재고", description=desc, color=GRAY)
 
-# 셀렉터/URL (로블록스)
+# ===== Playwright 준비 =====
+PLAYWRIGHT_AVAILABLE = False
+try:
+    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
+    PLAYWRIGHT_AVAILABLE = True
+except:
+    PLAYWRIGHT_AVAILABLE = False
+
+# 일부 호스트에서 child watcher 이슈 방어
+try:
+    if sys.platform != "win32" and hasattr(asyncio, "get_child_watcher"):
+        try:
+            asyncio.get_child_watcher()
+        except NotImplementedError:
+            from asyncio import SafeChildWatcher, set_child_watcher
+            set_child_watcher(SafeChildWatcher())
+except:
+    pass
+
+# ===== 로블록스 대상 URL/셀렉터 =====
 LOGIN_URL = "https://www.roblox.com/vi/Login"
 TX_URL    = "https://www.roblox.com/ko/transactions"
 
-# 로그인 폼 셀렉터(로블록스 로그인 페이지는 로케일별로 조금 다름 → 후보 셀렉터 병렬 시도)
 SEL_ID      = "input#login-username, input[name='username'], input[type='text']"
 SEL_PW      = "input#login-password, input[name='password'], input[type='password']"
 SEL_LOGIN   = "button#login-button, button[type='submit'], button:has-text('로그인'), button:has-text('Đăng nhập')"
 
-# 잔액 파싱 전략
-# 1) 상단 또는 내 거래 페이지 내에 Robux 아이콘/텍스트와 함께 숫자가 보임
-# 2) 정규식으로 숫자만 추출
 RE_BAL = re.compile(r"([0-9][0-9,\.]*)")
-
 LAUNCH_KW = dict(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
 
 async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, int, str, list[dict]]:
@@ -105,6 +112,9 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
     ID = dec(enc_id); PW = dec(enc_pw)
     if not ID or not PW:
         return False, 0, "계정 정보 오류", []
+
+    from playwright.async_api import async_playwright
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(**LAUNCH_KW)
         context = await browser.new_context(
@@ -112,12 +122,10 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
         )
         page = await context.new_page()
         try:
-            # 로그인 페이지
+            # 1) 로그인
             await page.goto(LOGIN_URL, timeout=25000)
-            # 로블록스는 로그인폼이 iframe일 때가 있어 대기 살짝
             await page.wait_for_timeout(700)
 
-            # ID 입력
             id_el = await page.query_selector(SEL_ID)
             if not id_el:
                 ins = await page.query_selector_all("input")
@@ -126,7 +134,6 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
                 return False, 0, "ID 입력칸 없음", await context.cookies()
             await id_el.fill(ID)
 
-            # PW 입력
             pw_el = await page.query_selector(SEL_PW)
             if not pw_el:
                 ins = await page.query_selector_all("input[type='password']")
@@ -135,61 +142,54 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
                 return False, 0, "PW 입력칸 없음", await context.cookies()
             await pw_el.fill(PW)
 
-            # 로그인 버튼
             btn = await page.query_selector(SEL_LOGIN) or await page.query_selector("button")
             if not btn:
                 return False, 0, "로그인 버튼 없음", await context.cookies()
             await btn.click()
 
-            # 로그인 처리 대기
             await page.wait_for_timeout(1800)
             html = await page.content()
 
-            # 캡차/2FA 등 방해 요소 감지(간단 텍스트 기반)
+            # 간단 차단/실패 감지
             blocked_keywords = ["2단계", "Two-Step", "hCaptcha", "reCAPTCHA", "captcha", "보안인증", "Verify", "Security", "MFA"]
             if any(k.lower() in html.lower() for k in blocked_keywords):
                 return False, 0, "보안 인증(캡차/2FA) 발생", await context.cookies()
 
-            # 실패 문구 대략적 감지
             fail_keywords = ["잘못된", "오류", "incorrect", "invalid", "failed"]
-            if any(k.lower() in html.lower() for k in fail_keywords):
-                # 그래도 혹시 이미 로그인됐을 수도 있으니 트랜잭션 페이지로 이동 시도
-                pass
+            # 실패 문구가 있어도 혹시 세션이 들어갔을 수 있으니 다음 페이지에서 최종 판단
 
-            # 잔액 페이지 이동
+            # 2) 거래/잔액 페이지
             await page.goto(TX_URL, timeout=25000)
             await page.wait_for_timeout(1200)
-
-            # 텍스트 전체에서 숫자 후보 추출
             html2 = await page.content()
-            # “내 잔액:” 같은 라벨 근처 숫자 우선 파싱 시도
-            balance_hint_patterns = [
+
+            # “내 잔액:” 주변 값 우선 파싱
+            prios = [
                 r"(내\s*잔액|Balance|Robux)\D+([0-9][0-9,\.]*)",
                 r"([0-9][0-9,\.]*)\s*(Robux|RBX)"
             ]
             bal_value = None
-            for pat in balance_hint_patterns:
+            for pat in prios:
                 m = re.search(pat, html2, re.IGNORECASE)
                 if m:
-                    cand = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)
+                    cand = m.group(2) if (m.lastindex and m.lastindex >= 2) else m.group(1)
                     cand = cand.replace(",", "").replace(".", "")
                     if cand.isdigit():
                         bal_value = int(cand); break
 
-            # 못 찾으면 숫자 시퀀스 전체에서 소규모 값 후보 필터링(너무 큰 값/이상치 제외)
             if bal_value is None:
                 nums = [n.replace(",", "").replace(".", "") for n in re.findall(RE_BAL, html2)]
                 nums = [n for n in nums if n.isdigit()]
-                # Robux 잔액이 0~数십/수백만 내일 가능하다고 보고 상한선 필터(예: 100,000,000 이상 버림)
-                cand_list = [int(n) for n in nums if 0 <= int(n) <= 100_000_000]
-                # 페이지 내 가장 근접 후보로 작은 값 우선(잔액 스샷처럼 작은 값이 흔함)
-                if cand_list:
-                    bal_value = min(cand_list)
+                cands = [int(n) for n in nums if 0 <= int(n) <= 100_000_000]
+                if cands:
+                    # 잔액이 보통 화면에 한 번만 깔끔히 노출됨. 스샷처럼 소수 작은 값이 많으므로 최솟값 우선.
+                    bal_value = min(cands)
 
             if bal_value is None:
                 return False, 0, "잔액 파싱 실패", await context.cookies()
 
             return True, int(bal_value), "", await context.cookies()
+
         except PwTimeout:
             return False, 0, "응답 지연", await context.cookies()
         except Exception as e:
@@ -198,12 +198,16 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             with contextlib.suppress(Exception): await context.close()
             with contextlib.suppress(Exception): await browser.close()
 
+# ===== Cog: /재고표시, /실시간_재고_설정 =====
 class StockCog(commands.Cog):
     def __init__(self, bot_: commands.Bot):
         self.bot = bot_
 
     @app_commands.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
     async def 재고표시(self, it: discord.Interaction):
+        if not it.guild:
+            await it.response.send_message("길드에서만 사용 가능해.", ephemeral=True)
+            return
         gid = it.guild.id
         with _db_lock:
             s = slot(gid)
@@ -218,14 +222,16 @@ class StockCog(commands.Cog):
         except:
             pass
 
-    @app_commands.command(name="실시간_재고_설정", description="로벅스 계정을 등록하고 잔액을 실시간 반영합니다(관리자).")
+    @app_commands.command(name="실시간_재고_설정", description="로블록스 계정 등록 후 잔액을 실시간 반영(관리자).")
     @is_admin()
     @app_commands.describe(ID="로블록스 로그인 ID", PW="로블록스 로그인 PW")
     async def 실시간_재고_설정(self, it: discord.Interaction, ID: str, PW: str):
+        if not it.guild:
+            await it.response.send_message("길드에서만 가능해.", ephemeral=True)
+            return
         gid = it.guild.id
         await it.response.send_message("계정 확인 중…", ephemeral=True)
 
-        # 저장(안전 옵션 자동 적용 가정)
         with _db_lock:
             s = slot(gid)
             s["account"]["idEnc"] = enc(ID.strip())
@@ -267,25 +273,43 @@ class StockCog(commands.Cog):
         if ok:
             await it.followup.send(f"설정 완료. 현재 잔액 {amount} 로벅스 반영됨.", ephemeral=True)
         else:
-            # 상세 원인은 관리 로그로만 남기는 게 안전하지만, 테스트니까 간단 이유 표시
             await it.followup.send(f"설정 실패: {reason or '확인 불가'}. 잠시 후 다시 시도해줘.", ephemeral=True)
 
+# ===== 명령어 싱크 =====
 async def setup_bot():
     await bot.add_cog(StockCog(bot))
     try:
-        await bot.tree.sync()
-        print("명령어 싱크 완료")
+        # 전역 -> 길드 복사(전역 커맨드 정의 시 안정화용)
+        bot.tree.copy_global_to(guild=GUILD)
+    except Exception:
+        pass
+    try:
+        await bot.tree.sync(guild=GUILD)
+        print("명령어 길드 싱크 완료")
     except Exception as e:
         print("명령어 싱크 실패:", e)
 
 @bot.event
 async def on_ready():
     print(f"로그인: {bot.user} 준비완료")
+    try:
+        await bot.tree.sync(guild=GUILD)
+        print("on_ready 길드 싱크 재확인 완료")
+    except Exception as e:
+        print("on_ready 싱크 실패:", e)
 
+# ===== 실행 =====
 async def main():
+    token = os.getenv("DISCORD_TOKEN", "")
+    if not token:
+        print("DISCORD_TOKEN 누락")
+        return
+    if not bot.application_id:
+        print("DISCORD_APP_ID 누락 또는 잘못됨")
+        return
     async with bot:
         await setup_bot()
-        await bot.start(os.getenv("DISCORD_TOKEN", ""))
+        await bot.start(token)
 
 if __name__ == "__main__":
     asyncio.run(main())
