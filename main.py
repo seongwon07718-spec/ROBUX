@@ -7,7 +7,7 @@ import datetime as dt
 from typing import Any, Dict, Optional, Tuple
 
 import discord
-from discord import app_commands, Interaction, Embed, Colour
+from discord import app_commands, Interaction, Embed
 from discord.ext import commands, tasks
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
@@ -21,15 +21,15 @@ ROBLOX_TX_URLS = ["https://www.roblox.com/ko/transactions", "https://www.roblox.
 
 BALANCE_CACHE_TTL_SEC = 30
 PAGE_TIMEOUT = 15000
-UPDATE_INTERVAL_SEC = 60
+UPDATE_INTERVAL_SEC = 60  # 60초 갱신
 
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
 # ===== 저장소 유틸 =====
 def _default_data() -> Dict[str, Any]:
     return {
-        "users": {},  # { userId: { "roblox": {"username","password","cookie_raw","masked_cookie","cookie_set_at"}, "last_embed": {"channel_id","message_id"} } }
-        "stats": {"total_sold": 0},  # 유지: 총 판매량 필드(표시만; 누적 명령 제거됨)
+        "users": {},  # { userId: { "roblox": {...}, "last_embed": {"channel_id","message_id"} } }
+        "stats": {"total_sold": 0},
         "cache": {"balances": {}},   # { userId: {"value": int, "ts": iso} }
         "meta": {"version": 1}
     }
@@ -249,41 +249,41 @@ TREE = BOT.tree
 # 자동 업데이트 추적 { userId(str): {"guild_id": int, "channel_id": int, "message_id": int} }
 active_updates: Dict[str, Dict[str, int]] = {}
 
-def build_stock_embed(guild: Optional[discord.Guild], robux_balance: Optional[int], total_sold: int) -> Embed:
-    # 색상 ff5dd6
-    colour = discord.Colour(int("ff5dd6", 16))
-    emb = Embed(title="", colour=colour, timestamp=dt.datetime.utcnow())
-
-    # 서버프사/서버이름 작게 (author + thumbnail)
+def build_stock_embed_text(guild: Optional[discord.Guild], robux_balance: Optional[int], total_sold: int) -> str:
+    # 서버프사/서버이름 작게: 임베드 author/thumbnail을 쓰지 말고, 본문 첫 줄에 작게 표기
+    guild_line = ""
     if guild:
-        emb.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else discord.Embed.Empty)
-        if guild.icon:
-            emb.set_thumbnail(url=guild.icon.url)
+        gname = guild.name
+        guild_line = f"*{gname}*"
 
-    # 본문: 요청 포맷 그대로
     stock = "불러오기 실패"
     if isinstance(robux_balance, int):
         stock = f"{robux_balance:,}"
     total = f"{total_sold:,}"
 
-    desc = []
-    desc.append("## <a:upuoipipi:1423892277373304862>실시간 로벅스 재고")
-    desc.append("### <a:thumbsuppp:1423892279612936294>로벅스 재고")
-    desc.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{stock}`로벅스** ( 60초 마다 갱신 )")
-    desc.append("### <a:upuoipipi:1423892277373304862>총 로벅스 판매량")
-    desc.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{total}`로벅스** ( 60초 마다 갱신 )")
+    lines = []
+    if guild_line:
+        lines.append(guild_line)
+    lines.append("## <a:upuoipipi:1423892277373304862>실시간 로벅스 재고")
+    lines.append("**<a:thumbsuppp:1423892279612936294>로벅스 재고**")
+    lines.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{stock}`로벅스** ( 60초 마다 갱신 )")
+    lines.append("**<a:thumbsuppp:1423892279612936294>총 로벅스 판매량**")
+    lines.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{total}`로벅스** ( 60초 마다 갱신 )")
+    return "\n".join(lines)
 
-    emb.description = "\n".join(desc)
+def build_embed(guild: Optional[discord.Guild], robux_balance: Optional[int], total_sold: int) -> Embed:
+    colour = discord.Colour(int("ff5dd6", 16))
+    emb = Embed(title="", colour=colour, timestamp=dt.datetime.utcnow())
+    emb.description = build_stock_embed_text(guild, robux_balance, total_sold)
     return emb
 
 async def upsert_public_embed(inter: Interaction, uid: int, force_new: bool = False):
     bal = await fetch_balance(uid)
     total = get_total_sold()
-    embed = build_stock_embed(inter.guild, bal, total)
+    embed = build_embed(inter.guild, bal, total)
 
-    # 공개 메시지
     if force_new or not get_last_embed(uid):
-        msg = await inter.channel.send(embed=embed)
+        msg = await inter.channel.send(embed=embed)  # 공개
         set_last_embed(uid, inter.channel.id, msg.id)
         active_updates[str(uid)] = {"guild_id": inter.guild_id, "channel_id": inter.channel.id, "message_id": msg.id}
         return
@@ -304,15 +304,12 @@ async def updater_loop():
     for uid, loc in list(active_updates.items()):
         try:
             user_id = int(uid)
-            # 최신 값
             bal = await fetch_balance(user_id)
             total = get_total_sold()
-            # Guild 객체 없이도 안전하게 편집
             ch = await BOT.fetch_channel(loc["channel_id"])
             msg = await ch.fetch_message(loc["message_id"])
-            # 가능한 guild 얻기
             guild = msg.guild if hasattr(msg, "guild") else None
-            embed = build_stock_embed(guild, bal, total)
+            embed = build_embed(guild, bal, total)
             await msg.edit(embed=embed)
         except Exception:
             continue
@@ -342,29 +339,33 @@ async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None,
     if mode not in ("cookie", "login"):
         await inter.response.send_message("mode는 cookie 또는 login 중 하나야.", ephemeral=True)
         return
-
     if mode == "cookie":
         if not cookie:
             await inter.response.send_message("cookie(.ROBLOSECURITY) 값을 넣어줘.", ephemeral=True)
             return
         set_user_cookie(inter.user.id, cookie)
-        await inter.response.send_message(f"쿠키 저장 완료! /재고표시로 확인 가능. (저장: {mask_cookie(cookie)})", ephemeral=True)
+        await inter.response.send_message(f"쿠키 저장 완료! /재고설정 또는 /재고표시로 확인 가능. (저장: {mask_cookie(cookie)})", ephemeral=True)
         return
-
     if mode == "login":
         if not id or not pw:
             await inter.response.send_message("login 모드는 id, pw 모두 필요해.", ephemeral=True)
             return
         set_user_login(inter.user.id, id, pw)
-        await inter.response.send_message("로그인 정보 저장 완료! /재고표시로 불러올게.", ephemeral=True)
+        await inter.response.send_message("로그인 정보 저장 완료! /재고설정 또는 /재고표시로 불러올게.", ephemeral=True)
 
+# 요청한 이름으로 신규 표시 명령: /재고설정
+@TREE.command(name="재고설정", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
+async def cmd_show_new(inter: Interaction):
+    await inter.response.defer(thinking=True, ephemeral=False)
+    await upsert_public_embed(inter, inter.user.id, force_new=True)
+    await inter.followup.send("재고 임베드가 공개로 표시됐어. 60초마다 자동 갱신해.", ephemeral=True)
+
+# 기존 이름 유지도 원하면 아래를 함께 등록(필요 없으면 제거)
 @TREE.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
 async def cmd_show(inter: Interaction):
     await inter.response.defer(thinking=True, ephemeral=False)
     await upsert_public_embed(inter, inter.user.id, force_new=True)
     await inter.followup.send("재고 임베드가 공개로 표시됐어. 60초마다 자동 갱신해.", ephemeral=True)
-
-# /판매_누적 명령어는 요청대로 제거
 
 def main():
     if not TOKEN or len(TOKEN) < 10:
