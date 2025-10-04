@@ -2,14 +2,14 @@ import os
 import json
 import time
 import re
+import io
 import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 
 import discord
-from discord import app_commands, Interaction, Embed
+from discord import app_commands, Interaction, Embed, File
 from discord.ext import commands
 from dotenv import load_dotenv
-
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 # ===== ENV =====
@@ -58,16 +58,16 @@ def _ensure_user(uid: int) -> Dict[str, Any]:
         _save_db(db)
     return u
 
-def get_user_stats(uid: int) -> Dict[str, Any]:
-    return _ensure_user(uid)
-
 def set_login_info(uid: int, cookie: Optional[str], username: Optional[str], password: Optional[str]):
     db = _load_db()
     u = _ensure_user(uid)
     r = u.get("roblox", {})
-    if cookie: r["cookie"] = cookie
-    if username is not None: r["username"] = username
-    if password is not None: r["password"] = password
+    if cookie is not None and cookie != "":
+        r["cookie"] = cookie
+    if username is not None:
+        r["username"] = username
+    if password is not None:
+        r["password"] = password
     u["roblox"] = r
     db["users"][str(uid)] = u
     _save_db(db)
@@ -83,20 +83,7 @@ def set_login_result(uid: int, robux: int, username_hint: Optional[str]):
     db["users"][str(uid)] = u
     _save_db(db)
 
-def add_tx(uid: int, amount: int, desc: str, ttype: str = "other"):
-    db = _load_db()
-    u = db["users"].setdefault(str(uid), _ensure_user(uid))
-    u["wallet"] = max(0, int(u.get("wallet", 0) + amount))
-    if amount > 0:
-        u["total"] = int(u.get("total", 0) + amount)
-    u["count"] = int(u.get("count", 0) + 1)
-    rec = u.get("recent", [])
-    rec.insert(0, {"desc": desc, "amount": int(amount), "ts": int(time.time()), "type": ttype})
-    u["recent"] = rec[:5]
-    db["users"][str(uid)] = u
-    _save_db(db)
-
-# ===== Roblox 파싱 =====
+# ===== Roblox 파싱(2중 경로) + 스샷 =====
 ROBLOX_HOME_URLS = ["https://www.roblox.com/ko/home", "https://www.roblox.com/home"]
 ROBLOX_LOGIN_URLS= ["https://www.roblox.com/ko/Login", "https://www.roblox.com/Login"]
 ROBLOX_TX_URL    = "https://www.roblox.com/ko/transactions"
@@ -109,15 +96,21 @@ BADGE_SELECTORS  = [
 ]
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
+def _to_int(txt: str) -> Optional[int]:
+    if not txt: return None
+    m = NUM_RE.search(txt)
+    if not m: return None
+    try:
+        return int(re.sub(r"[,\.\s]", "", m.group(1)))
+    except Exception:
+        return None
+
 async def launch_browser(p):
     args = ["--disable-dev-shm-usage","--no-sandbox","--disable-gpu","--disable-setuid-sandbox","--no-zygote"]
-    try:
-        return await p.chromium.launch(headless=True, args=args)
+    try: return await p.chromium.launch(headless=True, args=args)
     except Exception:
-        try:
-            return await p.chromium.launch(headless=False, args=args)
-        except Exception:
-            return None
+        try: return await p.chromium.launch(headless=False, args=args)
+        except Exception: return None
 
 async def new_context(browser: Browser) -> Optional[BrowserContext]:
     try:
@@ -142,18 +135,9 @@ async def _wait_nav_ready(page: Page):
             return
         except Exception:
             continue
-    await asyncio.sleep(1.2)
-
-def _to_int(txt: str) -> Optional[int]:
-    m = NUM_RE.search(txt or "")
-    if not m: return None
-    try:
-        return int(re.sub(r"[,\.\s]", "", m.group(1)))
-    except Exception:
-        return None
+    await asyncio.sleep(1.0)
 
 async def parse_home_badge(page: Page) -> Optional[int]:
-    # 경로 A: 홈 상단 뱃지
     for sel in BADGE_SELECTORS:
         try:
             el = await page.query_selector(sel)
@@ -164,13 +148,12 @@ async def parse_home_badge(page: Page) -> Optional[int]:
                 return v
         except Exception:
             continue
-    # 폴백: html 스캔
     try:
         html = await page.content()
         nums = []
         for kw in ["Robux","로벅스"]:
             for m in re.finditer(kw, html, flags=re.IGNORECASE):
-                s = max(0, m.start()-100); e = min(len(html), m.end()+100)
+                s = max(0, m.start()-120); e = min(len(html), m.end()+120)
                 chunk = html[s:e]
                 for mm in re.finditer(NUM_RE, chunk):
                     v = _to_int(mm.group(0))
@@ -182,17 +165,16 @@ async def parse_home_badge(page: Page) -> Optional[int]:
     return None
 
 async def parse_transactions_balance(page: Page) -> Optional[int]:
-    # 경로 B: 거래 페이지 “내 거래”에서 “내 잔액: [아이콘] 숫자” 추출
-    # 대기: “내 거래” 또는 “My Transactions” 타이틀 영역
     try:
+        # “내 거래” 타이틀 또는 “My Transactions”
         await page.wait_for_selector("text=내 거래, text=My Transactions", timeout=25000)
     except Exception:
-        await asyncio.sleep(1.0)
-    # 1) “내 잔액” 텍스트 직접 찾기
+        await asyncio.sleep(0.8)
+    # 직접 “내 잔액 / My Balance” 찾기
     try:
-        # 한국어/영문 모두 커버
         el = await page.query_selector("text=내 잔액, text=My Balance")
         if el:
+            # 주변 텍스트에서 숫자 뽑기
             parent = await el.evaluate_handle("e => e.parentElement || e")
             txt = await (await parent.get_property("innerText")).json_value()
             v = _to_int(txt or "")
@@ -200,14 +182,13 @@ async def parse_transactions_balance(page: Page) -> Optional[int]:
                 return v
     except Exception:
         pass
-    # 2) 아이콘 근처 숫자(로벅스 심볼) 주변에서 추출
+    # 폴백: HTML 범위 스캔
     try:
         html = await page.content()
-        # '내 잔액' 블록 주변 150자 윈도우
         chunks = []
-        for kw in ["내 잔액", "My Balance", "balance"]:
+        for kw in ["내 잔액","My Balance","balance"]:
             for m in re.finditer(kw, html, flags=re.IGNORECASE):
-                s = max(0, m.start()-150); e = min(len(html), m.end()+150)
+                s = max(0, m.start()-180); e = min(len(html), m.end()+180)
                 chunks.append(html[s:e])
         nums = []
         for chunk in chunks:
@@ -216,65 +197,27 @@ async def parse_transactions_balance(page: Page) -> Optional[int]:
                 if isinstance(v, int) and 0 <= v <= 100_000_000:
                     nums.append(v)
         if nums:
-            # 보통 잔액은 근처 단일 수치이므로 최소값 반환
             return min(nums)
     except Exception:
         pass
     return None
 
-async def robux_with_cookie(cookie: str) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
-    # return ok, robux, username_hint, source
+async def screenshot_bytes(page: Page, selector_hint: Optional[str] = None) -> Optional[bytes]:
     try:
-        async with async_playwright() as p:
-            browser = await launch_browser(p)
-            if not browser: return False, None, None, None
-            ctx = await new_context(browser)
-            if not ctx:
-                await browser.close(); return False, None, None, None
-            await ctx.add_cookies([{
-                "name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"
-            }])
-            page = await ctx.new_page()
-
-            # 경로 A 시도(홈)
-            if await _goto(page, ROBLOX_HOME_URLS[0]) or await _goto(page, ROBLOX_HOME_URLS[1]):
-                await _wait_nav_ready(page)
-                v = await parse_home_badge(page)
-                uname = None
-                try:
-                    t = await page.title()
-                    if t:
-                        m = re.search(r"[A-Za-z0-9_]{3,20}", t); 
-                        if m: uname = m.group(0)
-                except Exception:
-                    pass
-                if isinstance(v, int):
-                    await browser.close()
-                    return True, v, uname, "home"
-
-            # 경로 B 시도(거래)
-            if await _goto(page, ROBLOX_TX_URL):
-                v2 = await parse_transactions_balance(page)
-                uname = None
-                try:
-                    h1 = await page.query_selector("h1,h2")
-                    if h1:
-                        ttl = (await h1.inner_text() or "").strip()
-                        m = re.search(r"[A-Za-z0-9_]{3,20}", ttl)
-                        if m: uname = m.group(0)
-                except Exception:
-                    pass
-                await browser.close()
-                if isinstance(v2, int):
-                    return True, v2, uname, "transactions"
-
-            await browser.close()
-            return False, None, None, None
+        if selector_hint:
+            el = await page.query_selector(selector_hint)
+            if el:
+                return await el.screenshot(type="png")
+        # 폴백: 뷰포트 스샷
+        return await page.screenshot(type="png", full_page=False)
     except Exception:
-        return False, None, None, None
+        try:
+            return await page.screenshot(type="png", full_page=False)
+        except Exception:
+            return None
 
-async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional[int], Optional[str], Optional[str], Optional[str]]:
-    # return ok, robux, cookie_out, username_hint, source
+async def robux_with_cookie(cookie: str) -> Tuple[bool, Optional[int], Optional[str], Optional[str], Optional[bytes]]:
+    # return ok, robux, username_hint, source, shot
     try:
         async with async_playwright() as p:
             browser = await launch_browser(p)
@@ -282,34 +225,84 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
             ctx = await new_context(browser)
             if not ctx:
                 await browser.close(); return False, None, None, None, None
+            await ctx.add_cookies([{
+                "name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"
+            }])
+            page = await ctx.new_page()
+
+            # A) 홈
+            shot = None
+            if await _goto(page, ROBLOX_HOME_URLS[0]) or await _goto(page, ROBLOX_HOME_URLS[1]):
+                await _wait_nav_ready(page)
+                v_home = await parse_home_badge(page)
+                uname = None
+                try:
+                    t = await page.title()
+                    if t:
+                        m = re.search(r"[A-Za-z0-9_]{3,20}", t); 
+                        if m: uname = m.group(0)
+                except Exception: pass
+                # B) 거래
+                v_tx = None
+                if await _goto(page, ROBLOX_TX_URL):
+                    v_tx = await parse_transactions_balance(page)
+                    # 거래 상단 전체를 우선 캡처
+                    shot = await screenshot_bytes(page, selector_hint="text=내 거래, text=My Transactions")
+                # 값 결정(교차 검증: 거래값 우선)
+                v_final, src = None, None
+                if isinstance(v_tx, int):
+                    v_final, src = v_tx, "transactions"
+                elif isinstance(v_home, int):
+                    v_final, src = v_home, "home"
+                    # 홈에서라도 로벅스 뱃지 근처 스샷
+                    if shot is None:
+                        shot = await screenshot_bytes(page)
+                await browser.close()
+                if isinstance(v_final, int):
+                    return True, v_final, uname, src, shot
+                return False, None, None, None, shot
+            await browser.close()
+            return False, None, None, None, None
+    except Exception:
+        return False, None, None, None, None
+
+async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional[int], Optional[str], Optional[str], Optional[str], Optional[bytes]]:
+    # return ok, robux, cookie_out, username_hint, source, shot
+    try:
+        async with async_playwright() as p:
+            browser = await launch_browser(p)
+            if not browser: return False, None, None, None, None, None
+            ctx = await new_context(browser)
+            if not ctx:
+                await browser.close(); return False, None, None, None, None, None
             page = await ctx.new_page()
             # 로그인
             if not (await _goto(page, ROBLOX_LOGIN_URLS[0]) or await _goto(page, ROBLOX_LOGIN_URLS[1])):
-                await browser.close(); return False, None, None, "로그인 페이지 이동 실패", None
-            user_sel = "input[name='username'], input#login-username, input[type='text']"
-            pass_sel = "input[name='password'], input#login-password, input[type='password']"
+                await browser.close(); return False, None, None, "로그인 페이지 이동 실패", None, None
             try:
-                await page.wait_for_selector(user_sel, timeout=25000); await page.fill(user_sel, username)
-                await page.wait_for_selector(pass_sel, timeout=25000); await page.fill(pass_sel, password)
+                await page.wait_for_selector("input[name='username'], input#login-username, input[type='text']", timeout=25000)
+                await page.fill("input[name='username'], input#login-username, input[type='text']", username)
+                await page.wait_for_selector("input[name='password'], input#login-password, input[type='password']", timeout=25000)
+                await page.fill("input[name='password'], input#login-password, input[type='password']", password)
                 await page.click("button[type='submit'], button:has-text('로그인'), button:has-text('Log In')")
             except Exception:
-                await browser.close(); return False, None, None, "로그인 입력/전송 실패", None
+                await browser.close(); return False, None, None, "로그인 입력/전송 실패", None, None
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=25000)
             except Exception:
                 pass
-
-            # 경로 A(홈) → 실패 시 경로 B(거래)
-            v, src = None, None
+            # A) 홈
+            v_home, v_tx, src, shot = None, None, None, None
             if await _goto(page, ROBLOX_HOME_URLS[0]) or await _goto(page, ROBLOX_HOME_URLS[1]):
                 await _wait_nav_ready(page)
-                v = await parse_home_badge(page)
-                src = "home"
-            if not isinstance(v, int):
-                if await _goto(page, ROBLOX_TX_URL):
-                    v = await parse_transactions_balance(page)
-                    src = "transactions"
-
+                v_home = await parse_home_badge(page)
+            # B) 거래
+            if await _goto(page, ROBLOX_TX_URL):
+                v_tx = await parse_transactions_balance(page)
+                shot = await screenshot_bytes(page, selector_hint="text=내 거래, text=My Transactions")
+            # 채택
+            v_final = v_tx if isinstance(v_tx, int) else v_home
+            src = "transactions" if isinstance(v_tx, int) else ("home" if isinstance(v_home, int) else None)
             # 쿠키/유저명
             cookie_out, uname = None, None
             try:
@@ -320,22 +313,77 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
                 if t:
                     m = re.search(r"[A-Za-z0-9_]{3,20}", t)
                     if m: uname = m.group(0)
-            except Exception:
-                pass
-
+            except Exception: pass
             await browser.close()
-            if isinstance(v, int):
-                return True, v, cookie_out, uname, src
-            return False, None, None, "로벅스 파싱 실패", src
+            if isinstance(v_final, int):
+                return True, v_final, cookie_out, uname, src, shot
+            return False, None, None, "로벅스 파싱 실패", None, shot
     except Exception as e:
-        return False, None, None, f"예외 발생: {e}", None
+        return False, None, None, f"예외 발생: {e}", None, None
 
 # ===== 색상 =====
 BLACK = discord.Colour.dark_grey()
 GREEN = discord.Colour.green()
 RED   = discord.Colour.red()
 
-# ===== 임베드 =====
+# ===== /재고: 모달 + 임베드 편집 방식 =====
+class StockLoginModal(discord.ui.Modal, title="로그인"):
+    cookie = discord.ui.TextInput(label="cookie(.ROBLOSECURITY)", required=False, style=discord.TextStyle.short, max_length=4000, placeholder="쿠키값(선택)")
+    uid    = discord.ui.TextInput(label="아이디", required=False, style=discord.TextStyle.short, max_length=100)
+    pw     = discord.ui.TextInput(label="비밀번호", required=False, style=discord.TextStyle.short, max_length=100)
+
+    def __init__(self, inter: Interaction):
+        super().__init__(timeout=None)
+        self.inter = inter
+
+    async def on_submit(self, interaction: Interaction):
+        # 1) 임베드 한 개 먼저 올림(에페메럴)
+        loading = Embed(title="로그인 중..", description="로그인 중입니다 조금만 기다려주세요", colour=BLACK)
+        await interaction.response.send_message(embed=loading, ephemeral=True)
+        message = await interaction.original_response()
+
+        user_id = interaction.user.id
+        cookie_val = str(self.cookie.value or "").strip()
+        id_val    = str(self.uid.value or "").strip()
+        pw_val    = str(self.pw.value or "").strip()
+
+        if not cookie_val and not (id_val and pw_val):
+            fail = Embed(title="로그인 실패", description="쿠키나 아이디/비밀번호 중 하나 이상을 입력해줘.", colour=RED)
+            await interaction.edit_original_response(embed=fail)
+            return
+
+        # 2) 자격 저장
+        if cookie_val: set_login_info(user_id, cookie_val, None, None)
+        if id_val or pw_val: set_login_info(user_id, None, id_val if id_val else None, pw_val if pw_val else None)
+
+        # 3) 로그인/파싱(2경로) + 스샷
+        ok, robux, uname, shot_bytes = False, None, None, None
+        if cookie_val:
+            c_ok, c_val, c_uname, c_src, c_shot = await robux_with_cookie(cookie_val)
+            if c_ok:
+                ok, robux, uname, shot_bytes = True, c_val, c_uname, c_shot
+        if not ok and id_val and pw_val:
+            l_ok, l_val, c_out, u_hint, l_src, l_shot = await robux_with_login(id_val, pw_val)
+            if l_ok:
+                ok, robux, uname, shot_bytes = True, l_val, u_hint, l_shot
+                if c_out: set_login_info(user_id, c_out, None, None)
+
+        # 4) 결과 편집
+        if ok and isinstance(robux, int):
+            set_login_result(user_id, robux, uname)
+            name_txt = uname or (id_val if id_val else "알 수 없음")
+            desc = f"{name_txt}계정에 로그인 성공 되었습니다\n로벅스 수량 {robux:,}\n쿠키값 저장 완료되었습니다"
+            succ = Embed(title="로그인 성공", description=desc, colour=GREEN)
+            file = None
+            if shot_bytes:
+                file = File(io.BytesIO(shot_bytes), filename="robux_balance.png")
+                succ.set_image(url="attachment://robux_balance.png")
+            await interaction.edit_original_response(embed=succ, attachments=[file] if file else [])
+        else:
+            fail = Embed(title="로그인 실패", description="쿠키/계정 정보가 유효하지 않거나 로벅스 파싱 실패", colour=RED)
+            await interaction.edit_original_response(embed=fail)
+
+# ===== /버튼패널(기존 유지, 검정 임베드) =====
 def embed_panel() -> Embed:
     return Embed(
         title="자동 로벅스 자판기",
@@ -343,24 +391,13 @@ def embed_panel() -> Embed:
         colour=BLACK
     )
 
-def embed_notice() -> Embed:
-    return Embed(title="공지", description="<#1419230737244229653> 필독 부탁드립니다", colour=BLACK)
-
-def embed_myinfo(user: discord.User | discord.Member, stats: Dict[str, Any]) -> Embed:
-    emb = Embed(title=f"{getattr(user,'display_name',getattr(user,'name','유저'))}님 정보", colour=BLACK)
-    wallet = int(stats.get("wallet", 0))
-    total  = int(stats.get("total", 0))
-    count  = int(stats.get("count", 0))
-    emb.description = "\n".join([
-        f"### 보유 금액 : {wallet:,}원",
-        f"### 누적 금액 : {total:,}원",
-        f"### 거래 횟수 : {count:,}번",
-    ])
-    try:
-        emb.set_thumbnail(url=user.display_avatar.url)
-    except Exception:
-        pass
-    return emb
+class PanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="공지",   custom_id="panel_notice", row=0))
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="충전",   custom_id="panel_charge", row=0))
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="내 정보", custom_id="panel_info",   row=1))
+        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="구매",   custom_id="panel_buy",    row=1))
 
 def make_tx_select(stats: Dict[str, Any]) -> discord.ui.View:
     entries: List[Dict[str, Any]] = stats.get("recent", [])
@@ -381,128 +418,43 @@ def make_tx_select(stats: Dict[str, Any]) -> discord.ui.View:
         def __init__(self):
             super().__init__(placeholder="최근 거래내역 보기", min_values=1, max_values=1, options=options)
         async def callback(self, interaction: Interaction):
-            try:
-                await interaction.response.defer()
-            except Exception:
-                pass
+            try: await interaction.response.defer()
+            except Exception: pass
     v = discord.ui.View(timeout=None)
     v.add_item(TxSelect())
     return v
 
-# ===== 버튼 뷰 =====
-class PanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="공지",   custom_id="panel_notice", row=0))
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="충전",   custom_id="panel_charge", row=0))
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="내 정보", custom_id="panel_info",   row=1))
-        self.add_item(discord.ui.Button(style=discord.ButtonStyle.secondary, label="구매",   custom_id="panel_buy",    row=1))
-    async def interaction_check(self, interaction: Interaction) -> bool:
-        try:
-            await interaction.response.defer()
-        except Exception:
-            pass
-        cid = (interaction.data or {}).get("custom_id")
-        uid = interaction.user.id
-        if cid == "panel_notice":
-            try:
-                await interaction.followup.send(embed=embed_notice(), ephemeral=True)
-            except Exception:
-                pass
-        elif cid == "panel_info":
-            stats = get_user_stats(uid)
-            emb = embed_myinfo(interaction.user, stats)
-            view = make_tx_select(stats)
-            try:
-                await interaction.followup.send(embed=emb, view=view, ephemeral=True)
-            except Exception:
-                pass
-        elif cid == "panel_charge":
-            add_tx(uid, 1000, "충전", "charge")
-            stats = get_user_stats(uid)
-            emb = embed_myinfo(interaction.user, stats)
-            view = make_tx_select(stats)
-            try:
-                await interaction.followup.send(content="충전 완료!", embed=emb, view=view, ephemeral=True)
-            except Exception:
-                pass
-        elif cid == "panel_buy":
-            add_tx(uid, -500, "구매", "buy")
-            stats = get_user_stats(uid)
-            emb = embed_myinfo(interaction.user, stats)
-            view = make_tx_select(stats)
-            try:
-                await interaction.followup.send(content="구매 처리 완료!", embed=emb, view=view, ephemeral=True)
-            except Exception:
-                pass
-        return False
+def embed_notice() -> Embed:
+    return Embed(title="공지", description="<#1419230737244229653> 필독 부탁드립니다", colour=BLACK)
 
-# ===== /버튼패널 =====
+def embed_myinfo(user: discord.User | discord.Member) -> Embed:
+    stats = _ensure_user(user.id)
+    emb = Embed(title=f"{getattr(user,'display_name',getattr(user,'name','유저'))}님 정보", colour=BLACK)
+    wallet = int(stats.get("wallet", 0))
+    total  = int(stats.get("total", 0))
+    count  = int(stats.get("count", 0))
+    emb.description = "\n".join([
+        f"### 보유 금액 : {wallet:,}원",
+        f"### 누적 금액 : {total:,}원",
+        f"### 거래 횟수 : {count:,}번",
+    ])
+    try: emb.set_thumbnail(url=user.display_avatar.url)
+    except Exception: pass
+    return emb
+
 @tree.command(name="버튼패널", description="자동 로벅스 자판기 패널을 공개로 표시합니다.")
 async def 버튼패널(inter: Interaction):
     await inter.response.send_message(embed=embed_panel(), view=PanelView(), ephemeral=False)
-
-# ===== /재고 (모달) =====
-class StockLoginModal(discord.ui.Modal, title="로그인"):
-    cookie = discord.ui.TextInput(label="cookie(.ROBLOSECURITY)", required=False, style=discord.TextStyle.short, max_length=4000, placeholder="쿠키값(선택)")
-    uid    = discord.ui.TextInput(label="아이디", required=False, style=discord.TextStyle.short, max_length=100)
-    pw     = discord.ui.TextInput(label="비밀번호", required=False, style=discord.TextStyle.short, max_length=100)
-
-    def __init__(self, inter: Interaction):
-        super().__init__(timeout=None)
-        self.inter = inter
-
-    async def on_submit(self, interaction: Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        user_id = interaction.user.id
-        cookie_val = str(self.cookie.value or "").strip()
-        id_val    = str(self.uid.value or "").strip()
-        pw_val    = str(self.pw.value or "").strip()
-
-        if not cookie_val and not (id_val and pw_val):
-            emb = Embed(title="로그인 실패", description="쿠키나 아이디/비밀번호 중 하나 이상을 입력해줘.", colour=RED)
-            await interaction.followup.send(embed=emb, ephemeral=True)
-            return
-
-        # 입력된 자격 저장
-        if cookie_val: set_login_info(user_id, cookie_val, None, None)
-        if id_val or pw_val: set_login_info(user_id, None, id_val if id_val else None, pw_val if pw_val else None)
-
-        # 파싱 시도(2중 경로)
-        ok, robux, uname, source, fail_reason = False, None, None, None, None
-        if cookie_val:
-            c_ok, c_robux, c_uname, c_src = await robux_with_cookie(cookie_val)
-            if c_ok:
-                ok, robux, uname, source = True, c_robux, c_uname, c_src
-        if not ok and id_val and pw_val:
-            l_ok, l_robux, c_out, u_hint, l_src = await robux_with_login(id_val, pw_val)
-            if l_ok:
-                ok, robux, uname, source = True, l_robux, u_hint, l_src
-                if c_out: set_login_info(user_id, c_out, None, None)
-            else:
-                fail_reason = u_hint if isinstance(u_hint, str) else "로그인 실패(2FA/장치인증/자격 오류)"
-
-        if ok and isinstance(robux, int):
-            set_login_result(user_id, robux, uname)
-            name_txt = uname or (id_val if id_val else "알 수 없음")
-            desc = f"{name_txt}계정에 로그인 성공 되었습니다\n로벅스 수량 {robux:,}\n쿠키값 저장 완료되었습니다"
-            emb = Embed(title="로그인 성공", description=desc, colour=GREEN)
-            await interaction.followup.send(embed=emb, ephemeral=True)
-        else:
-            reason = fail_reason or "쿠키/계정 정보가 유효하지 않거나 로벅스 파싱 실패"
-            emb = Embed(title="로그인 실패", description=reason, colour=RED)
-            await interaction.followup.send(embed=emb, ephemeral=True)
 
 @tree.command(name="재고", description="쿠키 또는 계정으로 로그인하고 로벅스 수량을 확인합니다.")
 async def 재고(inter: Interaction):
     await inter.response.send_modal(StockLoginModal(inter))
 
-# ===== on_ready =====
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
     try:
-        await tree.sync()  # 전역 등록 → 여러 길드에서 사용 가능
+        await tree.sync()
         print("[SYNC] global commands synced (/버튼패널, /재고)")
     except Exception as e:
         print("[SYNC][ERR]", e)
