@@ -1,176 +1,291 @@
-const { Client, GatewayIntentBits, Partials, InteractionType, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require("discord.js");
-const { fetch } = require("undici");
+import os, json, threading, time, base64, sys, asyncio, re, contextlib
+import discord
+from discord import app_commands
+from discord.ext import commands
 
-// 환경변수 읽기
-const TOKEN = process.env.DISCORD_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
-const GUILD_ID = process.env.GUILD_ID || "1419200424636055592";
+# Playwright 체크
+PLAYWRIGHT_AVAILABLE = False
+try:
+    from playwright.async_api import async_playwright, TimeoutError as PwTimeout
+    PLAYWRIGHT_AVAILABLE = True
+except:
+    PLAYWRIGHT_AVAILABLE = False
 
-// 필수값 체크
-if (!TOKEN) {
-  console.error("DISCORD_TOKEN 비어있음");
-  process.exit(1);
-}
-if (!CHANNEL_ID) {
-  console.error("CHANNEL_ID 비어있음(텍스트 채널 ID)");
-  process.exit(1);
-}
+# 일부 호스트에서 child watcher 방어
+try:
+    if sys.platform != "win32" and hasattr(asyncio, "get_child_watcher"):
+        try:
+            asyncio.get_child_watcher()
+        except NotImplementedError:
+            from asyncio import SafeChildWatcher, set_child_watcher
+            set_child_watcher(SafeChildWatcher())
+except:
+    pass
 
-// 클라이언트 생성
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
-  partials: [Partials.Channel],
-});
+INTENTS = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=INTENTS)
 
-// 유저별 선택값 캐시
-const userSelected = new Map();
+DB_PATH = "stock_data.json"
+_db_lock = threading.Lock()
 
-// 카드 느낌 본문(임베드 X)
-function makeContentLikeCard(selected) {
-  let top =
-    "┌─────────────────────────────────\n" +
-    "│ 테스트입니다.\n" +
-    "│ JS로 Components 느낌 살려서 구현.\n" +
-    "│ 임베드 없이 컴포넌트로만 구성.\n" +
-    "└─────────────────────────────────";
-  if (selected) top += `\n선택한 상품: ${selected}`;
-  return top;
-}
+GRAY = discord.Color.from_str("#808080")
 
-// 호환 컴포넌트(숫자 타입)
-function makeComponentsLikeCard() {
-  return [
-    {
-      type: 1, // Action Row
-      components: [
-        {
-          type: 3, // String Select
-          custom_id: "shop:select",
-          placeholder: "상품을 선택해줘",
-          min_values: 1,
-          max_values: 1,
-          options: [
-            { label: "Robux 100", value: "rbx100", description: "100 크레딧" },
-            { label: "Robux 500", value: "rbx500", description: "500 크레딧" },
-            { label: "Robux 1000", value: "rbx1k", description: "1000 크레딧" },
-          ],
-        },
-      ],
-    },
-    {
-      type: 1,
-      components: [
-        { type: 2, style: 3, label: "구매", custom_id: "shop:buy" },       // SUCCESS
-        { type: 2, style: 2, label: "자세히", custom_id: "shop:details" }, // SECONDARY
-      ],
-    },
-  ];
-}
+def load_db():
+    if not os.path.exists(DB_PATH):
+        return {"guilds": {}}
+    try:
+        with open(DB_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {"guilds": {}}
 
-// 채널 검증
-async function validateChannel(channelId) {
-  try {
-    const ch = await client.channels.fetch(channelId);
-    // GuildText = 0
-    if (!ch || ch.type !== 0) return [false, "텍스트 채널이 아님."];
-    if (String(ch.guildId) !== String(GUILD_ID)) return [false, `길드 불일치(${ch.guildId} != ${GUILD_ID})`];
-    const me = await ch.guild.members.fetchMe();
-    const perms = ch.permissionsFor(me);
-    if (!perms?.has("SendMessages")) return [false, "메시지 보내기 권한 없음."];
-    return [true, "OK"];
-  } catch (e) {
-    return [false, `채널 조회 실패: ${e?.message || e}`];
-  }
-}
+def save_db():
+    with open(DB_PATH, "w", encoding="utf-8") as f:
+        json.dump(DB, f, ensure_ascii=False, indent=2)
 
-client.once("ready", async () => {
-  console.log(`READY ${client.user.tag} | guild=${GUILD_ID} | channel=${CHANNEL_ID}`);
+DB = load_db()
 
-  const [ok, reason] = await validateChannel(CHANNEL_ID);
-  if (!ok) {
-    console.log(`[차단] 전송 중단: ${reason}`);
-    return;
-  }
+def slot(gid: int):
+    DB["guilds"].setdefault(str(gid), {
+        "inventory": 0,         # 현재 로벅스 재고
+        "totalSold": 0,         # 총 판매량
+        "lastMessage": {"channelId": 0, "messageId": 0},
+        "account": {"idEnc":"", "pwEnc":"", "cookies":[], "cookiesAt":0, "optionsApplied": True}
+    })
+    return DB["guilds"][str(gid)]
 
-  // 원시 REST로 메시지 전송
-  const url = `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bot ${TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      content: makeContentLikeCard(),
-      components: makeComponentsLikeCard(),
-      allowed_mentions: { parse: [] },
-    }),
-  });
+def now(): return int(time.time())
 
-  const text = await res.text();
-  console.log("send:", res.status, text);
-  if (res.status >= 300) console.log("전송 실패. 위 body 참고.");
-});
+def enc(s: str) -> str:
+    return base64.b64encode((s or "").encode()).decode()
 
-// 인터랙션 처리
-client.on("interactionCreate", async (interaction) => {
-  // 셀렉트
-  if (interaction.isStringSelectMenu() && interaction.customId === "shop:select") {
-    const sku = interaction.values?.[0];
-    if (!sku) {
-      await interaction.reply({ content: "선택값 없음. 다시 시도!", ephemeral: true });
-      return;
-    }
-    userSelected.set(interaction.user.id, sku);
-    await interaction.update({
-      content: makeContentLikeCard(sku),
-      components: makeComponentsLikeCard(),
-    });
-    return;
-  }
+def dec(s: str) -> str:
+    try: return base64.b64decode((s or "").encode()).decode()
+    except: return ""
 
-  // 구매 버튼
-  if (interaction.isButton() && interaction.customId === "shop:buy") {
-    const sku = userSelected.get(interaction.user.id);
-    if (!sku) {
-      await interaction.reply({ content: "먼저 상품을 선택해줘!", ephemeral: true });
-      return;
-    }
-    const modal = new ModalBuilder().setCustomId(`qty:${sku}`).setTitle("구매 수량 입력");
+def is_admin():
+    async def pred(inter: discord.Interaction):
+        if inter.user.guild_permissions.manage_guild:
+            return True
+        await inter.response.send_message("관리자만 가능해.", ephemeral=True)
+        return False
+    return app_commands.check(pred)
 
-    const qty = new TextInputBuilder()
-      .setCustomId("qty")
-      .setLabel("수량")
-      .setPlaceholder("1 이상 정수")
-      .setMinLength(1)
-      .setMaxLength(6)
-      .setRequired(true)
-      .setStyle(TextInputStyle.Short);
+def build_embed(inv: int, sold: int) -> discord.Embed:
+    desc = (
+        "**로벅스 수량**\n"
+        f"`{inv}`로벅스\n"
+        "——————————\n"
+        "**총 판매량**\n"
+        f"`{sold}`로벅스\n"
+        "——————————\n"
+        "[로벅스 구매 바로가기](https://discord.com/channels/1419200424636055592/1419235238512427083)"
+    )
+    return discord.Embed(title="실시간 로벅스 재고", description=desc, color=GRAY)
 
-    modal.addComponents(new ActionRowBuilder().addComponents(qty));
-    await interaction.showModal(modal);
-    return;
-  }
+# 셀렉터/URL (로블록스)
+LOGIN_URL = "https://www.roblox.com/vi/Login"
+TX_URL    = "https://www.roblox.com/ko/transactions"
 
-  // 모달 제출
-  if (interaction.type === InteractionType.ModalSubmit && interaction.customId.startsWith("qty:")) {
-    const sku = interaction.customId.split(":")[1];
-    const qty = interaction.fields.getTextInputValue("qty");
-    const val = parseInt(String(qty).trim(), 10);
-    if (!Number.isInteger(val) || val <= 0) {
-      await interaction.reply({ content: "수량이 올바르지 않아. 1 이상 정수!", ephemeral: true });
-      return;
-    }
-    const orderId = `ord-${sku}-${val}`;
-    await interaction.reply({ content: `주문 완료! SKU: ${sku}, 수량: ${val}\n주문번호: ${orderId}`, ephemeral: true });
-    return;
-  }
+# 로그인 폼 셀렉터(로블록스 로그인 페이지는 로케일별로 조금 다름 → 후보 셀렉터 병렬 시도)
+SEL_ID      = "input#login-username, input[name='username'], input[type='text']"
+SEL_PW      = "input#login-password, input[name='password'], input[type='password']"
+SEL_LOGIN   = "button#login-button, button[type='submit'], button:has-text('로그인'), button:has-text('Đăng nhập')"
 
-  // 자세히 버튼
-  if (interaction.isButton() && interaction.customId === "shop:details") {
-    await interaction.reply({ content: "자세한 가이드는 곧 연결!", ephemeral: true });
-  }
-});
+# 잔액 파싱 전략
+# 1) 상단 또는 내 거래 페이지 내에 Robux 아이콘/텍스트와 함께 숫자가 보임
+# 2) 정규식으로 숫자만 추출
+RE_BAL = re.compile(r"([0-9][0-9,\.]*)")
 
-// 로그인
-client.login(TOKEN);
+LAUNCH_KW = dict(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+
+async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, int, str, list[dict]]:
+    if not PLAYWRIGHT_AVAILABLE:
+        return False, 0, "자동화 모듈 미설치", []
+    ID = dec(enc_id); PW = dec(enc_pw)
+    if not ID or not PW:
+        return False, 0, "계정 정보 오류", []
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(**LAUNCH_KW)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
+        )
+        page = await context.new_page()
+        try:
+            # 로그인 페이지
+            await page.goto(LOGIN_URL, timeout=25000)
+            # 로블록스는 로그인폼이 iframe일 때가 있어 대기 살짝
+            await page.wait_for_timeout(700)
+
+            # ID 입력
+            id_el = await page.query_selector(SEL_ID)
+            if not id_el:
+                ins = await page.query_selector_all("input")
+                id_el = ins[0] if ins else None
+            if not id_el:
+                return False, 0, "ID 입력칸 없음", await context.cookies()
+            await id_el.fill(ID)
+
+            # PW 입력
+            pw_el = await page.query_selector(SEL_PW)
+            if not pw_el:
+                ins = await page.query_selector_all("input[type='password']")
+                pw_el = ins[0] if ins else None
+            if not pw_el:
+                return False, 0, "PW 입력칸 없음", await context.cookies()
+            await pw_el.fill(PW)
+
+            # 로그인 버튼
+            btn = await page.query_selector(SEL_LOGIN) or await page.query_selector("button")
+            if not btn:
+                return False, 0, "로그인 버튼 없음", await context.cookies()
+            await btn.click()
+
+            # 로그인 처리 대기
+            await page.wait_for_timeout(1800)
+            html = await page.content()
+
+            # 캡차/2FA 등 방해 요소 감지(간단 텍스트 기반)
+            blocked_keywords = ["2단계", "Two-Step", "hCaptcha", "reCAPTCHA", "captcha", "보안인증", "Verify", "Security", "MFA"]
+            if any(k.lower() in html.lower() for k in blocked_keywords):
+                return False, 0, "보안 인증(캡차/2FA) 발생", await context.cookies()
+
+            # 실패 문구 대략적 감지
+            fail_keywords = ["잘못된", "오류", "incorrect", "invalid", "failed"]
+            if any(k.lower() in html.lower() for k in fail_keywords):
+                # 그래도 혹시 이미 로그인됐을 수도 있으니 트랜잭션 페이지로 이동 시도
+                pass
+
+            # 잔액 페이지 이동
+            await page.goto(TX_URL, timeout=25000)
+            await page.wait_for_timeout(1200)
+
+            # 텍스트 전체에서 숫자 후보 추출
+            html2 = await page.content()
+            # “내 잔액:” 같은 라벨 근처 숫자 우선 파싱 시도
+            balance_hint_patterns = [
+                r"(내\s*잔액|Balance|Robux)\D+([0-9][0-9,\.]*)",
+                r"([0-9][0-9,\.]*)\s*(Robux|RBX)"
+            ]
+            bal_value = None
+            for pat in balance_hint_patterns:
+                m = re.search(pat, html2, re.IGNORECASE)
+                if m:
+                    cand = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)
+                    cand = cand.replace(",", "").replace(".", "")
+                    if cand.isdigit():
+                        bal_value = int(cand); break
+
+            # 못 찾으면 숫자 시퀀스 전체에서 소규모 값 후보 필터링(너무 큰 값/이상치 제외)
+            if bal_value is None:
+                nums = [n.replace(",", "").replace(".", "") for n in re.findall(RE_BAL, html2)]
+                nums = [n for n in nums if n.isdigit()]
+                # Robux 잔액이 0~数십/수백만 내일 가능하다고 보고 상한선 필터(예: 100,000,000 이상 버림)
+                cand_list = [int(n) for n in nums if 0 <= int(n) <= 100_000_000]
+                # 페이지 내 가장 근접 후보로 작은 값 우선(잔액 스샷처럼 작은 값이 흔함)
+                if cand_list:
+                    bal_value = min(cand_list)
+
+            if bal_value is None:
+                return False, 0, "잔액 파싱 실패", await context.cookies()
+
+            return True, int(bal_value), "", await context.cookies()
+        except PwTimeout:
+            return False, 0, "응답 지연", await context.cookies()
+        except Exception as e:
+            return False, 0, f"자동화 예외: {str(e)[:120]}", await context.cookies()
+        finally:
+            with contextlib.suppress(Exception): await context.close()
+            with contextlib.suppress(Exception): await browser.close()
+
+class StockCog(commands.Cog):
+    def __init__(self, bot_: commands.Bot):
+        self.bot = bot_
+
+    @app_commands.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
+    async def 재고표시(self, it: discord.Interaction):
+        gid = it.guild.id
+        with _db_lock:
+            s = slot(gid)
+            e = build_embed(int(s["inventory"]), int(s["totalSold"]))
+        await it.response.send_message(embed=e)  # 공개 메시지
+        try:
+            msg = await it.original_response()
+            with _db_lock:
+                s = slot(gid)
+                s["lastMessage"] = {"channelId": it.channel.id, "messageId": msg.id}
+                save_db()
+        except:
+            pass
+
+    @app_commands.command(name="실시간_재고_설정", description="로벅스 계정을 등록하고 잔액을 실시간 반영합니다(관리자).")
+    @is_admin()
+    @app_commands.describe(ID="로블록스 로그인 ID", PW="로블록스 로그인 PW")
+    async def 실시간_재고_설정(self, it: discord.Interaction, ID: str, PW: str):
+        gid = it.guild.id
+        await it.response.send_message("계정 확인 중…", ephemeral=True)
+
+        # 저장(안전 옵션 자동 적용 가정)
+        with _db_lock:
+            s = slot(gid)
+            s["account"]["idEnc"] = enc(ID.strip())
+            s["account"]["pwEnc"] = enc(PW.strip())
+            s["account"]["optionsApplied"] = True
+            save_db()
+
+        ok, amount, reason, cookies = await roblox_login_and_get_balance(s["account"]["idEnc"], s["account"]["pwEnc"])
+
+        with _db_lock:
+            s = slot(gid)
+            if ok:
+                s["inventory"] = int(max(0, amount))
+                s["account"]["cookies"] = cookies or []
+                s["account"]["cookiesAt"] = now()
+                save_db()
+            else:
+                s["account"]["cookies"] = []
+                s["account"]["cookiesAt"] = 0
+                save_db()
+
+        # 기존 임베드 수정
+        try:
+            with _db_lock:
+                s = slot(gid)
+                last = s.get("lastMessage") or {}
+                ch_id = int(last.get("channelId") or 0)
+                msg_id = int(last.get("messageId") or 0)
+                inv = int(s.get("inventory", 0))
+                sold = int(s.get("totalSold", 0))
+            if ch_id and msg_id:
+                ch = it.guild.get_channel(ch_id)
+                if isinstance(ch, discord.TextChannel):
+                    msg = await ch.fetch_message(msg_id)
+                    await msg.edit(embed=build_embed(inv, sold))
+        except:
+            pass
+
+        if ok:
+            await it.followup.send(f"설정 완료. 현재 잔액 {amount} 로벅스 반영됨.", ephemeral=True)
+        else:
+            # 상세 원인은 관리 로그로만 남기는 게 안전하지만, 테스트니까 간단 이유 표시
+            await it.followup.send(f"설정 실패: {reason or '확인 불가'}. 잠시 후 다시 시도해줘.", ephemeral=True)
+
+async def setup_bot():
+    await bot.add_cog(StockCog(bot))
+    try:
+        await bot.tree.sync()
+        print("명령어 싱크 완료")
+    except Exception as e:
+        print("명령어 싱크 실패:", e)
+
+@bot.event
+async def on_ready():
+    print(f"로그인: {bot.user} 준비완료")
+
+async def main():
+    async with bot:
+        await setup_bot()
+        await bot.start(os.getenv("DISCORD_TOKEN", ""))
+
+if __name__ == "__main__":
+    asyncio.run(main())
