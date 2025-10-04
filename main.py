@@ -9,7 +9,7 @@ GUILD = discord.Object(id=GUILD_ID)
 INTENTS = discord.Intents.default()
 GRAY = discord.Color.from_str("#808080")
 
-# ===== Bot 생성: application_id 필수 =====
+# ===== Bot: application_id 필수 =====
 bot = commands.Bot(
     command_prefix="!",
     intents=INTENTS,
@@ -38,7 +38,7 @@ DB = load_db()
 def slot(gid: int):
     DB["guilds"].setdefault(str(gid), {
         "inventory": 0,         # 현재 로벅스 잔액(=재고)
-        "totalSold": 0,         # 총 판매량(누적)
+        "totalSold": 0,         # 총 판매량
         "lastMessage": {"channelId": 0, "messageId": 0},
         "account": {"idEnc":"", "pwEnc":"", "cookies":[], "cookiesAt":0, "optionsApplied": True}
     })
@@ -150,26 +150,22 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             await page.wait_for_timeout(1800)
             html = await page.content()
 
-            # 간단 차단/실패 감지
             blocked_keywords = ["2단계", "Two-Step", "hCaptcha", "reCAPTCHA", "captcha", "보안인증", "Verify", "Security", "MFA"]
             if any(k.lower() in html.lower() for k in blocked_keywords):
                 return False, 0, "보안 인증(캡차/2FA) 발생", await context.cookies()
-
-            fail_keywords = ["잘못된", "오류", "incorrect", "invalid", "failed"]
-            # 실패 문구가 있어도 혹시 세션이 들어갔을 수 있으니 다음 페이지에서 최종 판단
 
             # 2) 거래/잔액 페이지
             await page.goto(TX_URL, timeout=25000)
             await page.wait_for_timeout(1200)
             html2 = await page.content()
 
-            # “내 잔액:” 주변 값 우선 파싱
-            prios = [
+            # “내 잔액:” 주변 파싱
+            patterns = [
                 r"(내\s*잔액|Balance|Robux)\D+([0-9][0-9,\.]*)",
                 r"([0-9][0-9,\.]*)\s*(Robux|RBX)"
             ]
             bal_value = None
-            for pat in prios:
+            for pat in patterns:
                 m = re.search(pat, html2, re.IGNORECASE)
                 if m:
                     cand = m.group(2) if (m.lastindex and m.lastindex >= 2) else m.group(1)
@@ -182,7 +178,6 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
                 nums = [n for n in nums if n.isdigit()]
                 cands = [int(n) for n in nums if 0 <= int(n) <= 100_000_000]
                 if cands:
-                    # 잔액이 보통 화면에 한 번만 깔끔히 노출됨. 스샷처럼 소수 작은 값이 많으므로 최솟값 우선.
                     bal_value = min(cands)
 
             if bal_value is None:
@@ -198,7 +193,7 @@ async def roblox_login_and_get_balance(enc_id: str, enc_pw: str) -> tuple[bool, 
             with contextlib.suppress(Exception): await context.close()
             with contextlib.suppress(Exception): await browser.close()
 
-# ===== Cog: /재고표시, /실시간_재고_설정 =====
+# ===== Cog =====
 class StockCog(commands.Cog):
     def __init__(self, bot_: commands.Bot):
         self.bot = bot_
@@ -224,8 +219,8 @@ class StockCog(commands.Cog):
 
     @app_commands.command(name="실시간_재고_설정", description="로블록스 계정 등록 후 잔액을 실시간 반영(관리자).")
     @is_admin()
-    @app_commands.describe(ID="로블록스 로그인 ID", PW="로블록스 로그인 PW")
-    async def 실시간_재고_설정(self, it: discord.Interaction, ID: str, PW: str):
+    @app_commands.describe(id="로블록스 로그인 ID", pw="로블록스 로그인 PW")
+    async def 실시간_재고_설정(self, it: discord.Interaction, id: str, pw: str):
         if not it.guild:
             await it.response.send_message("길드에서만 가능해.", ephemeral=True)
             return
@@ -234,8 +229,8 @@ class StockCog(commands.Cog):
 
         with _db_lock:
             s = slot(gid)
-            s["account"]["idEnc"] = enc(ID.strip())
-            s["account"]["pwEnc"] = enc(PW.strip())
+            s["account"]["idEnc"] = enc(id.strip())
+            s["account"]["pwEnc"] = enc(pw.strip())
             s["account"]["optionsApplied"] = True
             save_db()
 
@@ -279,11 +274,6 @@ class StockCog(commands.Cog):
 async def setup_bot():
     await bot.add_cog(StockCog(bot))
     try:
-        # 전역 -> 길드 복사(전역 커맨드 정의 시 안정화용)
-        bot.tree.copy_global_to(guild=GUILD)
-    except Exception:
-        pass
-    try:
         await bot.tree.sync(guild=GUILD)
         print("명령어 길드 싱크 완료")
     except Exception as e:
@@ -302,11 +292,9 @@ async def on_ready():
 async def main():
     token = os.getenv("DISCORD_TOKEN", "")
     if not token:
-        print("DISCORD_TOKEN 누락")
-        return
+        print("DISCORD_TOKEN 누락"); return
     if not bot.application_id:
-        print("DISCORD_APP_ID 누락 또는 잘못됨")
-        return
+        print("DISCORD_APP_ID 누락 또는 잘못됨"); return
     async with bot:
         await setup_bot()
         await bot.start(token)
