@@ -233,6 +233,9 @@ class StockCog(commands.Cog):
 # ===== 싱크: setup_hook에서 길드 한정 1회만 =====
 @bot.event
 async def setup_hook():
+    # application.commands 스코프로 초대되지 않으면 여기서 바로 체크
+    if not bot.application_id:
+        print("DISCORD_APP_ID 누락 또는 잘못됨"); return
     await bot.add_cog(StockCog(bot))
     try:
         await bot.tree.sync(guild=GUILD)
@@ -249,8 +252,6 @@ async def main():
     token = os.getenv("DISCORD_TOKEN", "")
     if not token:
         print("DISCORD_TOKEN 누락"); return
-    if not bot.application_id:
-        print("DISCORD_APP_ID 누락 또는 잘못됨"); return
     async with bot:
         await bot.start(token)
 
