@@ -1,6 +1,5 @@
-Const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ComponentType } = require('discord.js');
 // discord.js에서 MessageFlags는 MessageType이므로, V2 플래그는 수동으로 처리합니다.
-// V2 플래그 (IS_COMPONENTS_V2)는 1 << 15 입니다.
 const COMPONENTS_V2_FLAG = 1 << 15; 
 
 require('dotenv').config();
@@ -11,7 +10,10 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID || '';
 if (!TOKEN) { console.error('[ENV] DISCORD_TOKEN 누락'); process.exit(1); }
 
-// DB 함수는 변경 없이 유지
+// Client 객체 정의 (ReferenceError 해결)
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+/* ====== DB(JSON) ====== */
 const DATA_PATH = path.join(process.cwd(), 'data.json');
 function loadDB() {
   if (!fs.existsSync(DATA_PATH)) fs.writeFileSync(DATA_PATH, JSON.stringify({ users:{}, stats:{ total_sold:0 } }, null, 2));
@@ -44,14 +46,6 @@ function pushTxn(uid, amount, desc) {
 
 /**
  * Components V2 스타일의 재고 카드를 JSON 구조체로 반환합니다.
- * @param {string} title - 제목
- * @param {string} subtitle - 부제목
- * @param {object} stock - 재고 객체
- * @param {object} tokens - 토큰 객체
- * @param {number} soldCount - 판매 횟수
- * @param {number} soldAmount - 판매 금액
- * @param {number} updatedSec - 업데이트 시간
- * @returns {object} Discord API 컴포넌트 구조체
  */
 function stockV2Components(title, subtitle, stock, tokens, soldCount, soldAmount, updatedSec) {
     const formatCount = (count) => `**${count ?? 0}**`;
@@ -73,8 +67,6 @@ function stockV2Components(title, subtitle, stock, tokens, soldCount, soldAmount
                 { type: 1, content: `### 🎁 3개월 부스트\n재고: ${formatCount(stock['3m'])}개 | 토큰: ${formatCount(tokens['3m'])}개` }
             ]},
         ],
-        // Container의 layout_type 3 (GRID)을 사용하여 항목을 나란히 배치 (비공식적 동작)
-        // 공식 API 문서에 LayoutType이 없으므로, 기본 동작에 의존합니다.
     };
 
     // 판매 현황 섹션
@@ -107,9 +99,6 @@ function stockV2Components(title, subtitle, stock, tokens, soldCount, soldAmount
 
 /**
  * 사용자 정보 카드를 JSON 구조체로 반환합니다.
- * @param {object} user - Discord User 객체
- * @param {object} stats - 사용자 DB 통계
- * @returns {object} Discord API 컴포넌트 구조체
  */
 function myInfoV2Components(user, stats) {
     const avatarUrl = user.displayAvatarURL ? user.displayAvatarURL() : null;
@@ -145,7 +134,7 @@ function panelButtons() {
     new ButtonBuilder().setCustomId('p_notice').setStyle(ButtonStyle.Secondary).setLabel('공지사항'),
     new ButtonBuilder().setCustomId('p_charge').setStyle(ButtonStyle.Secondary).setLabel('충전'),
     new ButtonBuilder().setCustomId('p_me').setStyle(ButtonStyle.Secondary).setLabel('내 정보'),
-    new ButtonBuilder().setCustomId('p_buy').setStyle(ButtonStyle.Success).setLabel('구매')
+    new ButtonBuilder().setCustomId('p_buy').setStyle(ButtonStyle.Success).setLabel('구매') 
   );
 }
 
@@ -164,7 +153,7 @@ function txSelect(stats) {
   );
 }
 
-// 공지 임베드 (V2는 임베드를 대체하므로 Text Display로 변환)
+// 공지 V2 컴포넌트
 function noticeV2Components() {
     return [
         { type: 1, content: '## 📢 공지사항' },
@@ -173,6 +162,12 @@ function noticeV2Components() {
         { type: 1, content: '⚠️ 중요 정보' }
     ];
 }
+
+/* ====== Slash Commands ====== */
+const cmdDefs = [
+  new SlashCommandBuilder().setName('재고카드').setDescription('카드풍 재고 표시(1장)'),
+  new SlashCommandBuilder().setName('재고패널').setDescription('카드풍 재고 2장 연속 표시')
+].map(c=>c.toJSON());
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -222,7 +217,6 @@ client.on('interactionCreate', async (i) => {
       const cid = i.customId;
       
       if (cid === 'p_notice') {
-        // 공지 V2 컴포넌트 전송
         const v2_components = noticeV2Components();
         await i.followUp({ components: v2_components, flags: COMPONENTS_V2_FLAG, ephemeral:true });
       } else if (cid === 'p_me') {
@@ -279,7 +273,6 @@ client.on('interactionCreate', async (i) => {
     console.error('[INT] Component V2 error', e);
     try { 
         if (!i.replied && !i.deferred) {
-             // API 응답 구조 오류가 발생했을 수 있으므로 일반 임베드 또는 텍스트로 응답
             await i.reply({ content:'**[V2 오류]** 컴포넌트 V2 처리 중 에러가 발생했습니다. 잠시 후 다시 시도하거나, 서버 관리자에게 문의하세요.', ephemeral:true }); 
         }
     } catch {}
