@@ -6,14 +6,14 @@ from discord import app_commands, Interaction, Embed, File
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Playwright는 /재고추가에서만 사용(설치 안 되어 있어도 나머지 명령은 동작)
+# Playwright 체크 (설치 안 되어도 /재고표시, /가격설정, /버튼패널은 동작)
 PLAYWRIGHT_OK = True
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PwTimeout
 except Exception:
     PLAYWRIGHT_OK = False
 
-# ================== 기본 ==================
+# ========== 기본 ==========
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 intents = discord.Intents.default()
@@ -21,23 +21,32 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ================== DB ==================
+# ========== DB ==========
 DATA_PATH = "data.json"
 INIT_DATA = {
     "guilds": {
-        # "{guild_id}": {
-        #   "stock": { "robux": 0, "totalSold": 0, "pricePer": 0, "lastMsg": {"channelId":0,"messageId":0} },
-        #   "sessions": { "{user_id}": {"cookie": null, "username": null, "password": null, "lastRobux":0} }
+        # "gid": {
+        #   "stock": {"robux":0,"totalSold":0,"pricePer":0,"lastMsg":{"channelId":0,"messageId":0}},
+        #   "sessions": {"uid":{"cookie":None,"username":None,"password":None,"lastRobux":0}}
         # }
     }
 }
 
 def db_load() -> Dict[str, Any]:
+    # 파일 없으면 생성
     if not os.path.exists(DATA_PATH):
         with open(DATA_PATH, "w", encoding="utf-8") as f:
             json.dump(INIT_DATA, f, ensure_ascii=False, indent=2)
+    # 파일 읽기
     with open(DATA_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            data = json.load(f)
+        except Exception:
+            data = INIT_DATA
+    # guilds 루트 보장
+    if "guilds" not in data or not isinstance(data["guilds"], dict):
+        data["guilds"] = {}
+    return data
 
 def db_save(db: Dict[str, Any]):
     tmp = DATA_PATH + ".tmp"
@@ -47,15 +56,15 @@ def db_save(db: Dict[str, Any]):
 
 def gslot(gid: int) -> Dict[str, Any]:
     db = db_load()
-    gs = db["guilds"].get(str(gid))
-    if not gs:
-        gs = {
+    s = db["guilds"].get(str(gid))
+    if not s:
+        s = {
             "stock": {"robux": 0, "totalSold": 0, "pricePer": 0, "lastMsg": {"channelId": 0, "messageId": 0}},
             "sessions": {}
         }
-        db["guilds"][str(gid)] = gs
+        db["guilds"][str(gid)] = s
         db_save(db)
-    return gs
+    return s
 
 def update_gslot(gid: int, gs: Dict[str, Any]):
     db = db_load()
@@ -65,9 +74,12 @@ def update_gslot(gid: int, gs: Dict[str, Any]):
 def set_session(gid: int, uid: int, cookie: Optional[str], username: Optional[str], password: Optional[str]):
     gs = gslot(gid)
     sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0})
-    if cookie is not None: sess["cookie"] = cookie
-    if username is not None: sess["username"] = username
-    if password is not None: sess["password"] = password
+    if cookie is not None:
+        sess["cookie"] = cookie
+    if username is not None:
+        sess["username"] = username
+    if password is not None:
+        sess["password"] = password
     gs["sessions"][str(uid)] = sess
     update_gslot(gid, gs)
 
@@ -80,9 +92,9 @@ def set_last_robux(gid: int, uid: int, amount: int):
 
 def set_stock_values(gid: int, robux: Optional[int] = None, totalSold: Optional[int] = None, pricePer: Optional[int] = None):
     gs = gslot(gid)
-    if robux is not None: gs["stock"]["robux"] = int(robux)
-    if totalSold is not None: gs["stock"]["totalSold"] = int(totalSold)
-    if pricePer is not None: gs["stock"]["pricePer"] = int(pricePer)
+    if robux is not None: gs["stock"]["robux"] = max(0, int(robux))
+    if totalSold is not None: gs["stock"]["totalSold"] = max(0, int(totalSold))
+    if pricePer is not None: gs["stock"]["pricePer"] = max(0, int(pricePer))
     update_gslot(gid, gs)
 
 def set_last_message(gid: int, channelId: int, messageId: int):
@@ -90,48 +102,30 @@ def set_last_message(gid: int, channelId: int, messageId: int):
     gs["stock"]["lastMsg"] = {"channelId": int(channelId), "messageId": int(messageId)}
     update_gslot(gid, gs)
 
-# ================== 색/이모지/임베드 ==================
+# ========== 색/이모지/임베드 ==========
 def color_hex(hex_str: str) -> discord.Colour:
     h = hex_str.lower().replace("#", "")
     return discord.Colour(int(h, 16))
 
 COLOR_BLACK = color_hex("000000")
-COLOR_PINK = color_hex("ff5dd6")
+COLOR_PINK  = color_hex("ff5dd6")
 
-# 사용자 제공 애니메 이모지 ID
+# 커스텀 애니 이모지(표시용 문자열 그대로)
 EMO_REALTIME = "<a:upuoipipi:1423892277373304862>"
 EMO_THUMBS  = "<a:thumbsuppp:1423892279612936294>"
 EMO_SAK     = "<a:sakfnmasfagfamg:1423892278677602435>"
 
 FOOTER_IMAGE = "https://cdn.discordapp.com/attachments/1420389790649421877/1424077172435325091/IMG_2038.png?ex=68e2a2b7&is=68e15137&hm=712b0f434f2267c261dc260fd22a7a163d158b7c2f43fa618642abd80b17058c&"
 
-def build_stock_embed(gid: int) -> Embed:
-    gs = gslot(gid)
-    robux = int(gs["stock"].get("robux", 0))
-    total = int(gs["stock"].get("totalSold", 0))
-    price = int(gs["stock"].get("pricePer", 0))
+def embed_panel() -> Embed:
+    return Embed(title="자동 로벅스 자판기", description="아래 버튼을 눌러 이용해줘!", colour=COLOR_PINK)
 
-    # 요청 포맷: 제목 없음, 본문 라인별 이모지와 라벨
-    lines = [
-        f"{EMO_REALTIME}실시간 로벅스",
-        f"{EMO_THUMBS}로벅스 재고",
-        f"{EMO_SAK}{robux if robux >= 0 else 0}로벅스",
-        f"{EMO_THUMBS}로벅스 가격",
-        f"{EMO_SAK}1당 {price if price >= 0 else 0}로벅스",
-        f"{EMO_THUMBS}총 판매량",
-        f"{EMO_SAK}{total if total >= 0 else 0}로벅스",
-    ]
-    e = Embed(title="제목 없음", description="\n".join(lines), colour=COLOR_PINK)
-    # 하단 이미지(요청)
-    e.set_image(url=FOOTER_IMAGE)
-    return e
+def embed_notice() -> Embed:
+    return Embed(title="공지", description="<#1419230737244229653> 필독 부탁!", colour=COLOR_BLACK)
 
 def build_info_embed(user: discord.User | discord.Member, gid: int) -> Embed:
-    gs = gslot(gid)
-    # 유저 개인 지갑/누적/횟수는 간단히 0으로 두고 구조만 유지(원하면 확장)
-    wallet = 0
-    total  = 0
-    count  = 0
+    # 현재는 개인 지갑/누적/거래횟수는 0으로 표시(필요하면 확장)
+    wallet, total, count = 0, 0, 0
     e = Embed(title=f"{getattr(user,'display_name',user.name)}님 정보", colour=COLOR_BLACK)
     e.description = "\n".join([
         f"보유 금액 : `{wallet}`원",
@@ -142,8 +136,25 @@ def build_info_embed(user: discord.User | discord.Member, gid: int) -> Embed:
     except Exception: pass
     return e
 
-# ================== Roblox 세션/파싱 ==================
-# URL 후보
+def build_stock_embed(gid: int) -> Embed:
+    gs = gslot(gid)
+    robux = int(gs["stock"].get("robux", 0))
+    total = int(gs["stock"].get("totalSold", 0))
+    price = int(gs["stock"].get("pricePer", 0))
+    lines = [
+        f"{EMO_REALTIME}실시간 로벅스",
+        f"{EMO_THUMBS}로벅스 재고",
+        f"{EMO_SAK}{robux}로벅스",
+        f"{EMO_THUMBS}로벅스 가격",
+        f"{EMO_SAK}1당 {price}로벅스",
+        f"{EMO_THUMBS}총 판매량",
+        f"{EMO_SAK}{total}로벅스",
+    ]
+    e = Embed(title="제목 없음", description="\n".join(lines), colour=COLOR_PINK)
+    e.set_image(url=FOOTER_IMAGE)
+    return e
+
+# ========== Roblox 로그인/파싱 ==========
 ROBLOX_LOGIN_URLS = [
     "https://www.roblox.com/Login",
     "https://www.roblox.com/ko/Login",
@@ -155,7 +166,6 @@ ROBLOX_HOME_URLS = [
 ]
 ROBLOX_TX_URL = "https://www.roblox.com/ko/transactions"
 
-# 쿠키 정규화(.ROBLOSECURITY=..., _|WARNING:…|_ 둘 다 허용)
 def normalize_cookie(raw: str) -> Optional[str]:
     if not raw: return None
     s = raw.strip()
@@ -176,7 +186,6 @@ BADGE_SELECTORS = [
     "span[title*='Robux']",
     "span[title*='로벅스']",
 ]
-
 SECURITY_MAP = {
     "two_factor": ["two-step", "2단계", "authenticator", "otp", "2-step"],
     "device_verification": ["verify your device", "장치 인증", "새 기기", "was this you", "device verification"],
@@ -280,7 +289,6 @@ async def robux_with_cookie(raw_cookie: str) -> Tuple[bool, Optional[int], str, 
             if not ctx: await browser.close(); return False, None, "컨텍스트 오류", None
             await ctx.add_cookies([{"name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"}])
             page = await ctx.new_page()
-
             v_tx, v_home, shot = None, None, None
             if await _goto(page, ROBLOX_TX_URL):
                 html = await page.content()
@@ -318,28 +326,24 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
             ctx = await _ctx(browser)
             if not ctx: await browser.close(); return False, None, "컨텍스트 오류", None
             page = await ctx.new_page()
-
             moved = False
             for url in ROBLOX_LOGIN_URLS:
                 if await _goto(page, url):
                     moved = True; break
             if not moved:
                 await browser.close(); return False, None, "로그인 페이지 이동 실패", None
-
             id_ok = False
             for sel in ["input#login-username", "input[name='username']", "input[type='text']"]:
                 try: await page.fill(sel, username); id_ok = True; break
                 except Exception: continue
             if not id_ok:
                 await browser.close(); return False, None, "아이디 입력 실패", None
-
             pw_ok = False
             for sel in ["input#login-password", "input[name='password']", "input[type='password']"]:
                 try: await page.fill(sel, password); pw_ok = True; break
                 except Exception: continue
             if not pw_ok:
                 await browser.close(); return False, None, "비밀번호 입력 실패", None
-
             clicked = False
             for sel in ["button#login-button", "button[type='submit']", "button:has-text('로그인')", "button:has-text('Log In')"]:
                 try:
@@ -348,19 +352,15 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
                 except Exception: continue
             if not clicked:
                 await browser.close(); return False, None, "로그인 버튼 클릭 실패", None
-
             await asyncio.sleep(1.6)
             html = await page.content()
-
             iss = _detect_issue(html)
             if iss:
                 shot = await _shot(page); await browser.close()
                 return False, None, iss, shot
-
             if _cred_error(html):
                 shot = await _shot(page); await browser.close()
                 return False, None, "자격증명 오류(아이디/비밀번호 불일치)", shot
-
             v_tx, v_home, shot = None, None, None
             if await _goto(page, ROBLOX_TX_URL):
                 v_tx = await _parse_tx(page); shot = await _shot(page)
@@ -379,7 +379,7 @@ async def robux_with_login(username: str, password: str) -> Tuple[bool, Optional
     except Exception:
         return False, None, "예외", None
 
-# ================== 패널 뷰 ==================
+# ========== 패널 뷰 ==========
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -397,7 +397,7 @@ class PanelView(discord.ui.View):
     async def buy_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=Embed(title="구매", description="준비 중이야.", colour=COLOR_BLACK), ephemeral=True)
 
-# ================== 모달(/재고추가) ==================
+# ========== 모달(/재고추가) ==========
 class StockModal(discord.ui.Modal, title="세션/로그인 추가"):
     cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=False, max_length=4000)
     id_input = discord.ui.TextInput(label="아이디", required=False, max_length=100)
@@ -413,24 +413,18 @@ class StockModal(discord.ui.Modal, title="세션/로그인 추가"):
             set_session(gid, interaction.user.id, norm if norm else raw_cookie, None, None)
         if uid or pw:
             set_session(gid, interaction.user.id, None, uid if uid else None, pw if pw else None)
-
         ok, amount, reason, shot = False, None, None, None
-        # 1) 쿠키 우선
         if raw_cookie:
             c_ok, c_amt, c_reason, c_shot = await robux_with_cookie(raw_cookie)
             if c_ok: ok, amount, reason, shot = True, c_amt, "ok", c_shot
             else: reason, shot = c_reason, c_shot
-        # 2) ID/PW 보조
         if not ok and uid and pw:
             l_ok, l_amt, l_reason, l_shot = await robux_with_login(uid, pw)
             if l_ok: ok, amount, reason, shot = True, l_amt, "ok", l_shot
             else: reason, shot = l_reason, l_shot or shot
-
         if ok and isinstance(amount, int):
             set_last_robux(gid, interaction.user.id, amount)
-            # 재고(서버 공용 재고)를 로블록스 잔액으로 덮어쓰거나, 최소값으로 반영
             set_stock_values(gid, robux=amount)
-            # 기존 /재고표시 메시지 실시간 수정
             await try_update_stock_message(interaction.guild, gid)
             e = Embed(title="성공", description=f"로벅스 수량 {amount:,}", colour=COLOR_BLACK)
             if shot:
@@ -446,7 +440,7 @@ class StockModal(discord.ui.Modal, title="세션/로그인 추가"):
             else:
                 await interaction.edit_original_response(embed=e)
 
-# ================== 유틸: /재고표시 메시지 갱신 ==================
+# ========== /재고표시 메시지 갱신 ==========
 async def try_update_stock_message(guild: discord.Guild, gid: int):
     gs = gslot(gid)
     last = gs["stock"].get("lastMsg", {}) or {}
@@ -461,7 +455,7 @@ async def try_update_stock_message(guild: discord.Guild, gid: int):
             except Exception:
                 pass
 
-# ================== 슬래시 명령 ==================
+# ========== 슬래시 명령 ==========
 @tree.command(name="버튼패널", description="자판기 패널을 공개로 표시합니다.")
 async def 버튼패널(inter: Interaction):
     await inter.response.send_message(embed=embed_panel(), view=PanelView(), ephemeral=False)
@@ -483,7 +477,6 @@ async def 재고표시(inter: Interaction):
 async def 가격설정(inter: Interaction, 일당: int):
     gid = inter.guild.id
     set_stock_values(gid, pricePer=max(0, int(일당)))
-    # 공개 임베드 즉시 업데이트
     await try_update_stock_message(inter.guild, gid)
     e = Embed(title="제목 없음", description="가격설정 완료", colour=COLOR_BLACK)
     await inter.response.send_message(embed=e, ephemeral=True)
@@ -492,14 +485,14 @@ async def 가격설정(inter: Interaction, 일당: int):
 async def 재고추가(inter: Interaction):
     await inter.response.send_modal(StockModal())
 
-# ================== 부팅 ==================
+# ========== 부팅 ==========
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
     try:
         cmds = await tree.sync()
         print("[SYNC]", ", ".join("/"+c.name for c in cmds))
-        bot.add_view(PanelView())  # 패널 버튼 유지(선택)
+        bot.add_view(PanelView())
     except Exception as e:
         print("[SYNC][ERR]", e)
 
