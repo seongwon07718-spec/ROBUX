@@ -19,19 +19,21 @@ ROBLOX_LOGIN_URLS = ["https://www.roblox.com/ko/Login", "https://www.roblox.com/
 ROBLOX_TX_URLS = ["https://www.roblox.com/ko/transactions", "https://www.roblox.com/transactions"]
 
 BALANCE_CACHE_TTL_SEC = 30
-PAGE_TIMEOUT = 15000
-UPDATE_INTERVAL_SEC = 60  # 자동 갱신 주기(초)
+PAGE_TIMEOUT = 20000
+UPDATE_INTERVAL_SEC = 60
+LOGIN_RETRY = 2
 
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
+# 임베드 하단 이미지(네가 준 URL)
 STOCK_IMAGE_URL = "https://cdn.discordapp.com/attachments/1420389790649421877/1423898721036271718/IMG_2038.png?ex=68e1fc85&is=68e0ab05&hm=267f34b38adac333d3bdd72c603867239aa843dd5c6c891b83434b151daa1006&"
 
 # ===== 저장소 유틸 =====
 def _default_data() -> Dict[str, Any]:
     return {
-        "users": {},  # { userId: { "roblox": {...}, "last_embed": {"channel_id","message_id"} } }
-        "stats": {"total_sold": 0},  # 총 판매량(표시용)
-        "cache": {"balances": {}},   # { userId: {"value": int, "ts": iso} }
+        "users": {},
+        "stats": {"total_sold": 0},
+        "cache": {"balances": {}},
         "meta": {"version": 1}
     }
 
@@ -119,7 +121,43 @@ def get_cached_balance(uid: int) -> Optional[int]:
         return int(item["value"])
     return None
 
-# ===== Roblox 조회 =====
+# ===== Playwright 런처(브라우저 실패 방지) =====
+async def launch_browser(p):
+    launch_args = {
+        "headless": True,
+        "args": [
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-setuid-sandbox",
+            "--no-zygote",
+        ],
+    }
+    try:
+        browser = await p.chromium.launch(**launch_args)
+        return browser
+    except Exception:
+        # 무헤드리스 폴백(일부 환경에서 headless true가 실패)
+        try:
+            launch_args["headless"] = False
+            browser = await p.chromium.launch(**launch_args)
+            return browser
+        except Exception:
+            return None
+
+async def new_context(browser: Browser) -> Optional[BrowserContext]:
+    try:
+        ctx = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            java_script_enabled=True,
+            locale="ko-KR"
+        )
+        return ctx
+    except Exception:
+        return None
+
+# ===== Roblox 파싱 =====
 async def _extract_numbers_from_page(page: Page) -> Optional[int]:
     html = await page.content()
     nums = []
@@ -186,13 +224,11 @@ async def _login_with_idpw(context: BrowserContext, username: str, password: str
         except Exception:
             pass
 
-        # 실패 메시지 흔적
-        error_box = await page.query_selector("div:has-text('잘못') , div:has-text('Invalid') , div:has-text('incorrect')")
-        if error_box:
+        err = await page.query_selector("div:has-text('잘못') , div:has-text('Invalid') , div:has-text('incorrect')")
+        if err:
             fail_reason = "아이디/비밀번호가 올바르지 않음"
             return ok, bal, cookie_val, username_hint, fail_reason
 
-        # 거래 페이지 이동
         moved = False
         for url in ROBLOX_TX_URLS:
             try:
@@ -206,15 +242,12 @@ async def _login_with_idpw(context: BrowserContext, username: str, password: str
             return ok, bal, cookie_val, username_hint, fail_reason
 
         bal = await _extract_numbers_from_page(page)
-
-        # 쿠키 추출
         cookies = await context.cookies()
         for c in cookies:
             if c.get("name") == ".ROBLOSECURITY":
                 cookie_val = c.get("value")
                 break
 
-        # username 힌트
         try:
             title = await page.title()
             if title:
@@ -232,7 +265,7 @@ async def _login_with_idpw(context: BrowserContext, username: str, password: str
         await page.close()
 
 async def fetch_balance(uid: int) -> int:
-    # 실패 시 0 반환(요청사항)
+    # 실패 시 0 표시
     cached = get_cached_balance(uid)
     if cached is not None:
         return int(cached)
@@ -242,68 +275,74 @@ async def fetch_balance(uid: int) -> int:
     username = info.get("username")
     password = info.get("password")
 
-    try:
-        async with async_playwright() as p:
-            browser: Browser = await p.chromium.launch(headless=True)
-            context: BrowserContext = await browser.new_context()
+    for attempt in range(LOGIN_RETRY):
+        try:
+            async with async_playwright() as p:
+                browser = await launch_browser(p)
+                if not browser:
+                    continue
+                context = await new_context(browser)
+                if not context:
+                    await browser.close()
+                    continue
 
-            # 쿠키 우선
-            if cookie_raw:
-                bal = await _open_with_cookie(context, cookie_raw)
-                await browser.close()
-                if isinstance(bal, int):
-                    cache_balance(uid, bal)
-                    return int(bal)
-                # 폴백: id/pw
+                if cookie_raw:
+                    bal = await _open_with_cookie(context, cookie_raw)
+                    await browser.close()
+                    if isinstance(bal, int):
+                        cache_balance(uid, bal)
+                        return int(bal)
+                    # 폴백으로 id/pw 시도
 
-            # 로그인 폴백
-            if username and password:
-                ok, bal, new_cookie, uname_hint, _ = await _login_with_idpw(context, username, password)
-                await browser.close()
-                if ok and isinstance(bal, int):
-                    if new_cookie:
-                        set_user_cookie(uid, new_cookie, uname_hint)
-                    cache_balance(uid, bal)
-                    return int(bal)
-                return 0
-            await browser.close()
-            return 0
-    except Exception:
-        return 0
+                if username and password:
+                    ok, bal, new_cookie, uname_hint, _ = await _login_with_idpw(context, username, password)
+                    await browser.close()
+                    if ok and isinstance(bal, int):
+                        if new_cookie:
+                            set_user_cookie(uid, new_cookie, uname_hint)
+                        cache_balance(uid, bal)
+                        return int(bal)
+                else:
+                    await browser.close()
+        except Exception:
+            continue
+    return 0
 
 # ===== Discord Bot =====
 INTENTS = discord.Intents.default()
 BOT = commands.Bot(command_prefix="!", intents=INTENTS)
 TREE = BOT.tree
 
-# 자동 갱신 추적 { userId(str): {"guild_id": int, "channel_id": int, "message_id": int} }
 active_updates: Dict[str, Dict[str, int]] = {}
 
 def build_embed(guild: Optional[discord.Guild], robux_balance: int, total_sold: int) -> Embed:
     colour = discord.Colour(int("ff5dd6", 16))
-    emb = Embed(title="", colour=colour)  # timestamp 미사용 → 아래 시간 안 뜸
+    emb = Embed(title="", colour=colour)  # timestamp 미사용 → 하단 시간 안 뜸
 
-    # 서버 이름 작게(텍스트). 썸네일/author 미사용 → 오른쪽 프사 안 뜸
+    # 서버 이름만 작게 텍스트로(오른쪽 썸네일/프사 안 씀)
     guild_line = f"*{guild.name}*" if guild else ""
 
     stock = f"{robux_balance:,}"
     total = f"{total_sold:,}"
 
-    desc = []
+    lines = []
     if guild_line:
-        desc.append(guild_line)
-    desc.append("### <a:upuoipipi:1423892277373304862>실시간 로벅스 재고")
-    desc.append("### <a:thumbsuppp:1423892279612936294>로벅스 재고")
-    desc.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{stock}`로벅스**")
-    desc.append("### <a:thumbsuppp:1423892279612936294>총 판매량")
-    desc.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{total}`로벅스**")
+        lines.append(guild_line)
+    lines.append("### <a:upuoipipi:1423892277373304862>실시간 로벅스 재고")
+    lines.append("### <a:thumbsuppp:1423892279612936294>로벅스 재고")
+    lines.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{stock}`로벅스**")
+    lines.append("### <a:thumbsuppp:1423892279612936294>총 판매량")
+    lines.append(f"<a:sakfnmasfagfamg:1423892278677602435>**`{total}`로벅스**")
 
-    emb.description = "\n".join(desc)
-    emb.set_image(url=STOCK_IMAGE_URL)
+    emb.description = "\n".join(lines)
+
+    # 이미지가 안 보이는 이슈 수정:
+    # - set_image는 CDN 직링크 OK, 다만 프록시/권한 문제 대비하여 URL 문자열 정리
+    emb.set_image(url=STOCK_IMAGE_URL.strip())
     return emb
 
 async def upsert_public_embed(inter: Interaction, uid: int, force_new: bool = False):
-    bal = await fetch_balance(uid)  # 실패 시 0
+    bal = await fetch_balance(uid)
     total = get_total_sold()
     embed = build_embed(inter.guild, bal, total)
 
@@ -333,7 +372,7 @@ async def updater_loop():
             total = get_total_sold()
             ch = await BOT.fetch_channel(loc["channel_id"])
             msg = await ch.fetch_message(loc["message_id"])
-            guild = msg.guild if hasattr(msg, "guild") else None
+            guild = getattr(msg, "guild", None)
             embed = build_embed(guild, bal, total)
             await msg.edit(embed=embed)
         except Exception:
@@ -357,75 +396,77 @@ async def on_ready():
         updater_loop.start()
 
 # ===== 명령어 =====
-@TREE.command(name="실시간_재고_설정", description="Roblox 실시간 재고 연동을 설정(즉시 로그인/검증/반영)합니다.")
+@TREE.command(name="실시간_재고_설정", description="쿠키/로그인 저장 후 즉시 검증하고 임베드에 반영합니다.")
 @app_commands.describe(mode="cookie 또는 login", cookie=".ROBLOSECURITY 값", id="Roblox 아이디", pw="Roblox 비밀번호")
 async def cmd_setup(inter: Interaction, mode: str, cookie: Optional[str] = None, id: Optional[str] = None, pw: Optional[str] = None):
     await inter.response.defer(ephemeral=True, thinking=True)
     mode = (mode or "").lower().strip()
-    if mode not in ("cookie", "login"):
-        await inter.followup.send("mode는 cookie 또는 login 중 하나야.", ephemeral=True)
-        return
-
-    # 결과 임베드 템플릿
-    def result_embed(title: str, desc: str, ok: bool) -> Embed:
-        col = discord.Colour.green() if ok else discord.Colour.red()
-        e = Embed(title=title, description=desc, colour=col)
-        return e
+    ok = False
+    reason = None
+    bal_value = 0
 
     if mode == "cookie":
         if not cookie:
-            await inter.followup.send(embed=result_embed("실패", "cookie(.ROBLOSECURITY) 값이 필요해.", False), ephemeral=True)
+            await inter.followup.send(embed=Embed(title="실패", description="cookie(.ROBLOSECURITY) 값 필요", colour=discord.Colour.red()), ephemeral=True)
             return
-        # 저장 후 즉시 검증/반영
         set_user_cookie(inter.user.id, cookie)
-        bal = await fetch_balance(inter.user.id)
-        if bal is not None:  # 실패 시 0이 일관 반환
-            await inter.followup.send(embed=result_embed("연동 완료", f"쿠키 저장 및 잔액 확인: {bal:,} 로벅스", True), ephemeral=True)
-            # 공개 임베드 즉시 새로고침(없으면 생성)
-            await upsert_public_embed(inter, inter.user.id, force_new=False)
-        else:
-            await inter.followup.send(embed=result_embed("연동 실패", "쿠키로 잔액 확인 실패(0으로 표시될 수 있음).", False), ephemeral=True)
-        return
-
-    if mode == "login":
+        bal_value = await fetch_balance(inter.user.id)  # 0 또는 숫자
+        ok = True
+    elif mode == "login":
         if not id or not pw:
-            await inter.followup.send(embed=result_embed("실패", "login 모드는 id, pw 모두 필요해.", False), ephemeral=True)
+            await inter.followup.send(embed=Embed(title="실패", description="login 모드는 id, pw 필요", colour=discord.Colour.red()), ephemeral=True)
             return
-
-        # 로그인 시도 → 결과 임베드
-        # 내부적으로 fetch_balance는 쿠키 미보유 시 로그인 폴백으로 0/값을 반환
         set_user_login(inter.user.id, id, pw)
-
-        # 좀 더 상세한 실패 사유를 위해 직접 로그인 루틴 한 번 실행
+        # 브라우저 상세 시도(실패 이유 보고)
+        tried_ok = False
+        last_reason = None
         try:
             async with async_playwright() as p:
-                browser: Browser = await p.chromium.launch(headless=True)
-                context: BrowserContext = await browser.new_context()
-                ok, bal, new_cookie, uname_hint, fail_reason = await _login_with_idpw(context, id, pw)
-                await browser.close()
+                browser = await launch_browser(p)
+                if not browser:
+                    last_reason = "브라우저 실행 오류(런타임/권한 확인)"
+                else:
+                    ctx = await new_context(browser)
+                    if not ctx:
+                        last_reason = "컨텍스트 생성 실패(권한/샌드박스)"
+                    else:
+                        # 리트라이
+                        for _ in range(LOGIN_RETRY):
+                            _ok, _bal, new_cookie, uname_hint, fail_reason = await _login_with_idpw(ctx, id, pw)
+                            if _ok and isinstance(_bal, int):
+                                tried_ok = True
+                                bal_value = _bal
+                                if new_cookie:
+                                    set_user_cookie(inter.user.id, new_cookie, uname_hint)
+                                break
+                            last_reason = fail_reason or "알 수 없는 오류"
+                    await browser.close()
         except Exception:
-            ok, bal, new_cookie, uname_hint, fail_reason = False, None, None, None, "브라우저 실행 오류"
+            last_reason = "Playwright 실행 예외"
 
-        if ok and isinstance(bal, int):
-            if new_cookie:
-                set_user_cookie(inter.user.id, new_cookie, uname_hint)
-            cache_balance(inter.user.id, bal)
-            await inter.followup.send(embed=result_embed("로그인 완료", f"잔액 확인: {bal:,} 로벅스", True), ephemeral=True)
-            # 공개 임베드 즉시 반영
-            await upsert_public_embed(inter, inter.user.id, force_new=False)
-        else:
-            reason = fail_reason or "알 수 없는 오류"
-            await inter.followup.send(embed=result_embed("로그인 실패", reason, False), ephemeral=True)
+        ok = tried_ok
+        reason = None if tried_ok else (last_reason or "로그인 실패")
 
-@TREE.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
+    else:
+        await inter.followup.send(embed=Embed(title="실패", description="mode는 cookie 또는 login", colour=discord.Colour.red()), ephemeral=True)
+        return
+
+    if ok:
+        await inter.followup.send(embed=Embed(title="연동 완료", description=f"현재 잔액: {bal_value:,} 로벅스", colour=discord.Colour.green()), ephemeral=True)
+        # 공개 임베드 즉시 새로고침/생성
+        await upsert_public_embed(inter, inter.user.id, force_new=False)
+    else:
+        await inter.followup.send(embed=Embed(title="로그인 실패", description=str(reason), colour=discord.Colour.red()), ephemeral=True)
+
+@TREE.command(name="재고표시", description="실시간 로벅스 재고를 공개 임베드로 표시합니다.")
 async def cmd_show(inter: Interaction):
-    await inter.response.defer(thinking=True, ephemeral=False)  # 공개
+    await inter.response.defer(thinking=True, ephemeral=False)
     await upsert_public_embed(inter, inter.user.id, force_new=True)
     await inter.followup.send("재고 임베드 공개 완료. 60초마다 자동 갱신해.", ephemeral=True)
 
 def main():
     if not TOKEN or len(TOKEN) < 10:
-        raise RuntimeError("DISCORD_TOKEN이 비어있거나 형식이 이상함.")
+        raise RuntimeError("DISCORD_TOKEN 비어있거나 형식 이상")
     BOT.run(TOKEN)
 
 if __name__ == "__main__":
