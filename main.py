@@ -6,14 +6,14 @@ from discord import app_commands, Interaction, Embed, File
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# ========== Playwright (로그인/파싱) ==========
+# ================= Playwright (로그인/파싱) =================
 PLAYWRIGHT_OK = True
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PwTimeout
 except Exception:
     PLAYWRIGHT_OK = False
 
-# ========== 기본 ==========
+# ================= 기본 =================
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 HTTP_PROXY = os.getenv("HTTP_PROXY", "").strip() or None
@@ -24,7 +24,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ========== 파일 DB/상태 ==========
+# ================= 파일 DB/상태 =================
 DATA_PATH = "data.json"
 CTX_SNAPSHOT_DIR = "ctx_snapshots"
 pathlib.Path(CTX_SNAPSHOT_DIR).mkdir(parents=True, exist_ok=True)
@@ -57,7 +57,7 @@ def gslot(gid: int) -> Dict[str, Any]:
     if not s:
         s = {
             "stock": {"robux": 0.0, "totalSold": 0.0, "pricePer": 0.0, "lastMsg": {"channelId": 0, "messageId": 0}},
-            "sessions": {}  # uid -> {cookie, username, password, lastRobux, premium, accountName}
+            "sessions": {}
         }
         data["guilds"][str(gid)] = s
         db_save(data)
@@ -108,7 +108,6 @@ async def change_stock(gid: int, delta: float):
         update_gslot(gid, gs)
         return newv
 
-# 세션 저장
 def gift_get(uid: int) -> Dict[str, Any]:
     data = db_load()
     return data["giftSessions"].get(str(uid), {})
@@ -126,7 +125,7 @@ def gift_clear(uid: int):
         del data["giftSessions"][str(uid)]
         db_save(data)
 
-# ========== 숫자 유틸 (정수만, 첫 글자 0 금지, 최소 100) ==========
+# ================= 숫자 검증(오직 숫자, 첫 글자 0 금지) =================
 ONLY_POS_INT = re.compile(r"^[1-9][0-9]*$")
 
 def parse_pos_int(s: str, min_value: int = 1) -> Optional[int]:
@@ -137,23 +136,19 @@ def parse_pos_int(s: str, min_value: int = 1) -> Optional[int]:
     if v < min_value: return None
     return v
 
-def fmt2(x: float) -> str:
-    return f"{x:,.2f}"
-
 def fmt0(x: float | int) -> str:
     return f"{int(x):,}"
 
-# ========== 임베드/이모지 (전부 핑크 적용) ==========
+# ================= 임베드/이모지(핑크 통일, 커스텀 이모지 유지) =================
 def color_hex(h: str) -> discord.Colour:
     return discord.Colour(int(h.lower().replace("#", ""), 16))
 
 COLOR_PINK = color_hex("ff5dd6")
 COLOR_RED = discord.Colour.red()
-COLOR_GREEN = discord.Colour.green()
-COLOR_ORANGE = discord.Colour.orange()
 
 def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
     return discord.PartialEmoji(name=name, id=eid, animated=animated)
+
 BTN_EMO_NOTICE = pe(1424003478275231916, name="emoji_5")
 BTN_EMO_CHARGE = pe(1381244136627245066, name="charge")
 BTN_EMO_INFO   = pe(1381244138355294300, name="info")
@@ -178,7 +173,7 @@ def build_info_embed(user: discord.User | discord.Member, gid: int) -> Embed:
     sess = gs["sessions"].get(str(user.id), {})
     last = float(sess.get("lastRobux", 0.0))
     premium = bool(sess.get("premium", False))
-    e = embed_unified(f"{getattr(user,'display_name',user.name)} 님 정보", "\n".join([
+    e = embed_unified("내 정보", "\n".join([
         f"- 현재 로벅스: {fmt0(last)}",
         f"- 프리미엄: {'O' if premium else 'X'}",
     ]), COLOR_PINK)
@@ -191,15 +186,16 @@ def build_stock_embed(gid: int) -> Embed:
     robux = float(gs["stock"].get("robux", 0.0))
     total = float(gs["stock"].get("totalSold", 0.0))
     price = float(gs["stock"].get("pricePer", 0.0))
+    # 정수만 표시
     desc = "\n".join([
         "## 실시간 재고",
         f"- 로벅스 재고: {fmt0(robux)}",
-        f"- 1당 가격: {fmt2(price)}",
+        f"- 1당 가격: {fmt0(price)}",     # 소수점 표시 금지
         f"- 총 판매량: {fmt0(total)}",
     ])
     return embed_unified("", desc, COLOR_PINK, FOOTER_IMAGE)
 
-# ========== Roblox 파싱(초정밀 실제 구현) ==========
+# ================= Roblox 파싱(초정밀) =================
 ROBLOX_LOGIN_URLS = [
     "https://www.roblox.com/Login",
     "https://www.roblox.com/ko/Login",
@@ -261,20 +257,6 @@ async def _shot(page: Page) -> Optional[bytes]:
     try: return await page.screenshot(type="png", full_page=False)
     except Exception: return None
 
-async def parse_premium(page: Page) -> Optional[bool]:
-    try:
-        for sel in ["text=Premium", "text=프리미엄", "[aria-label*='Premium']"]:
-            if await page.query_selector(sel): return True
-    except: pass
-    try:
-        await page.goto(ROBLOX_PREMIUM_URL, wait_until="domcontentloaded", timeout=45000)
-        await asyncio.sleep(1.0)
-        for sel in ["text=Premium", "text=멤버십", "Manage Membership"]:
-            if await page.query_selector(f"text={sel}") or await page.query_selector(f"button:has-text('{sel}')"):
-                return True
-    except: pass
-    return False
-
 async def _parse_home(page: Page) -> Optional[int]:
     for sel in ["[data-testid*='nav-robux']", "a[aria-label*='Robux']", "a[aria-label*='로벅스']"]:
         try:
@@ -289,13 +271,22 @@ async def _parse_home(page: Page) -> Optional[int]:
 async def _parse_tx(page: Page) -> Optional[int]:
     try:
         await page.goto(ROBLOX_TX_URL, wait_until="domcontentloaded", timeout=50000)
-        await asyncio.sleep(1.2)
         html = await page.content()
         nums = [int(re.sub(r"[,\.\s]", "", m.group(1))) for m in NUM_RE.finditer(html)]
         nums = [n for n in nums if 0 <= n <= 100_000_000]
         if nums: return int(statistics.median(nums))
     except: pass
     return None
+
+async def parse_premium(page: Page) -> Optional[bool]:
+    try:
+        await page.goto(ROBLOX_PREMIUM_URL, wait_until="domcontentloaded", timeout=45000)
+        await asyncio.sleep(1.0)
+        for sel in ["text=Premium", "text=멤버십", "Manage Membership"]:
+            if await page.query_selector(f"text={sel}") or await page.query_selector(f"button:has-text('{sel}')"):
+                return True
+    except: pass
+    return False
 
 async def parse_balance_ultra(page: Page, deadline_s=180) -> Optional[int]:
     start = time.time()
@@ -306,10 +297,9 @@ async def parse_balance_ultra(page: Page, deadline_s=180) -> Optional[int]:
         cand = [v for v in [v1, v2] if isinstance(v, int)]
         if cand:
             med = int(statistics.median(cand))
-            if best is None or abs(med - (best or 0)) <= max(10, int(med*0.02)):
-                best = med
-                break
-        await asyncio.sleep(1.2)
+            best = med
+            break
+        await asyncio.sleep(1.0)
     return best
 
 async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optional[float], Optional[bool], str, Optional[bytes]]:
@@ -322,17 +312,21 @@ async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optio
             if not browser: return False, None, None, "브라우저 오류", None
             ctx = await _ctx(browser)
             if not ctx: await browser.close(); return False, None, None, "컨텍스트 오류", None
+
             try:
                 await ctx.add_cookies([{"name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"}])
             except: pass
+
             page = await ctx.new_page()
             ok = await _goto(page, ROBLOX_HOME_URLS[0], timeout=50000)
             if not ok:
                 await browser.close(); return False, None, None, "페이지 이동 실패", None
+
             bal = await parse_balance_ultra(page, deadline_s=180)
             prem = await parse_premium(page)
             shot = await _shot(page)
             await browser.close()
+
             if isinstance(bal, int):
                 return True, float(bal), bool(prem), "ok", shot
             return False, None, None, "로벅스 파싱 실패", shot
@@ -340,8 +334,8 @@ async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optio
         return False, None, None, "예외", None
 
 async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple[bool, Optional[float], Optional[bool], str, Optional[bytes]]:
-    # ID/PW 로그인은 보안/캡차 영향 큼. 여기선 쿠키 권장. 그래도 시도.
-    return False, None, None, "ID/PW 로그인은 비권장. 쿠키 사용 바람", None
+    # 옵션: 보안/캡차 이슈로 기본 비권장. 필요 시 구현 확장 가능.
+    return False, None, None, "ID/PW 비권장, 쿠키 사용 바람", None
 
 async def try_update_stock_message(guild: discord.Guild, gid: int):
     gs = gslot(gid)
@@ -356,7 +350,7 @@ async def try_update_stock_message(guild: discord.Guild, gid: int):
                 await msg.edit(embed=build_stock_embed(gid))
             except: pass
 
-# ========== GiftRunner 자동운영 ==========
+# ================= GiftRunner 자동운영 =================
 class GiftRunner:
     async def connect_and_friend(self, target_nick: str) -> Tuple[bool, Optional[str]]:
         await asyncio.sleep(0.5)
@@ -380,7 +374,7 @@ class GiftRunner:
 
 gift_runner = GiftRunner()
 
-# ========== 구매/인게임 선물 (숫자만, 최소 100, 총액=수량 ÷ 가격) ==========
+# ================= 구매/인게임 선물(숫자만, 최소 100, 총액=수량 ÷ 가격) =================
 class PurchaseMethodView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
@@ -391,8 +385,7 @@ class GiftAmountModal(discord.ui.Modal, title="로벅스 수량 입력"):
     amount = discord.ui.TextInput(label="지급 로벅스 수량", required=True, max_length=18)
     async def on_submit(self, interaction: Interaction):
         gid = interaction.guild.id
-        raw = str(self.amount.value).strip()
-        qty = parse_pos_int(raw, min_value=100)
+        qty = parse_pos_int(str(self.amount.value), min_value=100)
         if qty is None:
             await interaction.response.send_message(embed=embed_unified("수량 오류", "숫자만 입력. 첫 글자 0 금지. 최소 100 이상.", COLOR_RED), ephemeral=True)
             return
@@ -407,7 +400,7 @@ class GiftAmountModal(discord.ui.Modal, title="로벅스 수량 입력"):
 class GiftDetailModal(discord.ui.Modal, title="선물 정보 입력"):
     nick = discord.ui.TextInput(label="로블 닉", required=True, max_length=50)
     game = discord.ui.TextInput(label="게임 이름", required=True, max_length=80)
-    what = discord.ui.TextInput(label="어떤 선물인가요?(정확하게 입력)", required=True, max_length=120)
+    what = discord.ui.TextInput(label="어떤 선물인가요?(정확하게)", required=True, max_length=120)
     async def on_submit(self, interaction: Interaction):
         gift_set(interaction.user.id, {"nick": self.nick.value.strip(), "game": self.game.value.strip(), "what": self.what.value.strip()})
         s = gift_get(interaction.user.id)
@@ -422,8 +415,8 @@ class GiftDetailModal(discord.ui.Modal, title="선물 정보 입력"):
             desc = "\n".join([
                 "로블록스 접속중..",
                 f"- 수량: {fmt0(amount)}",
-                f"- 1당 가격: {fmt2(price)}",
-                f"- 예상 결제 금액(수량 ÷ 가격): {fmt2(total)}",
+                f"- 1당 가격: {fmt0(price)}",
+                f"- 예상 결제 금액(수량 ÷ 가격): {fmt0(total)}",
             ])
         await interaction.response.send_message(embed=embed_unified("진행 시작하겠습니다", desc, COLOR_PINK), ephemeral=True)
         e = embed_unified("", "본인이 맞으신가요?", COLOR_PINK)
@@ -514,8 +507,10 @@ async def on_interaction(inter: Interaction):
             files = [File(io.BytesIO(receipt), filename="receipt.png")] if receipt else None
             e = embed_unified("지급 완료", "구매해주셔서 감사합니다", COLOR_PINK)
             if files: e.set_image(url="attachment://receipt.png")
-            if inter.response.is_done(): await inter.followup.send(embed=e, files=files, ephemeral=True)
-            else: await inter.response.send_message(embed=e, files=files, ephemeral=True)
+            if inter.response.is_done():
+                await inter.followup.send(embed=e, files=files, ephemeral=True)
+            else:
+                await inter.response.send_message(embed=e, files=files, ephemeral=True)
             await try_update_stock_message(inter.guild, s.get("gid", inter.guild.id))
             gift_clear(inter.user.id); return
 
@@ -531,7 +526,7 @@ async def on_interaction(inter: Interaction):
         except:
             pass
 
-# ========== 패널/명령어(4개) ==========
+# ================= 패널/명령어(4개) =================
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -566,7 +561,6 @@ async def 재고표시(inter: Interaction):
 @app_commands.describe(일당="1당 가격(숫자만, 첫 글자 0 금지)")
 @app_commands.checks.has_permissions(manage_guild=True)
 async def 가격설정(inter: Interaction, 일당: str):
-    # 숫자만, 첫 글자 0 금지
     if not ONLY_POS_INT.fullmatch(일당.strip()):
         await inter.response.send_message(embed=embed_unified("입력 오류", "숫자만 입력. 첫 글자 0 금지.", COLOR_RED), ephemeral=True)
         return
@@ -579,7 +573,6 @@ async def 가격설정(inter: Interaction, 일당: str):
     await try_update_stock_message(inter.guild, gid)
     await inter.response.send_message(embed=embed_unified("", "가격설정 완료", COLOR_PINK), ephemeral=True)
 
-# /재고추가: 쿠키 파싱(초정밀)
 class StockLoginModal(discord.ui.Modal, title="세션 추가/재고 갱신"):
     cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=True, max_length=4000)
     async def on_submit(self, interaction: Interaction):
@@ -609,7 +602,7 @@ class StockLoginModal(discord.ui.Modal, title="세션 추가/재고 갱신"):
 async def 재고추가(inter: Interaction):
     await inter.response.send_modal(StockLoginModal())
 
-# ========== 부팅 ==========
+# ================= 부팅 =================
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
