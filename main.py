@@ -56,7 +56,7 @@ def gslot(gid: int) -> Dict[str, Any]:
     if not s:
         s = {
             "stock": {"robux": 0, "totalSold": 0, "pricePer": 0, "lastMsg": {"channelId": 0, "messageId": 0}},
-            "sessions": {}
+            "sessions": {}  # uid -> {cookie, username, password, lastRobux, premium}
         }
         db["guilds"][str(gid)] = s
         db_save(db)
@@ -69,25 +69,26 @@ def update_gslot(gid: int, gs: Dict[str, Any]):
 
 def set_session(gid: int, uid: int, cookie: Optional[str], username: Optional[str], password: Optional[str]):
     gs = gslot(gid)
-    sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0})
+    sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0, "premium": False})
     if cookie is not None: sess["cookie"] = cookie
     if username is not None: sess["username"] = username
     if password is not None: sess["password"] = password
     gs["sessions"][str(uid)] = sess
     update_gslot(gid, gs)
 
-def set_last_robux(gid: int, uid: int, amount: int):
+def set_last_balance(gid: int, uid: int, robux: int, premium: bool):
     gs = gslot(gid)
-    sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0})
-    sess["lastRobux"] = int(amount)
+    sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0, "premium": False})
+    sess["lastRobux"] = int(robux)
+    sess["premium"] = bool(premium)
     gs["sessions"][str(uid)] = sess
+    # 서버 공용 재고 = 최근 성공 잔액
+    gs["stock"]["robux"] = max(0, int(robux))
     update_gslot(gid, gs)
 
-def set_stock_values(gid: int, robux: Optional[int] = None, totalSold: Optional[int] = None, pricePer: Optional[int] = None):
+def set_price(gid: int, price: int):
     gs = gslot(gid)
-    if robux is not None: gs["stock"]["robux"] = max(0, int(robux))
-    if totalSold is not None: gs["stock"]["totalSold"] = max(0, int(totalSold))
-    if pricePer is not None: gs["stock"]["pricePer"] = max(0, int(pricePer))
+    gs["stock"]["pricePer"] = max(0, int(price))
     update_gslot(gid, gs)
 
 def set_last_message(gid: int, channelId: int, messageId: int):
@@ -95,16 +96,29 @@ def set_last_message(gid: int, channelId: int, messageId: int):
     gs["stock"]["lastMsg"] = {"channelId": int(channelId), "messageId": int(messageId)}
     update_gslot(gid, gs)
 
-# ===== 색/이모지/임베드 =====
+# ===== 색/이모지/임베드/이모지ID =====
 def color_hex(h: str) -> discord.Colour:
     return discord.Colour(int(h.lower().replace("#", ""), 16))
 
 COLOR_BLACK = color_hex("000000")
 COLOR_PINK  = color_hex("ff5dd6")
+COLOR_GREEN = discord.Colour.green()
+COLOR_RED   = discord.Colour.red()
 
+# 유저가 준 animated/정적 이모지(표시용 문자열)
 EMO_REALTIME = "<a:upuoipipi:1423892277373304862>"
 EMO_THUMBS  = "<a:thumbsuppp:1423892279612936294>"
 EMO_SAK     = "<a:sakfnmasfagfamg:1423892278677602435>"
+EMO_ROBUX_STATIC = "<:robux:1423661718776709303>"
+
+# 버튼에 붙일 커스텀 이모지(PartialEmoji)
+def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
+    return discord.PartialEmoji(name=name, id=eid, animated=animated)
+
+BTN_EMO_NOTICE = pe(1424003478275231916, name="emoji_5")
+BTN_EMO_CHARGE = pe(1381244136627245066, name="charge")
+BTN_EMO_INFO   = pe(1381244138355294300, name="info")
+BTN_EMO_BUY    = pe(1381244134680957059, name="category")
 
 FOOTER_IMAGE = "https://cdn.discordapp.com/attachments/1420389790649421877/1424077172435325091/IMG_2038.png?ex=68e2a2b7&is=68e15137&hm=712b0f434f2267c261dc260fd22a7a163d158b7c2f43fa618642abd80b17058c&"
 
@@ -115,15 +129,18 @@ def embed_notice() -> Embed:
     return Embed(title="공지", description="<#1419230737244229653> 필독 부탁!", colour=COLOR_BLACK)
 
 def build_info_embed(user: discord.User | discord.Member, gid: int) -> Embed:
+    gs = gslot(gid)
+    sess = gs["sessions"].get(str(user.id), {"lastRobux": 0})
     wallet = 0; total = 0; count = 0
     e = Embed(title=f"{getattr(user,'display_name',user.name)}님 정보", colour=COLOR_BLACK)
     e.description = "\n".join([
         f"보유 금액 : `{wallet}`원",
         f"누적 금액 : `{total}`원",
         f"거래 횟수 : `{count}`번",
+        f"최근 확인 로벅스 : `{int(sess.get('lastRobux',0))}`"
     ])
     try: e.set_thumbnail(url=user.display_avatar.url)
-    except Exception: pass
+    except: pass
     return e
 
 def build_stock_embed(gid: int) -> Embed:
@@ -144,7 +161,7 @@ def build_stock_embed(gid: int) -> Embed:
     e.set_image(url=FOOTER_IMAGE)
     return e
 
-# ===== Roblox 로그인/파싱 =====
+# ===== Roblox 파싱(다국어 + 네트워크 + 3분 안정화 + 프리미엄 여부) =====
 ROBLOX_LOGIN_URLS = [
     "https://www.roblox.com/Login",
     "https://www.roblox.com/ko/Login",
@@ -158,15 +175,10 @@ ROBLOX_HOME_URLS = [
     "https://www.roblox.com/es-419/home",
 ]
 ROBLOX_TX_URL = "https://www.roblox.com/ko/transactions"
+ROBLOX_PREMIUM_URL = "https://www.roblox.com/premium/membership"
 
-# 다국어 라벨 및 주변 패턴
-LABEL_BALANCE = [
-    "내 잔액","My Balance","Balance","Saldo","Số dư","餘額","余额","잔액","ยอดคงเหลือ","Kontostand","Solde"
-]
-LABEL_MY_TX = [
-    "내 거래","My Transactions","Transactions","Transacciones","Giao dịch","我的交易","我的交易記錄","거래","การทำรายการ","Transaktionen","Transactions"
-]
-
+LABEL_BALANCE = ["내 잔액","My Balance","Balance","Saldo","Số dư","餘額","余额","잔액","ยอดคงเหลือ","Kontostand","Solde"]
+LABEL_MY_TX = ["내 거래","My Transactions","Transactions","Transacciones","Giao dịch","我的交易","我的交易記錄","거래","การทำรายการ","Transaktionen","Transactions"]
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
 def _to_int(txt: str) -> Optional[int]:
@@ -174,7 +186,7 @@ def _to_int(txt: str) -> Optional[int]:
     m = NUM_RE.search(txt)
     if not m: return None
     try: return int(re.sub(r"[,\.\s]", "", m.group(1)))
-    except Exception: return None
+    except: return None
 
 def normalize_cookie(raw: str) -> Optional[str]:
     if not raw: return None
@@ -192,8 +204,7 @@ async def _launch(p):
     proxy_opt = {"server": HTTPS_PROXY or HTTP_PROXY} if (HTTPS_PROXY or HTTP_PROXY) else None
     try:
         return await p.chromium.launch(headless=True, args=args, proxy=proxy_opt)
-    except Exception:
-        return None
+    except: return None
 
 async def _ctx(browser: Browser) -> Optional[BrowserContext]:
     try:
@@ -201,13 +212,9 @@ async def _ctx(browser: Browser) -> Optional[BrowserContext]:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
             viewport={"width": 1366, "height": 864}, locale="ko-KR", java_script_enabled=True
         )
-        await ctx.set_extra_http_headers({
-            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-            "Cache-Control": "no-cache"
-        })
+        await ctx.set_extra_http_headers({"Accept-Language":"ko-KR,ko;q=0.9,en;q=0.8","Cache-Control":"no-cache"})
         return ctx
-    except Exception:
-        return None
+    except: return None
 
 async def restore_context_snapshot(browser: Browser, uid: int) -> Optional[BrowserContext]:
     p = os.path.join(CTX_SNAPSHOT_DIR, f"{uid}.zip")
@@ -217,27 +224,22 @@ async def restore_context_snapshot(browser: Browser, uid: int) -> Optional[Brows
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
             viewport={"width": 1366, "height": 864}, locale="ko-KR", java_script_enabled=True
         )
-    except:
-        return None
+    except: return None
 
 async def save_context_snapshot(ctx: BrowserContext, uid: int):
-    try:
-        await ctx.storage_state(path=os.path.join(CTX_SNAPSHOT_DIR, f"{uid}.zip"))
-    except:
-        pass
+    try: await ctx.storage_state(path=os.path.join(CTX_SNAPSHOT_DIR, f"{uid}.zip"))
+    except: pass
 
 async def _goto(page: Page, url: str, timeout=50000) -> bool:
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-        return True
-    except Exception:
-        return False
+        await page.goto(url, wait_until="domcontentloaded", timeout=timeout); return True
+    except: return False
 
 async def _shot(page: Page) -> Optional[bytes]:
     try: return await page.screenshot(type="png", full_page=False)
-    except Exception: return None
+    except: return None
 
-# 엄격 보안 판정(오탐 방지)
+# 보안 이슈 엄격 판정(오탐 방지)
 async def detect_issue_strict(page: Page) -> Optional[str]:
     checks = [
         ("2단계 인증(MFA) 필요", [
@@ -263,12 +265,11 @@ async def detect_issue_strict(page: Page) -> Optional[str]:
     for label, sels in checks:
         for sel in sels:
             try:
-                el = await page.query_selector(sel)
-                if el: return label
+                if await page.query_selector(sel): return label
             except: pass
     return None
 
-# 네트워크 스니핑
+# 네트워크 스니핑(우선)
 async def sniff_balance_via_network(context: BrowserContext, page: Page, timeout_s=25) -> Optional[int]:
     got = asyncio.Future()
     def is_balance_api(url: str):
@@ -302,13 +303,11 @@ async def sniff_balance_via_network(context: BrowserContext, page: Page, timeout
                     walk(data["data"])
             if cand is not None and not got.done():
                 got.set_result(int(max(0,cand)))
-        except:
-            pass
+        except: pass
     context.on("response", on_response)
     try:
         return await asyncio.wait_for(got, timeout=timeout_s)
-    except:
-        return None
+    except: return None
     finally:
         try: context.off("response", on_response)
         except: pass
@@ -328,14 +327,12 @@ async def _parse_home(page: Page) -> Optional[int]:
             if not el: continue
             txt = (await el.inner_text() or "").strip()
             v = _to_int(txt)
-            if isinstance(v, int) and 0 <= v <= 100_000_000:
-                return v
+            if isinstance(v, int) and 0 <= v <= 100_000_000: return v
         except: continue
     return None
 
-# 거래 페이지: “내 잔액” 행에서 Robux 아이콘 옆 숫자만
+# 거래 페이지: “내 잔액” 라인 Robux 옆 숫자 타게팅
 async def parse_balance_row_precise(page: Page) -> Optional[int]:
-    # 1) 다국어 라벨 근접
     for lab in LABEL_BALANCE:
         try:
             el = await page.query_selector(f"text={lab}")
@@ -353,7 +350,6 @@ async def parse_balance_row_precise(page: Page) -> Optional[int]:
             v2 = _to_int(sib_txt or "")
             if isinstance(v2, int): return v2
         except: pass
-    # 2) Robux 아이콘 근처
     for sel in [
         "[aria-label*='Robux']",
         "[aria-label*='로벅스']",
@@ -371,7 +367,6 @@ async def parse_balance_row_precise(page: Page) -> Optional[int]:
             v3 = _to_int(txt or "")
             if isinstance(v3, int): return v3
         except: pass
-    # 3) 표 행 스캔
     try:
         rows = await page.query_selector_all("tr")
         for r in rows:
@@ -384,14 +379,13 @@ async def parse_balance_row_precise(page: Page) -> Optional[int]:
 
 async def _parse_tx(page: Page) -> Optional[int]:
     try:
-        # 다국어 “내 거래” 타이틀 대기
         q = ",".join([f"text={x}" for x in LABEL_MY_TX[:6]])
         await page.wait_for_selector(q, timeout=60000)
     except:
         await asyncio.sleep(1.2)
     v = await parse_balance_row_precise(page)
     if isinstance(v, int): return v
-    # 폴백: 라벨 텍스트 주변 문맥 스캔(다국어)
+    # 폴백: 라벨 주변 문맥
     try:
         html = await page.content()
         nums = []
@@ -402,24 +396,18 @@ async def _parse_tx(page: Page) -> Optional[int]:
                 for mm in re.finditer(NUM_RE, chunk):
                     vv = _to_int(mm.group(0))
                     if isinstance(vv, int) and 0 <= vv <= 100_000_000: nums.append(vv)
-        if nums:
-            return int(statistics.median(nums))
-    except:
-        pass
+        if nums: return int(statistics.median(nums))
+    except: pass
     return None
 
-# 표본 안정화 + 최소 3분 보장
 def stable_value(values: List[int]) -> Optional[int]:
     if not values: return None
     if len(values) == 1: return values[0]
     med = int(statistics.median(values))
     tol = max(10, int(med * 0.02))
-    if all(abs(v - med) <= tol for v in values):
-        return med
-    try:
-        return statistics.mode(values)
-    except:
-        return None
+    if all(abs(v - med) <= tol for v in values): return med
+    try: return statistics.mode(values)
+    except: return None
 
 async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_confirm_s=180) -> Optional[int]:
     async def sample(fn, n, d):
@@ -433,13 +421,9 @@ async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_co
     start = time.time()
     rounds = 0
     confirmed = None
-
     while time.time() - start < overall_deadline_s and rounds < 3:
         rounds += 1
-
-        # 거래 → 표본
         if await _goto(page, ROBLOX_TX_URL, timeout=50000):
-            # 엄격 보안 체크(오탐 방지)
             strict = await detect_issue_strict(page)
             if strict: return None
             await asyncio.sleep(3.0)
@@ -447,7 +431,6 @@ async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_co
         else:
             tx_stable = None
 
-        # 홈 → 표본
         home_stable = None
         for hu in ROBLOX_HOME_URLS:
             if await _goto(page, hu, timeout=48000):
@@ -457,13 +440,11 @@ async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_co
                 home_stable = await sample(lambda: _parse_home(page), 3, 1.0)
                 break
 
-        # 결합 판단
         if isinstance(tx_stable, int) and isinstance(home_stable, int):
             tol = max(10, int(max(tx_stable, home_stable) * 0.02))
             if abs(tx_stable - home_stable) <= tol:
                 confirmed = int(statistics.median([tx_stable, home_stable]))
             else:
-                # 거래 재표본
                 if await _goto(page, ROBLOX_TX_URL, timeout=48000):
                     await asyncio.sleep(2.0)
                     tx2 = await sample(lambda: _parse_tx(page), 3, 0.9)
@@ -475,7 +456,6 @@ async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_co
             confirmed = home_stable
 
         if isinstance(confirmed, int):
-            # 최소 3분 안정화 루프
             cstart = time.time()
             last = confirmed
             while time.time() - cstart < min_confirm_s:
@@ -487,24 +467,38 @@ async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_co
                         last = int(statistics.median([last, v]))
                 await asyncio.sleep(2.0)
             return last
-
         await asyncio.sleep(1.5)
-
     return None
 
+async def parse_premium(page: Page) -> Optional[bool]:
+    # 간단: Premium 배지/멤버십 페이지 요소로 판정
+    # 시나리오1: 홈/헤더에 Premium 텍스트/배지
+    try:
+        for sel in ["text=Premium", "text=프리미엄"]:
+            if await page.query_selector(sel): return True
+    except: pass
+    # 시나리오2: 전용 페이지 확인
+    if await _goto(page, ROBLOX_PREMIUM_URL, timeout=40000):
+        await asyncio.sleep(1.2)
+        try:
+            if await page.query_selector("text=현재 멤버십") or await page.query_selector("text=Your Premium"):
+                return True
+        except: pass
+    return False
+
 # 쿠키 로그인
-async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optional[int], str, Optional[bytes]]:
-    if not PLAYWRIGHT_OK: return False, None, "Playwright 미설치", None
+async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optional[int], Optional[bool], str, Optional[bytes]]:
+    if not PLAYWRIGHT_OK: return False, None, None, "Playwright 미설치", None
     cookie = normalize_cookie(raw_cookie)
-    if not cookie: return False, None, "쿠키 형식 오류(.ROBLOSECURITY 또는 _|WARNING:…|_ 필요)", None
+    if not cookie: return False, None, None, "쿠키 형식 오류(.ROBLOSECURITY 또는 _|WARNING:…|_ 필요)", None
     try:
         async with async_playwright() as p:
             browser = await _launch(p)
-            if not browser: return False, None, "브라우저 오류", None
+            if not browser: return False, None, None, "브라우저 오류", None
 
             ctx = await restore_context_snapshot(browser, user_uid)
             if not ctx: ctx = await _ctx(browser)
-            if not ctx: await browser.close(); return False, None, "컨텍스트 오류", None
+            if not ctx: await browser.close(); return False, None, None, "컨텍스트 오류", None
 
             try:
                 await ctx.add_cookies([{"name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"}])
@@ -513,49 +507,50 @@ async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optio
             page = await ctx.new_page()
             net_task = asyncio.create_task(sniff_balance_via_network(ctx, page, timeout_s=25))
 
-            # 빠른 보안 체크
             if await _goto(page, ROBLOX_TX_URL, timeout=50000):
                 await asyncio.sleep(1.5)
                 strict = await detect_issue_strict(page)
                 if strict:
                     shot = await _shot(page)
                     await page.close(); await browser.close()
-                    return False, None, strict, shot
+                    return False, None, None, strict, shot
 
             v_net = None
             try: v_net = await net_task
             except: pass
+
+            v_final = None
             if isinstance(v_net, int):
-                # 최소 3분 안정화
                 v_confirm = await parse_balance_ultra_precise(page, overall_deadline_s=300, min_confirm_s=180)
                 v_final = v_confirm if isinstance(v_confirm, int) else v_net
-                shot = await _shot(page)  # 확정 직후 스샷
+            else:
+                v_final = await parse_balance_ultra_precise(page, overall_deadline_s=300, min_confirm_s=180)
+
+            if isinstance(v_final, int):
+                prem = await parse_premium(page)
+                shot = await _shot(page)
                 await save_context_snapshot(ctx, user_uid)
                 await page.close(); await browser.close()
-                return True, v_final, "ok", shot
+                return True, v_final, prem, "ok", shot
 
-            # 폴백: UI 초정밀
-            v_final = await parse_balance_ultra_precise(page, overall_deadline_s=300, min_confirm_s=180)
             shot = await _shot(page)
-            await save_context_snapshot(ctx, user_uid) if isinstance(v_final, int) else None
             await page.close(); await browser.close()
-            if isinstance(v_final, int): return True, v_final, "ok", shot
-            return False, None, "로벅스 파싱 실패", shot
+            return False, None, None, "로벅스 파싱 실패", shot
     except PwTimeout:
-        return False, None, "응답 지연", None
+        return False, None, None, "응답 지연", None
     except Exception:
-        return False, None, "예외", None
+        return False, None, None, "예외", None
 
 # ID/PW 로그인
-async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple[bool, Optional[int], str, Optional[bytes]]:
-    if not PLAYWRIGHT_OK: return False, None, "Playwright 미설치", None
+async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple[bool, Optional[int], Optional[bool], str, Optional[bytes]]:
+    if not PLAYWRIGHT_OK: return False, None, None, "Playwright 미설치", None
     try:
         async with async_playwright() as p:
             browser = await _launch(p)
-            if not browser: return False, None, "브라우저 오류", None
+            if not browser: return False, None, None, "브라우저 오류", None
 
             ctx = await _ctx(browser)
-            if not ctx: await browser.close(); return False, None, "컨텍스트 오류", None
+            if not ctx: await browser.close(); return False, None, None, "컨텍스트 오류", None
             page = await ctx.new_page()
             net_task = asyncio.create_task(sniff_balance_via_network(ctx, page, timeout_s=25))
 
@@ -564,37 +559,37 @@ async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple
                 if await _goto(page, url, timeout=50000):
                     moved = True; break
             if not moved:
-                await browser.close(); return False, None, "로그인 페이지 이동 실패", None
+                await browser.close(); return False, None, None, "로그인 페이지 이동 실패", None
 
             id_ok = False
             for sel in ["input#login-username", "input[name='username']", "input[type='text']"]:
                 try: await page.fill(sel, username); id_ok = True; break
-                except Exception: continue
+                except: continue
             if not id_ok:
-                await browser.close(); return False, None, "아이디 입력 실패", None
+                await browser.close(); return False, None, None, "아이디 입력 실패", None
 
             pw_ok = False
             for sel in ["input#login-password", "input[name='password']", "input[type='password']"]:
                 try: await page.fill(sel, password); pw_ok = True; break
-                except Exception: continue
+                except: continue
             if not pw_ok:
-                await browser.close(); return False, None, "비밀번호 입력 실패", None
+                await browser.close(); return False, None, None, "비밀번호 입력 실패", None
 
             clicked = False
             for sel in ["button#login-button", "button[type='submit']", "button:has-text('로그인')", "button:has-text('Log In')"]:
                 try:
                     btn = await page.query_selector(sel)
                     if btn: await btn.click(); clicked = True; break
-                except Exception: continue
+                except: continue
             if not clicked:
-                await browser.close(); return False, None, "로그인 버튼 클릭 실패", None
+                await browser.close(); return False, None, None, "로그인 버튼 클릭 실패", None
 
             await asyncio.sleep(2.5)
             strict = await detect_issue_strict(page)
             if strict:
                 shot = await _shot(page)
                 await browser.close()
-                return False, None, strict, shot
+                return False, None, None, strict, shot
 
             v_net = None
             try: v_net = await net_task
@@ -602,41 +597,52 @@ async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple
             if isinstance(v_net, int):
                 v_confirm = await parse_balance_ultra_precise(page, overall_deadline_s=300, min_confirm_s=180)
                 v_final = v_confirm if isinstance(v_confirm, int) else v_net
+            else:
+                v_final = await parse_balance_ultra_precise(page, overall_deadline_s=300, min_confirm_s=180)
+
+            if isinstance(v_final, int):
+                prem = await parse_premium(page)
                 shot = await _shot(page)
                 await save_context_snapshot(ctx, user_uid)
                 await page.close(); await browser.close()
-                return True, v_final, "ok", shot
+                return True, v_final, prem, "ok", shot
 
-            v_final = await parse_balance_ultra_precise(page, overall_deadline_s=300, min_confirm_s=180)
             shot = await _shot(page)
-            await save_context_snapshot(ctx, user_uid) if isinstance(v_final, int) else None
             await page.close(); await browser.close()
-            if isinstance(v_final, int): return True, v_final, "ok", shot
-            return False, None, "로벅스 파싱 실패", shot
+            return False, None, None, "로벅스 파싱 실패", shot
     except PwTimeout:
-        return False, None, "응답 지연", None
+        return False, None, None, "응답 지연", None
     except Exception:
-        return False, None, "예외", None
+        return False, None, None, "예외", None
 
-# ===== 패널/명령어 =====
+# ===== 뷰/버튼 =====
+class PurchaseMethodView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        # 회색 스타일 + robux 이모지 라벨
+        self.add_item(discord.ui.Button(label="인게임 선물", style=discord.ButtonStyle.secondary, custom_id="gift_in_game", emoji=discord.PartialEmoji(name="robux", id=1423661718776709303)))
+        self.add_item(discord.ui.Button(label="게임패스", style=discord.ButtonStyle.secondary, custom_id="gift_gamepass", emoji=discord.PartialEmoji(name="robux", id=1423661718776709303)))
+
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-    @discord.ui.button(label="공지", style=discord.ButtonStyle.secondary, custom_id="panel_notice", row=0)
+    @discord.ui.button(label="공지", emoji=BTN_EMO_NOTICE, style=discord.ButtonStyle.secondary, custom_id="panel_notice", row=0)
     async def notice_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=embed_notice(), ephemeral=True)
-    @discord.ui.button(label="정보", style=discord.ButtonStyle.secondary, custom_id="panel_info", row=0)
+    @discord.ui.button(label="충전", emoji=BTN_EMO_CHARGE, style=discord.ButtonStyle.secondary, custom_id="panel_charge", row=0)
+    async def charge_button(self, interaction: Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(embed=Embed(title="충전", description="준비 중이야.", colour=COLOR_BLACK), ephemeral=True)
+    @discord.ui.button(label="정보", emoji=BTN_EMO_INFO, style=discord.ButtonStyle.secondary, custom_id="panel_info", row=1)
     async def info_button(self, interaction: Interaction, button: discord.ui.Button):
         e = build_info_embed(interaction.user, interaction.guild.id)
         await interaction.response.send_message(embed=e, ephemeral=True)
-    @discord.ui.button(label="충전", style=discord.ButtonStyle.secondary, custom_id="panel_charge", row=1)
-    async def charge_button(self, interaction: Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=Embed(title="충전", description="준비 중이야.", colour=COLOR_BLACK), ephemeral=True)
-    @discord.ui.button(label="구매", style=discord.ButtonStyle.secondary, custom_id="panel_buy", row=1)
+    @discord.ui.button(label="구매", emoji=BTN_EMO_BUY, style=discord.ButtonStyle.secondary, custom_id="panel_buy", row=1)
     async def buy_button(self, interaction: Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=Embed(title="구매", description="준비 중이야.", colour=COLOR_BLACK), ephemeral=True)
+        e = Embed(title="지급 방식 선택하기", description="지급 방식을 선택해주세요", colour=COLOR_BLACK)
+        await interaction.response.send_message(embed=e, view=PurchaseMethodView(), ephemeral=True)
 
-class StockModal(discord.ui.Modal, title="세션/로그인 추가(정확 모드: 최소 3분)"):
+# ===== 모달(/재고추가) =====
+class StockModal(discord.ui.Modal, title="로그인/세션 추가(정확 모드: 최소 3분)"):
     cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=False, max_length=4000)
     id_input = discord.ui.TextInput(label="아이디", required=False, max_length=100)
     pw_input = discord.ui.TextInput(label="비밀번호", required=False, max_length=100)
@@ -647,41 +653,46 @@ class StockModal(discord.ui.Modal, title="세션/로그인 추가(정확 모드:
         raw_cookie = (self.cookie_input.value or "").strip()
         uid = (self.id_input.value or "").strip()
         pw = (self.pw_input.value or "").strip()
+
         if raw_cookie:
             norm = normalize_cookie(raw_cookie)
             set_session(gid, interaction.user.id, norm if norm else raw_cookie, None, None)
         if uid or pw:
             set_session(gid, interaction.user.id, None, uid if uid else None, pw if pw else None)
 
-        ok, amount, reason, shot = False, None, None, None
+        ok, amount, premium, reason, shot = False, None, None, None, None
+
         if raw_cookie:
-            c_ok, c_amt, c_reason, c_shot = await robux_with_cookie(interaction.user.id, raw_cookie)
-            if c_ok: ok, amount, reason, shot = True, c_amt, "ok", c_shot
+            c_ok, c_amt, c_prem, c_reason, c_shot = await robux_with_cookie(interaction.user.id, raw_cookie)
+            if c_ok: ok, amount, premium, reason, shot = True, c_amt, c_prem, "ok", c_shot
             else: reason, shot = c_reason, c_shot
 
         if not ok and uid and pw:
-            l_ok, l_amt, l_reason, l_shot = await robux_with_login(interaction.user.id, uid, pw)
-            if l_ok: ok, amount, reason, shot = True, l_amt, "ok", l_shot
+            l_ok, l_amt, l_prem, l_reason, l_shot = await robux_with_login(interaction.user.id, uid, pw)
+            if l_ok: ok, amount, premium, reason, shot = True, l_amt, l_prem, "ok", l_shot
             else: reason, shot = l_reason, l_shot or shot
 
         if ok and isinstance(amount, int):
-            set_last_robux(gid, interaction.user.id, amount)
-            set_stock_values(gid, robux=amount)
-            await try_update_stock_message(interaction.guild, gid)
-            e = Embed(title="", description=f"로벅스 수량 {amount:,} (확정)", colour=COLOR_BLACK)
+            set_last_balance(gid, interaction.user.id, amount, bool(premium))
+            # 성공 임베드: 초록, 에페메랄, 스샷 그대로
+            e = Embed(title="로그인 성공", description=f"현재 로벅스 : {amount}로벅스\n프리미엄 여부 : {'O' if premium else 'X'}", colour=COLOR_GREEN)
             if shot:
                 e.set_image(url="attachment://robux.png")
                 await interaction.edit_original_response(embed=e, attachments=[File(io.BytesIO(shot), filename="robux.png")])
             else:
                 await interaction.edit_original_response(embed=e)
+            # 공개 재고 임베드 실시간 갱신
+            await try_update_stock_message(interaction.guild, gid)
         else:
-            e = Embed(title="로그인/파싱 실패", description=(reason or "파싱 실패"), colour=COLOR_BLACK)
+            # 실패 임베드: 빨강, 에페메랄
+            e = Embed(title="로그인 실패", description=(reason or "파싱 실패"), colour=COLOR_RED)
             if shot:
                 e.set_image(url="attachment://robux.png")
                 await interaction.edit_original_response(embed=e, attachments=[File(io.BytesIO(shot), filename="robux.png")])
             else:
                 await interaction.edit_original_response(embed=e)
 
+# ===== /재고표시 갱신 =====
 async def try_update_stock_message(guild: discord.Guild, gid: int):
     gs = gslot(gid)
     last = gs["stock"].get("lastMsg", {}) or {}
@@ -696,8 +707,10 @@ async def try_update_stock_message(guild: discord.Guild, gid: int):
             except Exception:
                 pass
 
+# ===== 슬래시 명령어 =====
 @tree.command(name="버튼패널", description="자판기 패널을 공개로 표시합니다.")
 async def 버튼패널(inter: Interaction):
+    # 2x2 배열은 PanelView의 row=0/1로 이미 구성
     await inter.response.send_message(embed=embed_panel(), view=PanelView(), ephemeral=False)
 
 @tree.command(name="재고표시", description="실시간 로벅스 재고 임베드를 공개로 표시합니다.")
@@ -716,7 +729,7 @@ async def 재고표시(inter: Interaction):
 @app_commands.checks.has_permissions(manage_guild=True)
 async def 가격설정(inter: Interaction, 일당: int):
     gid = inter.guild.id
-    set_stock_values(gid, pricePer=max(0, int(일당)))
+    set_price(gid, int(일당))
     await try_update_stock_message(inter.guild, gid)
     e = Embed(title="", description="가격설정 완료", colour=COLOR_BLACK)
     await inter.response.send_message(embed=e, ephemeral=True)
@@ -725,6 +738,7 @@ async def 가격설정(inter: Interaction, 일당: int):
 async def 재고추가(inter: Interaction):
     await inter.response.send_modal(StockModal())
 
+# ===== 부팅 =====
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
