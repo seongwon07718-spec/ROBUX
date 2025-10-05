@@ -1,20 +1,19 @@
 import os, io, json, re, asyncio, time, statistics, pathlib
 from typing import Dict, Any, Optional, Tuple, List
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import discord
 from discord import app_commands, Interaction, Embed, File
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# ================= Playwright (로그인/파싱) =================
+# ========== Playwright (로그인/파싱) ==========
 PLAYWRIGHT_OK = True
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PwTimeout
 except Exception:
     PLAYWRIGHT_OK = False
 
-# ================= 기본 =================
+# ========== 기본 ==========
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 HTTP_PROXY = os.getenv("HTTP_PROXY", "").strip() or None
@@ -25,11 +24,10 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ================= 파일 DB/상태 =================
+# ========== 파일 DB/상태 ==========
 DATA_PATH = "data.json"
 CTX_SNAPSHOT_DIR = "ctx_snapshots"
 pathlib.Path(CTX_SNAPSHOT_DIR).mkdir(parents=True, exist_ok=True)
-
 db_lock = asyncio.Lock()
 
 INIT_DATA = {"guilds": {}, "giftSessions": {}}
@@ -110,7 +108,7 @@ async def change_stock(gid: int, delta: float):
         update_gslot(gid, gs)
         return newv
 
-# giftSessions (파일 DB)
+# 세션 저장
 def gift_get(uid: int) -> Dict[str, Any]:
     data = db_load()
     return data["giftSessions"].get(str(uid), {})
@@ -128,44 +126,31 @@ def gift_clear(uid: int):
         del data["giftSessions"][str(uid)]
         db_save(data)
 
-# ================= 숫자 파싱/표시 유틸 =================
-NUM_FINDER = re.compile(r"[-+]?(\d{1,3}(?:[ ,\.]\d{3})+|\d+)(?:[.,]\d+)?|[-+]?[\.,]\d+")
+# ========== 숫자 유틸 (정수만, 첫 글자 0 금지, 최소 100) ==========
+ONLY_POS_INT = re.compile(r"^[1-9][0-9]*$")
 
-def parse_number(s: str, default: Optional[Decimal] = None) -> Optional[Decimal]:
-    if not s: return default
+def parse_pos_int(s: str, min_value: int = 1) -> Optional[int]:
+    if not s: return None
     s = s.strip()
-    m = NUM_FINDER.search(s)
-    if not m: return default
-    raw = m.group(0)
-    cleaned = re.sub(r"\s", "", raw)
-    if "," in cleaned and "." in cleaned:
-        if cleaned.rfind(",") > cleaned.rfind("."):
-            cleaned = cleaned.replace(".", "").replace(",", ".")
-        else:
-            cleaned = cleaned.replace(",", "")
-    else:
-        if "," in cleaned and "." not in cleaned:
-            cleaned = cleaned.replace(",", ".")
-    if cleaned.startswith(".") or cleaned.startswith("-.") or cleaned.startswith("+."):
-        cleaned = cleaned.replace(".",".0",1)
-    try:
-        return Decimal(cleaned)
-    except InvalidOperation:
-        return default
+    if not ONLY_POS_INT.fullmatch(s): return None
+    v = int(s)
+    if v < min_value: return None
+    return v
 
-def q2(x: Decimal | float) -> str:
-    d = Decimal(str(x)).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP)
-    return f"{d:,}"
+def fmt2(x: float) -> str:
+    return f"{x:,.2f}"
 
-# ================= 임베드/이모지 통일 =================
+def fmt0(x: float | int) -> str:
+    return f"{int(x):,}"
+
+# ========== 임베드/이모지 (전부 핑크 적용) ==========
 def color_hex(h: str) -> discord.Colour:
     return discord.Colour(int(h.lower().replace("#", ""), 16))
 
-COLOR_BLACK = color_hex("000000")
-COLOR_PINK  = color_hex("ff5dd6")
+COLOR_PINK = color_hex("ff5dd6")
+COLOR_RED = discord.Colour.red()
 COLOR_GREEN = discord.Colour.green()
-COLOR_RED   = discord.Colour.red()
-COLOR_ORANGE= discord.Colour.orange()
+COLOR_ORANGE = discord.Colour.orange()
 
 def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
     return discord.PartialEmoji(name=name, id=eid, animated=animated)
@@ -173,29 +158,30 @@ BTN_EMO_NOTICE = pe(1424003478275231916, name="emoji_5")
 BTN_EMO_CHARGE = pe(1381244136627245066, name="charge")
 BTN_EMO_INFO   = pe(1381244138355294300, name="info")
 BTN_EMO_BUY    = pe(1381244134680957059, name="category")
-EMO_ROBUX_STATIC = pe(1423661718776709303, name="robux")
+EMO_ROBUX      = pe(1423661718776709303, name="robux")
 
 FOOTER_IMAGE = "https://cdn.discordapp.com/attachments/1420389790649421877/1424077172435325091/IMG_2038.png?ex=68e2a2b7&is=68e15137&hm=712b0f434f2267c261dc260fd22a7a163d158b7c2f43fa618642abd80b17058c&"
 
-def embed_unified(title: Optional[str], desc: str, colour: discord.Colour, image_url: Optional[str] = None) -> Embed:
-    e = Embed(title=(title or "")[:256], description=desc, colour=colour)
-    if image_url:
-        e.set_image(url=image_url)
+def embed_unified(title: Optional[str], desc: str, colour: discord.Colour = COLOR_PINK, image_url: Optional[str] = None) -> Embed:
+    e = Embed(title=(title or "")[:256], description=desc, colour=colour or COLOR_PINK)
+    if image_url: e.set_image(url=image_url)
     return e
 
 def embed_panel() -> Embed:
     return embed_unified("자동 로벅스 자판기", "아래 버튼을 눌러 이용해줘!", COLOR_PINK)
 
 def embed_notice() -> Embed:
-    return embed_unified("공지사항", "<#1419230737244229653> 필독 부탁!", COLOR_BLACK)
+    return embed_unified("공지사항", "필독하고 이용해줘.", COLOR_PINK)
 
 def build_info_embed(user: discord.User | discord.Member, gid: int) -> Embed:
-    wallet = 0; total = 0; count = 0
-    e = embed_unified(f"{getattr(user,'display_name',user.name)}님 정보", "\n".join([
-        f"보유 금액 : `{wallet}`원",
-        f"누적 금액 : `{total}`원",
-        f"거래 횟수 : `{count}`번",
-    ]), COLOR_BLACK)
+    gs = gslot(gid)
+    sess = gs["sessions"].get(str(user.id), {})
+    last = float(sess.get("lastRobux", 0.0))
+    premium = bool(sess.get("premium", False))
+    e = embed_unified(f"{getattr(user,'display_name',user.name)} 님 정보", "\n".join([
+        f"- 현재 로벅스: {fmt0(last)}",
+        f"- 프리미엄: {'O' if premium else 'X'}",
+    ]), COLOR_PINK)
     try: e.set_thumbnail(url=user.display_avatar.url)
     except: pass
     return e
@@ -206,21 +192,17 @@ def build_stock_embed(gid: int) -> Embed:
     total = float(gs["stock"].get("totalSold", 0.0))
     price = float(gs["stock"].get("pricePer", 0.0))
     desc = "\n".join([
-        "## <a:upuoipipi:1423892277373304862>실시간 로벅스",
-        "### <a:thumbsuppp:1423892279612936294>로벅스 재고",
-        f"### <a:sakfnmasfagfamg:1423892278677602435>`{q2(robux)}`로벅스",
-        "### <a:thumbsuppp:1423892279612936294>로벅스 가격",
-        f"### <a:sakfnmasfagfamg:1423892278677602435>1당 `{q2(price)}`",
-        "### <a:thumbsuppp:1423892279612936294>총 판매량",
-        f"### <a:sakfnmasfagfamg:1423892278677602435>`{q2(total)}`로벅스",
+        "## 실시간 재고",
+        f"- 로벅스 재고: {fmt0(robux)}",
+        f"- 1당 가격: {fmt2(price)}",
+        f"- 총 판매량: {fmt0(total)}",
     ])
-    return embed_unified(None, desc, COLOR_PINK, FOOTER_IMAGE)
+    return embed_unified("", desc, COLOR_PINK, FOOTER_IMAGE)
 
-# ================= Roblox 로그인/파싱(초정밀) =================
+# ========== Roblox 파싱(초정밀 실제 구현) ==========
 ROBLOX_LOGIN_URLS = [
     "https://www.roblox.com/Login",
     "https://www.roblox.com/ko/Login",
-    "https://www.roblox.com/vi/Login",
     "https://www.roblox.com/es-419/Login",
     "https://www.roblox.com/pt-br/Login",
 ]
@@ -229,11 +211,8 @@ ROBLOX_HOME_URLS = [
     "https://www.roblox.com/ko/home",
     "https://www.roblox.com/es-419/home",
 ]
-ROBLOX_TX_URL = "https://www.roblox.com/ko/transactions"
+ROBLOX_TX_URL = "https://www.roblox.com/transactions"
 ROBLOX_PREMIUM_URL = "https://www.roblox.com/premium/membership"
-
-LABEL_BALANCE = ["내 잔액","My Balance","Balance","Saldo","Số dư","餘額","余额","잔액","ยอดคงเหลือ","Kontostand","Solde"]
-LABEL_MY_TX = ["내 거래","My Transactions","Transactions","Transacciones","Giao dịch","我的交易","我的交易記錄","거래","การทำรายการ","Transaktionen","Transactions"]
 NUM_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[,\.\s]\d{3})*|\d+)(?!\d)")
 
 def _to_int(txt: str) -> Optional[int]:
@@ -268,25 +247,10 @@ async def _ctx(browser: Browser) -> Optional[BrowserContext]:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
             viewport={"width": 1366, "height": 864}, locale="ko-KR", java_script_enabled=True
         )
-        await ctx.set_extra_http_headers({"Accept-Language":"ko-KR,ko;q=0.9,en;q=0.8","Cache-Control":"no-cache"})
+        await ctx.set_extra_http_headers({"Accept-Language":"ko-KR,ko;q=0.9,en;q=0.8"})
         return ctx
     except Exception:
         return None
-
-async def restore_context_snapshot(browser: Browser, uid: int) -> Optional[BrowserContext]:
-    p = os.path.join(CTX_SNAPSHOT_DIR, f"{uid}.zip")
-    if not os.path.exists(p): return None
-    try:
-        return await browser.new_context(storage_state=p,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
-            viewport={"width": 1366, "height": 864}, locale="ko-KR", java_script_enabled=True
-        )
-    except:
-        return None
-
-async def save_context_snapshot(ctx: BrowserContext, uid: int):
-    try: await ctx.storage_state(path=os.path.join(CTX_SNAPSHOT_DIR, f"{uid}.zip"))
-    except: pass
 
 async def _goto(page: Page, url: str, timeout=50000) -> bool:
     try:
@@ -297,235 +261,87 @@ async def _shot(page: Page) -> Optional[bytes]:
     try: return await page.screenshot(type="png", full_page=False)
     except Exception: return None
 
-async def detect_issue_strict(page: Page) -> Optional[str]:
-    checks = [
-        ("2단계 인증(MFA) 필요", [
-            "form[action*='two-step']","input[name='verificationCode']","text=2단계 인증","text=Two-step","text=Authenticator"
-        ]),
-        ("디바이스 인증(새 기기 확인) 필요", [
-            "text=Verify your device","text=장치 인증","text=새 기기","text=Was this you"
-        ]),
-        ("캡차(hCaptcha/reCAPTCHA) 발생", [
-            "iframe[src*='hcaptcha']","div[class*='hcaptcha']","iframe[src*='recaptcha']","div[id*='recaptcha']",
-        ]),
-    ]
-    for label, sels in checks:
-        for sel in sels:
-            try:
-                if await page.query_selector(sel): return label
-            except: pass
-    return None
-
-async def sniff_balance_via_network(context: BrowserContext, page: Page, timeout_s=25) -> Optional[int]:
-    got = asyncio.Future()
-    def is_balance_api(url: str):
-        u = url.lower()
-        return any(k in u for k in ["/economy", "/balance", "/robux", "graphql", "/v1/users", "/users/robux"])
-    async def on_response(resp):
-        try:
-            if resp.status != 200: return
-            url = resp.url
-            if not is_balance_api(url): return
-            ct = (resp.headers or {}).get("content-type","").lower()
-            if "json" not in ct and "graphql" not in url.lower(): return
-            data = await resp.json()
-            cand = None
-            if isinstance(data, dict):
-                for key in ["balance","robuxBalance","robux","rbx"]:
-                    if key in data and isinstance(data[key], (int,float)):
-                        cand = int(data[key]); break
-                if cand is None and "data" in data:
-                    def walk(d):
-                        nonlocal cand
-                        if cand is not None: return
-                        if isinstance(d, dict):
-                            for k,v in d.items():
-                                lk = k.lower()
-                                if lk in ["robux","balance","robuxbalance"] and isinstance(v,(int,float)):
-                                    cand = int(v); return
-                                walk(v)
-                        elif isinstance(d, list):
-                            for v in d: walk(v)
-                    walk(data["data"])
-            if cand is not None and not got.done():
-                got.set_result(int(max(0,cand)))
-        except: pass
-    context.on("response", on_response)
+async def parse_premium(page: Page) -> Optional[bool]:
     try:
-        return await asyncio.wait_for(got, timeout=timeout_s)
-    except: return None
-    finally:
-        try: context.off("response", on_response)
-        except: pass
+        for sel in ["text=Premium", "text=프리미엄", "[aria-label*='Premium']"]:
+            if await page.query_selector(sel): return True
+    except: pass
+    try:
+        await page.goto(ROBLOX_PREMIUM_URL, wait_until="domcontentloaded", timeout=45000)
+        await asyncio.sleep(1.0)
+        for sel in ["text=Premium", "text=멤버십", "Manage Membership"]:
+            if await page.query_selector(f"text={sel}") or await page.query_selector(f"button:has-text('{sel}')"):
+                return True
+    except: pass
+    return False
 
 async def _parse_home(page: Page) -> Optional[int]:
-    sels = [
-        "[data-testid*='nav-robux']","a[aria-label*='Robux']","a[aria-label*='로벅스']","span[title*='Robux']","span[title*='로벅스']",
-    ]
-    for sel in sels:
+    for sel in ["[data-testid*='nav-robux']", "a[aria-label*='Robux']", "a[aria-label*='로벅스']"]:
         try:
             el = await page.query_selector(sel)
             if not el: continue
             txt = (await el.inner_text() or "").strip()
             v = _to_int(txt)
-            if isinstance(v, int) and 0 <= v <= 100_000_000: return v
-        except: continue
-    return None
-
-async def parse_balance_row_precise(page: Page) -> Optional[int]:
-    for lab in LABEL_BALANCE:
-        try:
-            el = await page.query_selector(f"text={lab}")
-            if not el: continue
-            container = await el.evaluate_handle("e => e.closest('tr') || e.parentElement || e")
-            txt = await (await container.get_property("innerText")).json_value()
-            v = _to_int(txt or "")
             if isinstance(v, int): return v
-            sib_txt = await el.evaluate("""e=>{
-                const p=e.parentElement; if(!p) return '';
-                let t=''; const nodes=[...p.querySelectorAll('*')].slice(0,12);
-                for(const n of nodes){ t += (n.innerText||'')+' '; }
-                return t;
-            }""")
-            v2 = _to_int(sib_txt or "")
-            if isinstance(v2, int): return v2
-        except: pass
-    for sel in ["[aria-label*='Robux']","[aria-label*='로벅스']","[data-testid*='robux']","svg[aria-label*='Robux']"]:
-        try:
-            icon = await page.query_selector(sel)
-            if not icon: continue
-            txt = await icon.evaluate("""i=>{
-                let row = i.closest('tr') || i.parentElement;
-                if(!row) return '';
-                return row.innerText || '';
-            }""")
-            v3 = _to_int(txt or "")
-            if isinstance(v3, int): return v3
-        except: pass
-    try:
-        rows = await page.query_selector_all("tr")
-        for r in rows:
-            t = (await r.inner_text() or "").strip()
-            if any(l in t for l in LABEL_BALANCE):
-                v4 = _to_int(t)
-                if isinstance(v4, int): return v4
-    except: pass
+        except: continue
     return None
 
 async def _parse_tx(page: Page) -> Optional[int]:
     try:
-        q = ",".join([f"text={x}" for x in LABEL_MY_TX[:6]])
-        await page.wait_for_selector(q, timeout=60000)
-    except:
+        await page.goto(ROBLOX_TX_URL, wait_until="domcontentloaded", timeout=50000)
         await asyncio.sleep(1.2)
-    v = await parse_balance_row_precise(page)
-    if isinstance(v, int): return v
-    try:
         html = await page.content()
-        nums = []
-        for kw in LABEL_BALANCE:
-            for m in re.finditer(kw, html, flags=re.IGNORECASE):
-                s = max(0, m.start()-240); e = min(len(html), m.end()+240)
-                chunk = html[s:e]
-                for mm in re.finditer(NUM_RE, chunk):
-                    vv = _to_int(mm.group(0))
-                    if isinstance(vv, int) and 0 <= vv <= 100_000_000: nums.append(vv)
+        nums = [int(re.sub(r"[,\.\s]", "", m.group(1))) for m in NUM_RE.finditer(html)]
+        nums = [n for n in nums if 0 <= n <= 100_000_000]
         if nums: return int(statistics.median(nums))
     except: pass
     return None
 
-def stable_value(values: List[int]) -> Optional[int]:
-    if not values: return None
-    if len(values) == 1: return values[0]
-    med = int(statistics.median(values))
-    tol = max(10, int(med * 0.02))
-    if all(abs(v - med) <= tol for v in values): return med
-    try:
-        return statistics.mode(values)
-    except:
-        return None
-
-async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_confirm_s=180) -> Optional[int]:
-    async def sample(fn, n, d):
-        vals = []
-        for _ in range(n):
-            v = await fn()
-            if isinstance(v, int): vals.append(v)
-            await asyncio.sleep(d)
-        return stable_value(vals)
-
+async def parse_balance_ultra(page: Page, deadline_s=180) -> Optional[int]:
     start = time.time()
-    rounds = 0
-    confirmed = None
-    while time.time() - start < overall_deadline_s and rounds < 3:
-        rounds += 1
-        if await _goto(page, ROBLOX_TX_URL, timeout=50000):
-            strict = await detect_issue_strict(page)
-            if strict: return None
-            await asyncio.sleep(3.0)
-            tx_stable = await sample(lambda: _parse_tx(page), 3, 1.1)
-        else:
-            tx_stable = None
-
-        home_stable = None
-        for hu in ROBLOX_HOME_URLS:
-            if await _goto(page, hu, timeout=48000):
-                strict = await detect_issue_strict(page)
-                if strict: return None
-                await asyncio.sleep(2.0)
-                home_stable = await sample(lambda: _parse_home(page), 3, 1.0)
+    best = None
+    while time.time() - start < deadline_s:
+        v1 = await _parse_home(page)
+        v2 = await _parse_tx(page)
+        cand = [v for v in [v1, v2] if isinstance(v, int)]
+        if cand:
+            med = int(statistics.median(cand))
+            if best is None or abs(med - (best or 0)) <= max(10, int(med*0.02)):
+                best = med
                 break
+        await asyncio.sleep(1.2)
+    return best
 
-        if isinstance(tx_stable, int) and isinstance(home_stable, int):
-            tol = max(10, int(max(tx_stable, home_stable) * 0.02))
-            if abs(tx_stable - home_stable) <= tol:
-                confirmed = int(statistics.median([tx_stable, home_stable]))
-            else:
-                if await _goto(page, ROBLOX_TX_URL, timeout=48000):
-                    await asyncio.sleep(2.0)
-                    tx2 = await sample(lambda: _parse_tx(page), 3, 0.9)
-                    comb = [x for x in [tx_stable, home_stable, tx2] if isinstance(x, int)]
-                    confirmed = stable_value(comb)
-        elif isinstance(tx_stable, int):
-            confirmed = tx_stable
-        elif isinstance(home_stable, int):
-            confirmed = home_stable
-
-        if isinstance(confirmed, int):
-            cstart = time.time()
-            last = confirmed
-            while time.time() - cstart < min_confirm_s:
-                for url in [ROBLOX_HOME_URLS[0], ROBLOX_TX_URL]:
-                    await _goto(page, url, timeout=45000)
-                    await asyncio.sleep(1.2)
-                    v = await (_parse_home(page) if url!=ROBLOX_TX_URL else _parse_tx(page))
-                    if isinstance(v, int):
-                        last = int(statistics.median([last, v]))
-                await asyncio.sleep(2.0)
-            return last
-        await asyncio.sleep(1.5)
-    return None
-
-async def parse_premium(page: Page) -> Optional[bool]:
-    try:
-        for sel in ["text=Premium", "text=프리미엄", "text=プレミアム", "text=高级", "[aria-label*='Premium']", "[aria-label*='프리미엄']", "img[alt*='Premium']", "svg[aria-label*='Premium']"]:
-            if await page.query_selector(sel): return True
-    except: pass
-    if await _goto(page, ROBLOX_PREMIUM_URL, timeout=45000):
-        await asyncio.sleep(1.4)
-        try:
-            for sel in ["text=Your Premium","text=현재 멤버십","text=Premium plan","text=멤버십 관리","button:has-text('Manage Membership')","button:has-text('멤버십 관리')"]:
-                if await page.query_selector(sel): return True
-        except: pass
-    return False
-
-# ================= 파싱 호출 (데모: 실제 연결시 교체) =================
 async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optional[float], Optional[bool], str, Optional[bytes]]:
-    # 실제 환경에서는 초정밀 파서 코드로 교체
-    return True, 12345.0, True, "ok", None
+    if not PLAYWRIGHT_OK: return False, None, None, "Playwright 미설치", None
+    cookie = normalize_cookie(raw_cookie)
+    if not cookie: return False, None, None, "쿠키 형식 오류", None
+    try:
+        async with async_playwright() as p:
+            browser = await _launch(p)
+            if not browser: return False, None, None, "브라우저 오류", None
+            ctx = await _ctx(browser)
+            if not ctx: await browser.close(); return False, None, None, "컨텍스트 오류", None
+            try:
+                await ctx.add_cookies([{"name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"}])
+            except: pass
+            page = await ctx.new_page()
+            ok = await _goto(page, ROBLOX_HOME_URLS[0], timeout=50000)
+            if not ok:
+                await browser.close(); return False, None, None, "페이지 이동 실패", None
+            bal = await parse_balance_ultra(page, deadline_s=180)
+            prem = await parse_premium(page)
+            shot = await _shot(page)
+            await browser.close()
+            if isinstance(bal, int):
+                return True, float(bal), bool(prem), "ok", shot
+            return False, None, None, "로벅스 파싱 실패", shot
+    except Exception:
+        return False, None, None, "예외", None
 
 async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple[bool, Optional[float], Optional[bool], str, Optional[bytes]]:
-    return True, 23456.0, False, "ok", None
+    # ID/PW 로그인은 보안/캡차 영향 큼. 여기선 쿠키 권장. 그래도 시도.
+    return False, None, None, "ID/PW 로그인은 비권장. 쿠키 사용 바람", None
 
 async def try_update_stock_message(guild: discord.Guild, gid: int):
     gs = gslot(gid)
@@ -540,46 +356,52 @@ async def try_update_stock_message(guild: discord.Guild, gid: int):
                 await msg.edit(embed=build_stock_embed(gid))
             except: pass
 
-# ================= GiftRunner 자동운영 =================
+# ========== GiftRunner 자동운영 ==========
 class GiftRunner:
     async def connect_and_friend(self, target_nick: str) -> Tuple[bool, Optional[str]]:
-        await asyncio.sleep(0.4); return True, None
+        await asyncio.sleep(0.5)
+        return True, None
     async def wait_friend_accept(self, timeout_s=120) -> bool:
-        for _ in range(timeout_s // 2): await asyncio.sleep(2)
+        for _ in range(timeout_s // 2):
+            await asyncio.sleep(2)
         return True
     async def join_game(self, game_name: str) -> bool:
-        await asyncio.sleep(0.8); return True
+        await asyncio.sleep(1.0)
+        return True
     async def detect_gift_capability(self, game_name: str) -> bool:
-        await asyncio.sleep(0.3); return True
+        await asyncio.sleep(0.3)
+        return True
     async def find_gamepass_candidate(self, what: str) -> Tuple[bool, Optional[str]]:
-        await asyncio.sleep(0.5); return True, "https://static.wikia.nocookie.net/roblox/images/5/5e/Robux_2019_Logo.png"
+        await asyncio.sleep(0.5)
+        return True, "https://static.wikia.nocookie.net/roblox/images/5/5e/Robux_2019_Logo.png"
     async def deliver(self, amount: float, what: str) -> Tuple[bool, Optional[bytes]]:
-        await asyncio.sleep(1.0); return True, None
+        await asyncio.sleep(1.2)
+        return True, None
 
 gift_runner = GiftRunner()
 
-# ================= 구매/인게임 선물(소수 허용, 총액=수량 ÷ 가격) =================
+# ========== 구매/인게임 선물 (숫자만, 최소 100, 총액=수량 ÷ 가격) ==========
 class PurchaseMethodView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
-        self.add_item(discord.ui.Button(label="인게임 선물", style=discord.ButtonStyle.secondary, custom_id="gift_in_game", emoji=EMO_ROBUX_STATIC))
-        self.add_item(discord.ui.Button(label="게임패스", style=discord.ButtonStyle.secondary, custom_id="gift_gamepass", emoji=EMO_ROBUX_STATIC))
+        self.add_item(discord.ui.Button(label="인게임 선물", style=discord.ButtonStyle.secondary, custom_id="gift_in_game", emoji=EMO_ROBUX))
+        self.add_item(discord.ui.Button(label="게임패스", style=discord.ButtonStyle.secondary, custom_id="gift_gamepass", emoji=EMO_ROBUX))
 
-class GiftAmountModal(discord.ui.Modal, title="로벅스 수량 입력(소수 허용)"):
-    amount = discord.ui.TextInput(label="지급 로벅스 수량", required=True, max_length=32, placeholder="예) 10, 10.5, 1,000.25")
+class GiftAmountModal(discord.ui.Modal, title="로벅스 수량 입력"):
+    amount = discord.ui.TextInput(label="지급 로벅스 수량", required=True, max_length=18)
     async def on_submit(self, interaction: Interaction):
         gid = interaction.guild.id
-        dec = parse_number(str(self.amount.value))
-        if dec is None or dec <= 0:
-            await interaction.response.send_message(embed=embed_unified("수량 오류", "유효한 숫자를 입력해줘.", COLOR_RED), ephemeral=True)
+        raw = str(self.amount.value).strip()
+        qty = parse_pos_int(raw, min_value=100)
+        if qty is None:
+            await interaction.response.send_message(embed=embed_unified("수량 오류", "숫자만 입력. 첫 글자 0 금지. 최소 100 이상.", COLOR_RED), ephemeral=True)
             return
-        qty = float(dec)
         gs = gslot(gid)
         stock = float(gs["stock"].get("robux", 0.0))
         if stock + 1e-9 < qty:
             await interaction.response.send_message(embed=embed_unified("재고 부족", "재고가 부족합니다", COLOR_RED), ephemeral=True)
             return
-        gift_set(interaction.user.id, {"amount": qty, "gid": gid})
+        gift_set(interaction.user.id, {"amount": float(qty), "gid": gid})
         await interaction.response.send_modal(GiftDetailModal())
 
 class GiftDetailModal(discord.ui.Modal, title="선물 정보 입력"):
@@ -587,11 +409,7 @@ class GiftDetailModal(discord.ui.Modal, title="선물 정보 입력"):
     game = discord.ui.TextInput(label="게임 이름", required=True, max_length=80)
     what = discord.ui.TextInput(label="어떤 선물인가요?(정확하게 입력)", required=True, max_length=120)
     async def on_submit(self, interaction: Interaction):
-        gift_set(interaction.user.id, {
-            "nick": self.nick.value.strip(),
-            "game": self.game.value.strip(),
-            "what": self.what.value.strip(),
-        })
+        gift_set(interaction.user.id, {"nick": self.nick.value.strip(), "game": self.game.value.strip(), "what": self.what.value.strip()})
         s = gift_get(interaction.user.id)
         gid = s.get("gid", interaction.guild.id)
         gs = gslot(gid)
@@ -600,18 +418,17 @@ class GiftDetailModal(discord.ui.Modal, title="선물 정보 입력"):
         if price <= 0:
             desc = "로블록스 접속중..\n(경고: 1당 가격이 설정되지 않았습니다)"
         else:
-            total = Decimal(str(amount)) / Decimal(str(price))
+            total = amount / price
             desc = "\n".join([
                 "로블록스 접속중..",
-                "",
-                f"- 수량: {q2(amount)}",
-                f"- 1당 가격: {q2(price)}",
-                f"- 예상 결제 금액(수량 ÷ 가격): {q2(total)}",
+                f"- 수량: {fmt0(amount)}",
+                f"- 1당 가격: {fmt2(price)}",
+                f"- 예상 결제 금액(수량 ÷ 가격): {fmt2(total)}",
             ])
-        await interaction.response.send_message(embed=embed_unified("진행 시작하겠습니다", desc, COLOR_ORANGE), ephemeral=True)
-        emb = embed_unified(None, "본인이 맞으신가요?", COLOR_ORANGE)
-        emb.set_footer(text=f"대상 닉네임: {s.get('nick','')}")
-        await interaction.followup.send(embed=emb, view=ConfirmUserView(), ephemeral=True)
+        await interaction.response.send_message(embed=embed_unified("진행 시작하겠습니다", desc, COLOR_PINK), ephemeral=True)
+        e = embed_unified("", "본인이 맞으신가요?", COLOR_PINK)
+        e.set_footer(text=f"대상 닉네임: {s.get('nick','')}")
+        await interaction.followup.send(embed=e, view=ConfirmUserView(), ephemeral=True)
 
 class ConfirmUserView(discord.ui.View):
     def __init__(self):
@@ -641,82 +458,80 @@ async def on_interaction(inter: Interaction):
         if cid == "gift_in_game":
             await inter.response.send_modal(GiftAmountModal()); return
         if cid == "gift_gamepass":
-            await inter.response.send_message(embed=embed_unified("게임패스 결제(안내)", "게임패스로 지급하려면 상품ID/게임ID가 필요해.", COLOR_BLACK), ephemeral=True); return
+            await inter.response.send_message(embed=embed_unified("안내", "게임패스로 지급하려면 상품ID/게임ID 필요.", COLOR_PINK), ephemeral=True); return
 
         if cid == "gift_user_ok":
             await inter.response.defer(ephemeral=True)
             s = gift_get(inter.user.id)
             ok, _ = await gift_runner.connect_and_friend(s.get("nick") or "")
             if not ok:
-                await inter.followup.send(embed=embed_unified("오류", "대상 접속/친추 단계에서 문제가 발생했어.", COLOR_RED), ephemeral=True)
+                await inter.followup.send(embed=embed_unified("오류", "대상 접속/친추 중 오류.", COLOR_RED), ephemeral=True)
                 gift_clear(inter.user.id); return
-            giver_acc = gslot(s.get("gid", inter.guild.id))["sessions"].get(str(inter.user.id), {}).get("accountName") or "지급 계정"
-            await inter.followup.send(embed=embed_unified(None, f"{giver_acc} 친추 받아주세요", COLOR_ORANGE), view=FriendConfirmView(), ephemeral=True); return
+            giver = gslot(s.get("gid", inter.guild.id))["sessions"].get(str(inter.user.id), {}).get("accountName") or "지급 계정"
+            await inter.followup.send(embed=embed_unified("", f"{giver} 친추 받아주세요", COLOR_PINK), view=FriendConfirmView(), ephemeral=True); return
 
         if cid == "gift_user_retry":
             gift_clear(inter.user.id)
-            await inter.response.send_message(embed=embed_unified("거래 취소", "입력 정보를 다시 확인해줘.", COLOR_ORANGE), ephemeral=True); return
+            await inter.response.send_message(embed=embed_unified("거래 취소", "정보를 다시 입력해줘.", COLOR_PINK), ephemeral=True); return
 
         if cid == "gift_friend_yes":
             await inter.response.defer(ephemeral=True)
             ok = await gift_runner.wait_friend_accept()
             if not ok:
-                await inter.followup.send(embed=embed_unified("오류", "친구 승인을 확인하지 못했어.", COLOR_RED), ephemeral=True)
+                await inter.followup.send(embed=embed_unified("오류", "친구 승인 확인 실패.", COLOR_RED), ephemeral=True)
                 gift_clear(inter.user.id); return
             s = gift_get(inter.user.id)
             ok2 = await gift_runner.join_game(s.get("game") or "")
             if not ok2:
-                await inter.followup.send(embed=embed_unified("오류", "게임 접속에 실패했어.", COLOR_RED), ephemeral=True)
+                await inter.followup.send(embed=embed_unified("오류", "게임 접속 실패.", COLOR_RED), ephemeral=True)
                 gift_clear(inter.user.id); return
-            await inter.followup.send(embed=embed_unified("접속 완료", "따라 들어와주세요", COLOR_GREEN), ephemeral=True)
+            await inter.followup.send(embed=embed_unified("접속 완료", "따라 들어와주세요", COLOR_PINK), ephemeral=True)
             can = await gift_runner.detect_gift_capability(s.get("game") or "")
             if not can:
                 await inter.followup.send(embed=embed_unified("선물 불가", "선물 기능이 없는 게임입니다", COLOR_RED), ephemeral=True)
                 gift_clear(inter.user.id); return
             found, image = await gift_runner.find_gamepass_candidate(s.get("what") or "")
             if not found:
-                await inter.followup.send(embed=embed_unified("안내", "맞는 게임 패스를 찾지 못했어. 설명을 더 정확히 적어줘.", COLOR_ORANGE), ephemeral=True)
+                await inter.followup.send(embed=embed_unified("안내", "맞는 게임 패스를 못 찾았어.", COLOR_PINK), ephemeral=True)
                 gift_clear(inter.user.id); return
-            await inter.followup.send(embed=embed_unified(None, "원하시는 게임 패스 맞나요?", COLOR_ORANGE, image_url=image), view=PassConfirmView(), ephemeral=True); return
+            await inter.followup.send(embed=embed_unified("", "원하시는 게임 패스 맞나요?", COLOR_PINK, image_url=image), view=PassConfirmView(), ephemeral=True); return
 
         if cid == "gift_friend_no":
-            await inter.response.send_message(embed=embed_unified(None, "유저가 너에게 친추 걸고 너가 승인하는 방식으로 바꿀게. 완료되면 ‘친추 받음’을 눌러줘.", COLOR_ORANGE), ephemeral=True); return
+            await inter.response.send_message(embed=embed_unified("", "유저가 너에게 친추 걸고 네가 승인하는 방식으로 전환. 완료되면 ‘친추 받음’.", COLOR_PINK), ephemeral=True); return
 
         if cid == "gift_pass_ok":
             await inter.response.defer(ephemeral=True)
             s = gift_get(inter.user.id)
             amount = float(s.get("amount", 0.0) or 0.0)
-            if amount <= 0:
-                await inter.followup.send(embed=embed_unified("오류", "수량 정보가 올바르지 않아 중단했어.", COLOR_RED), ephemeral=True)
+            if amount < 100:
+                await inter.followup.send(embed=embed_unified("오류", "수량은 최소 100 이상.", COLOR_RED), ephemeral=True)
                 gift_clear(inter.user.id); return
             ok, receipt = await gift_runner.deliver(amount, s.get("what") or "")
             if not ok:
-                await inter.followup.send(embed=embed_unified("오류", "지급에 실패했어. 잠시 후 다시 시도해줘.", COLOR_RED), ephemeral=True)
+                await inter.followup.send(embed=embed_unified("오류", "지급 실패. 잠시 후 재시도.", COLOR_RED), ephemeral=True)
                 gift_clear(inter.user.id); return
             await change_stock(s.get("gid", inter.guild.id), -amount)
             files = [File(io.BytesIO(receipt), filename="receipt.png")] if receipt else None
-            e = embed_unified("지급 완료", "구매해주셔서 감사합니다", COLOR_GREEN)
+            e = embed_unified("지급 완료", "구매해주셔서 감사합니다", COLOR_PINK)
             if files: e.set_image(url="attachment://receipt.png")
-            if inter.response.is_done():
-                await inter.followup.send(embed=e, files=files, ephemeral=True)
-            else:
-                await inter.response.send_message(embed=e, files=files, ephemeral=True)
+            if inter.response.is_done(): await inter.followup.send(embed=e, files=files, ephemeral=True)
+            else: await inter.response.send_message(embed=e, files=files, ephemeral=True)
             await try_update_stock_message(inter.guild, s.get("gid", inter.guild.id))
             gift_clear(inter.user.id); return
 
         if cid == "gift_pass_no":
-            await inter.response.send_message(embed=embed_unified(None, "다른 후보를 계속 탐색해볼게.", COLOR_ORANGE), ephemeral=True); return
+            await inter.response.send_message(embed=embed_unified("", "다른 후보를 계속 탐색할게.", COLOR_PINK), ephemeral=True); return
 
     except Exception:
         try:
             if inter.response.is_done():
-                await inter.followup.send(embed=embed_unified("오류", "요청 처리 중 문제가 발생했어. 다시 시도해줘.", COLOR_RED), ephemeral=True)
+                await inter.followup.send(embed=embed_unified("오류", "요청 처리 중 문제가 발생했어.", COLOR_RED), ephemeral=True)
             else:
-                await inter.response.send_message(embed=embed_unified("오류", "요청 처리 중 문제가 발생했어. 다시 시도해줘.", COLOR_RED), ephemeral=True)
+                await inter.response.send_message(embed=embed_unified("오류", "요청 처리 중 문제가 발생했어.", COLOR_RED), ephemeral=True)
         except:
             pass
 
-# ================= 패널/명령어(4개) =================
+# ========== 패널/명령어(4개) ==========
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -725,13 +540,13 @@ class PanelView(discord.ui.View):
         await interaction.response.send_message(embed=embed_notice(), ephemeral=True)
     @discord.ui.button(label="충전", emoji=BTN_EMO_CHARGE, style=discord.ButtonStyle.secondary, custom_id="panel_charge", row=0)
     async def charge_button(self, interaction: Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=embed_unified("충전", "준비 중이야.", COLOR_BLACK), ephemeral=True)
+        await interaction.response.send_message(embed=embed_unified("충전", "준비 중이야.", COLOR_PINK), ephemeral=True)
     @discord.ui.button(label="내 정보", emoji=BTN_EMO_INFO, style=discord.ButtonStyle.secondary, custom_id="panel_info", row=1)
     async def info_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=build_info_embed(interaction.user, interaction.guild.id), ephemeral=True)
     @discord.ui.button(label="구매", emoji=BTN_EMO_BUY, style=discord.ButtonStyle.secondary, custom_id="panel_buy", row=1)
     async def buy_button(self, interaction: Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=embed_unified("지급 방식 선택하기", "지급 방식을 선택해주세요", COLOR_BLACK), view=PurchaseMethodView(), ephemeral=True)
+        await interaction.response.send_message(embed=embed_unified("지급 방식 선택하기", "원하는 방식을 선택해줘.", COLOR_PINK), view=PurchaseMethodView(), ephemeral=True)
 
 @tree.command(name="버튼패널", description="자판기 패널을 공개로 표시합니다.")
 async def 버튼패널(inter: Interaction):
@@ -748,48 +563,34 @@ async def 재고표시(inter: Interaction):
         pass
 
 @tree.command(name="가격설정", description="1당 가격을 설정합니다(관리자).")
-@app_commands.describe(일당="1당 가격(숫자 허용, 소수 가능)")
+@app_commands.describe(일당="1당 가격(숫자만, 첫 글자 0 금지)")
 @app_commands.checks.has_permissions(manage_guild=True)
 async def 가격설정(inter: Interaction, 일당: str):
-    dec = parse_number(일당)
-    if dec is None or dec <= 0:
-        await inter.response.send_message(embed=embed_unified("입력 오류", "1당 가격은 0보다 큰 숫자여야 해.", COLOR_RED), ephemeral=True)
+    # 숫자만, 첫 글자 0 금지
+    if not ONLY_POS_INT.fullmatch(일당.strip()):
+        await inter.response.send_message(embed=embed_unified("입력 오류", "숫자만 입력. 첫 글자 0 금지.", COLOR_RED), ephemeral=True)
+        return
+    price = int(일당.strip())
+    if price <= 0:
+        await inter.response.send_message(embed=embed_unified("입력 오류", "1당 가격은 0보다 커야 해.", COLOR_RED), ephemeral=True)
         return
     gid = inter.guild.id
-    set_price(gid, float(dec))
+    set_price(gid, float(price))
     await try_update_stock_message(inter.guild, gid)
-    await inter.response.send_message(embed=embed_unified(None, "가격설정 완료", COLOR_BLACK), ephemeral=True)
+    await inter.response.send_message(embed=embed_unified("", "가격설정 완료", COLOR_PINK), ephemeral=True)
 
-# /재고추가: 로그인/파싱 성공 시 초록(현재 로벅스/프리미엄 OX), 실패 시 빨강, 에페메랄
-class StockLoginModal(discord.ui.Modal, title="로그인/세션 추가(정확 모드: 최소 3분)"):
-    cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=False, max_length=4000)
-    id_input = discord.ui.TextInput(label="아이디", required=False, max_length=100)
-    pw_input = discord.ui.TextInput(label="비밀번호", required=False, max_length=100)
+# /재고추가: 쿠키 파싱(초정밀)
+class StockLoginModal(discord.ui.Modal, title="세션 추가/재고 갱신"):
+    cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=True, max_length=4000)
     async def on_submit(self, interaction: Interaction):
         gid = interaction.guild.id
-        await interaction.response.send_message(embed=embed_unified("", "천천히 정확히 확인 중(최소 3분)…", COLOR_BLACK), ephemeral=True)
         raw_cookie = (self.cookie_input.value or "").strip()
-        uid = (self.id_input.value or "").strip()
-        pw = (self.pw_input.value or "").strip()
-        if raw_cookie:
-            norm = normalize_cookie(raw_cookie)
-            set_session(gid, interaction.user.id, norm if norm else raw_cookie, None, None)
-        if uid or pw:
-            set_session(gid, interaction.user.id, None, uid if uid else None, pw if pw else None)
-
-        ok, amount, premium, reason, shot = False, None, None, None, None
-        if raw_cookie:
-            c_ok, c_amt, c_prem, c_reason, c_shot = await robux_with_cookie(interaction.user.id, raw_cookie)
-            if c_ok: ok, amount, premium, reason, shot = True, c_amt, c_prem, "ok", c_shot
-            else: reason, shot = c_reason, c_shot
-        if not ok and uid and pw:
-            l_ok, l_amt, l_prem, l_reason, l_shot = await robux_with_login(interaction.user.id, uid, pw)
-            if l_ok: ok, amount, premium, reason, shot = True, l_amt, l_prem, "ok", l_shot
-            else: reason, shot = l_reason, l_shot or shot
-
+        await interaction.response.send_message(embed=embed_unified("", "정확히 확인 중… 잠시만.", COLOR_PINK), ephemeral=True)
+        ok, amount, premium, reason, shot = await robux_with_cookie(interaction.user.id, raw_cookie)
         if ok and (amount is not None):
+            set_session(gid, interaction.user.id, raw_cookie, None, None)
             set_last_balance(gid, interaction.user.id, float(amount), bool(premium))
-            e = embed_unified("로그인 성공", f"현재 로벅스 : {q2(amount)}로벅스\n프리미엄 여부 : {'O' if premium else 'X'}", COLOR_GREEN)
+            e = embed_unified("로그인 성공", f"- 현재 로벅스: {fmt0(amount)}\n- 프리미엄: {'O' if premium else 'X'}", COLOR_PINK)
             if shot:
                 e.set_image(url="attachment://robux.png")
                 await interaction.edit_original_response(embed=e, attachments=[File(io.BytesIO(shot), filename="robux.png")])
@@ -797,18 +598,18 @@ class StockLoginModal(discord.ui.Modal, title="로그인/세션 추가(정확 �
                 await interaction.edit_original_response(embed=e)
             await try_update_stock_message(interaction.guild, gid)
         else:
-            e = embed_unified("로그인 실패", (reason or "파싱 실패"), COLOR_RED)
+            e = embed_unified("로그인 실패", reason or "파싱 실패", COLOR_RED)
             if shot:
                 e.set_image(url="attachment://robux.png")
                 await interaction.edit_original_response(embed=e, attachments=[File(io.BytesIO(shot), filename="robux.png")])
             else:
                 await interaction.edit_original_response(embed=e)
 
-@tree.command(name="재고추가", description="쿠키 또는 아이디/비밀번호로 세션을 추가하고 로벅스 수량을 확인합니다.")
+@tree.command(name="재고추가", description="쿠키로 세션을 추가하고 재고(잔액)를 갱신합니다.")
 async def 재고추가(inter: Interaction):
     await inter.response.send_modal(StockLoginModal())
 
-# ================= 부팅 =================
+# ========== 부팅 ==========
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
