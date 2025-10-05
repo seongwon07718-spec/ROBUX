@@ -1,3 +1,4 @@
+# main.py
 import os, io, json, re, asyncio, time, statistics, pathlib
 from typing import Dict, Any, Optional, Tuple, List
 
@@ -6,14 +7,14 @@ from discord import app_commands, Interaction, Embed, File
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Playwright 사용(로그인/파싱)
+# ===== Playwright (로그인/파싱) =====
 PLAYWRIGHT_OK = True
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PwTimeout
 except Exception:
     PLAYWRIGHT_OK = False
 
-# ============== 기본 ==============
+# ===== 기본 =====
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 HTTP_PROXY = os.getenv("HTTP_PROXY", "").strip() or None
@@ -24,11 +25,10 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ============== DB/상태 ==============
+# ===== 파일 DB / 상태 =====
 DATA_PATH = "data.json"
 CTX_SNAPSHOT_DIR = "ctx_snapshots"
 pathlib.Path(CTX_SNAPSHOT_DIR).mkdir(parents=True, exist_ok=True)
-
 db_lock = asyncio.Lock()
 
 INIT_DATA = {"guilds": {}, "giftSessions": {}}
@@ -81,16 +81,16 @@ def set_session(gid: int, uid: int, cookie: Optional[str], username: Optional[st
 def set_last_balance(gid: int, uid: int, robux: int, premium: bool, account_name: Optional[str] = None):
     gs = gslot(gid)
     sess = gs["sessions"].get(str(uid), {"cookie": None, "username": None, "password": None, "lastRobux": 0, "premium": False, "accountName": None})
-    sess["lastRobux"] = int(robux)
+    sess["lastRobux"] = int(max(0, robux))
     sess["premium"] = bool(premium)
     if account_name: sess["accountName"] = account_name
     gs["sessions"][str(uid)] = sess
-    gs["stock"]["robux"] = max(0, int(robux))
+    gs["stock"]["robux"] = int(max(0, robux))
     update_gslot(gid, gs)
 
 def set_price(gid: int, price: int):
     gs = gslot(gid)
-    gs["stock"]["pricePer"] = max(0, int(price))
+    gs["stock"]["pricePer"] = int(max(0, price))
     update_gslot(gid, gs)
 
 def set_last_message(gid: int, channelId: int, messageId: int):
@@ -105,7 +105,7 @@ async def change_stock(gid: int, delta: int):
         newv = max(0, now + int(delta))
         gs["stock"]["robux"] = newv
         if delta < 0:
-            gs["stock"]["totalSold"] = int(gs["stock"].get("totalSold", 0)) + (-delta)
+            gs["stock"]["totalSold"] = int(gs["stock"].get("totalSold", 0)) + (-int(delta))
         update_gslot(gid, gs)
         return newv
 
@@ -127,7 +127,7 @@ def gift_clear(uid: int):
         del data["giftSessions"][str(uid)]
         db_save(data)
 
-# ============== 임베드 통일 ==============
+# ===== 임베드/이모지 =====
 def color_hex(h: str) -> discord.Colour:
     return discord.Colour(int(h.lower().replace("#", ""), 16))
 
@@ -139,7 +139,6 @@ COLOR_ORANGE= discord.Colour.orange()
 
 def pe(eid: int, name: str = None, animated: bool = False) -> discord.PartialEmoji:
     return discord.PartialEmoji(name=name, id=eid, animated=animated)
-
 BTN_EMO_NOTICE = pe(1424003478275231916, name="emoji_5")
 BTN_EMO_CHARGE = pe(1381244136627245066, name="charge")
 BTN_EMO_INFO   = pe(1381244138355294300, name="info")
@@ -179,17 +178,15 @@ def build_stock_embed(gid: int) -> Embed:
     desc = "\n".join([
         "## <a:upuoipipi:1423892277373304862>실시간 로벅스",
         "### <a:thumbsuppp:1423892279612936294>로벅스 재고",
-        f"### <a:sakfnmasfagfamg:1423892278677602435>`{robux}`로벅스",
+        f"### <a:sakfnmasfagfamg:1423892278677602435>`{robux:,}`로벅스",
         "### <a:thumbsuppp:1423892279612936294>로벅스 가격",
-        f"### <a:sakfnmasfagfamg:1423892278677602435>1당 `{price}`로벅스",
+        f"### <a:sakfnmasfagfamg:1423892278677602435>1당 `{price:,}`로벅스",
         "### <a:thumbsuppp:1423892279612936294>총 판매량",
-        f"### <a:sakfnmasfagfamg:1423892278677602435>`{total}`로벅스",
+        f"### <a:sakfnmasfagfamg:1423892278677602435>`{total:,}`로벅스",
     ])
     return embed_unified(None, desc, COLOR_PINK, FOOTER_IMAGE)
 
-# ============== Roblox 로그인/파싱(초정밀) ==============
-# 다국어 + 네트워크 스니핑 + ‘내 잔액’ 라인 정밀 + 최소 3분 안정화 + 프리미엄 판정
-
+# ===== Roblox 로그인/파싱(초정밀) =====
 ROBLOX_LOGIN_URLS = [
     "https://www.roblox.com/Login",
     "https://www.roblox.com/ko/Login",
@@ -258,10 +255,8 @@ async def restore_context_snapshot(browser: Browser, uid: int) -> Optional[Brows
         return None
 
 async def save_context_snapshot(ctx: BrowserContext, uid: int):
-    try:
-        await ctx.storage_state(path=os.path.join(CTX_SNAPSHOT_DIR, f"{uid}.zip"))
-    except:
-        pass
+    try: await ctx.storage_state(path=os.path.join(CTX_SNAPSHOT_DIR, f"{uid}.zip"))
+    except: pass
 
 async def _goto(page: Page, url: str, timeout=50000) -> bool:
     try:
@@ -275,23 +270,13 @@ async def _shot(page: Page) -> Optional[bytes]:
 async def detect_issue_strict(page: Page) -> Optional[str]:
     checks = [
         ("2단계 인증(MFA) 필요", [
-            "form[action*='two-step']",
-            "input[name='verificationCode']",
-            "text=2단계 인증",
-            "text=Two-step",
-            "text=Authenticator"
+            "form[action*='two-step']","input[name='verificationCode']","text=2단계 인증","text=Two-step","text=Authenticator"
         ]),
         ("디바이스 인증(새 기기 확인) 필요", [
-            "text=Verify your device",
-            "text=장치 인증",
-            "text=새 기기",
-            "text=Was this you"
+            "text=Verify your device","text=장치 인증","text=새 기기","text=Was this you"
         ]),
         ("캡차(hCaptcha/reCAPTCHA) 발생", [
-            "iframe[src*='hcaptcha']",
-            "div[class*='hcaptcha']",
-            "iframe[src*='recaptcha']",
-            "div[id*='recaptcha']",
+            "iframe[src*='hcaptcha']","div[class*='hcaptcha']","iframe[src*='recaptcha']","div[id*='recaptcha']",
         ]),
     ]
     for label, sels in checks:
@@ -345,11 +330,7 @@ async def sniff_balance_via_network(context: BrowserContext, page: Page, timeout
 
 async def _parse_home(page: Page) -> Optional[int]:
     sels = [
-        "[data-testid*='nav-robux']",
-        "a[aria-label*='Robux']",
-        "a[aria-label*='로벅스']",
-        "span[title*='Robux']",
-        "span[title*='로벅스']",
+        "[data-testid*='nav-robux']","a[aria-label*='Robux']","a[aria-label*='로벅스']","span[title*='Robux']","span[title*='로벅스']",
     ]
     for sel in sels:
         try:
@@ -379,12 +360,7 @@ async def parse_balance_row_precise(page: Page) -> Optional[int]:
             v2 = _to_int(sib_txt or "")
             if isinstance(v2, int): return v2
         except: pass
-    for sel in [
-        "[aria-label*='Robux']",
-        "[aria-label*='로벅스']",
-        "[data-testid*='robux']",
-        "svg[aria-label*='Robux']",
-    ]:
+    for sel in ["[aria-label*='Robux']","[aria-label*='로벅스']","[data-testid*='robux']","svg[aria-label*='Robux']"]:
         try:
             icon = await page.query_selector(sel)
             if not icon: continue
@@ -433,8 +409,7 @@ def stable_value(values: List[int]) -> Optional[int]:
     if len(values) == 1: return values[0]
     med = int(statistics.median(values))
     tol = max(10, int(med * 0.02))
-    if all(abs(v - med) <= tol for v in values):
-        return med
+    if all(abs(v - med) <= tol for v in values): return med
     try: return statistics.mode(values)
     except: return None
 
@@ -501,27 +476,18 @@ async def parse_balance_ultra_precise(page: Page, overall_deadline_s=300, min_co
 
 async def parse_premium(page: Page) -> Optional[bool]:
     try:
-        premium_sels = [
-            "text=Premium", "text=프리미엄", "text=プレミアム", "text=高級", "text=高级",
-            "[aria-label*='Premium']", "[aria-label*='프리미엄']",
-            "img[alt*='Premium']", "svg[aria-label*='Premium']",
-        ]
-        for sel in premium_sels:
-            el = await page.query_selector(sel)
-            if el: return True
+        for sel in ["text=Premium", "text=프리미엄", "text=プレミアム", "text=高级", "[aria-label*='Premium']", "[aria-label*='프리미엄']", "img[alt*='Premium']", "svg[aria-label*='Premium']"]:
+            if await page.query_selector(sel): return True
     except: pass
     if await _goto(page, ROBLOX_PREMIUM_URL, timeout=45000):
         await asyncio.sleep(1.4)
         try:
-            membership_sels = [
-                "text=Your Premium", "text=현재 멤버십", "text=Premium plan", "text=멤버십 관리",
-                "button:has-text('Manage Membership')", "button:has-text('멤버십 관리')"
-            ]
-            for sel in membership_sels:
+            for sel in ["text=Your Premium","text=현재 멤버십","text=Premium plan","text=멤버십 관리","button:has-text('Manage Membership')","button:has-text('멤버십 관리')"]:
                 if await page.query_selector(sel): return True
         except: pass
     return False
 
+# 쿠키 로그인
 async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optional[int], Optional[bool], str, Optional[bytes]]:
     if not PLAYWRIGHT_OK: return False, None, None, "Playwright 미설치", None
     cookie = normalize_cookie(raw_cookie)
@@ -534,11 +500,9 @@ async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optio
             ctx = await restore_context_snapshot(browser, user_uid)
             if not ctx: ctx = await _ctx(browser)
             if not ctx: await browser.close(); return False, None, None, "컨텍스트 오류", None
-
             try:
                 await ctx.add_cookies([{"name":".ROBLOSECURITY","value":cookie,"domain":".roblox.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"}])
             except: pass
-
             page = await ctx.new_page()
             net_task = asyncio.create_task(sniff_balance_via_network(ctx, page, timeout_s=25))
 
@@ -575,13 +539,13 @@ async def robux_with_cookie(user_uid: int, raw_cookie: str) -> Tuple[bool, Optio
     except Exception:
         return False, None, None, "예외", None
 
+# ID/PW 로그인
 async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple[bool, Optional[int], Optional[bool], str, Optional[bytes]]:
     if not PLAYWRIGHT_OK: return False, None, None, "Playwright 미설치", None
     try:
         async with async_playwright() as p:
             browser = await _launch(p)
             if not browser: return False, None, None, "브라우저 오류", None
-
             ctx = await _ctx(browser)
             if not ctx: await browser.close(); return False, None, None, "컨텍스트 오류", None
             page = await ctx.new_page()
@@ -595,21 +559,21 @@ async def robux_with_login(user_uid: int, username: str, password: str) -> Tuple
                 await browser.close(); return False, None, None, "로그인 페이지 이동 실패", None
 
             id_ok = False
-            for sel in ["input#login-username", "input[name='username']", "input[type='text']"]:
+            for sel in ["input#login-username","input[name='username']","input[type='text']"]:
                 try: await page.fill(sel, username); id_ok = True; break
                 except: continue
             if not id_ok:
                 await browser.close(); return False, None, None, "아이디 입력 실패", None
 
             pw_ok = False
-            for sel in ["input#login-password", "input[name='password']", "input[type='password']"]:
+            for sel in ["input#login-password","input[name='password']","input[type='password']"]:
                 try: await page.fill(sel, password); pw_ok = True; break
                 except: continue
             if not pw_ok:
                 await browser.close(); return False, None, None, "비밀번호 입력 실패", None
 
             clicked = False
-            for sel in ["button#login-button", "button[type='submit']", "button:has-text('로그인')", "button:has-text('Log In')"]:
+            for sel in ["button#login-button","button[type='submit']","button:has-text('로그인')","button:has-text('Log In')"]:
                 try:
                     btn = await page.query_selector(sel)
                     if btn: await btn.click(); clicked = True; break
@@ -661,57 +625,49 @@ async def try_update_stock_message(guild: discord.Guild, gid: int):
                 await msg.edit(embed=build_stock_embed(gid))
             except: pass
 
-# ============== GiftRunner: 자동 운영 ==============
+# ===== GiftRunner 자동운영 =====
 class GiftRunner:
     async def connect_and_friend(self, target_nick: str) -> Tuple[bool, Optional[str]]:
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.6)
         return True, None
-
     async def wait_friend_accept(self, timeout_s=120) -> bool:
-        for _ in range(timeout_s // 2):
-            await asyncio.sleep(2)
+        for _ in range(timeout_s // 2): await asyncio.sleep(2)
         return True
-
     async def join_game(self, game_name: str) -> bool:
-        await asyncio.sleep(1.0)
-        return True
-
+        await asyncio.sleep(1.0); return True
     async def detect_gift_capability(self, game_name: str) -> bool:
-        await asyncio.sleep(0.3)
-        return True
-
+        await asyncio.sleep(0.3); return True
     async def find_gamepass_candidate(self, what: str) -> Tuple[bool, Optional[str]]:
-        await asyncio.sleep(0.5)
-        return True, "https://static.wikia.nocookie.net/roblox/images/5/5e/Robux_2019_Logo.png"
-
+        await asyncio.sleep(0.5); return True, "https://static.wikia.nocookie.net/roblox/images/5/5e/Robux_2019_Logo.png"
     async def deliver(self, amount: int, what: str) -> Tuple[bool, Optional[bytes]]:
-        await asyncio.sleep(1.2)
-        return True, None
+        await asyncio.sleep(1.2); return True, None
 
 gift_runner = GiftRunner()
 
-# ============== 구매/인게임 선물 UI 플로우 ==============
+# ===== 구매/인게임 선물 플로우(수량 숫자만, 첫 글자 0 금지) =====
+ONLY_POS_INT = re.compile(r"^[1-9][0-9]{0,31}$")
+
 class PurchaseMethodView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
         self.add_item(discord.ui.Button(label="인게임 선물", style=discord.ButtonStyle.secondary, custom_id="gift_in_game", emoji=EMO_ROBUX_STATIC))
         self.add_item(discord.ui.Button(label="게임패스", style=discord.ButtonStyle.secondary, custom_id="gift_gamepass", emoji=EMO_ROBUX_STATIC))
 
-class GiftAmountModal(discord.ui.Modal, title="로벅스 수량 입력"):
-    amount = discord.ui.TextInput(label="지급 로벅스 수량", required=True, max_length=10, placeholder="정수로 입력")
+class GiftAmountModal(discord.ui.Modal, title="로벅스 수량 입력(숫자만, 첫 글자 0 금지)"):
+    amount = discord.ui.TextInput(label="지급 로벅스 수량", required=True, max_length=32, placeholder="예) 1, 10, 999999")
     async def on_submit(self, interaction: Interaction):
         gid = interaction.guild.id
-        try:
-            n = int(str(self.amount.value).strip().replace(",", ""))
-        except:
-            await interaction.response.send_message(embed=embed_unified("재고 확인", "수량은 정수로 입력해줘.", COLOR_RED), ephemeral=True); return
-        if n <= 0:
-            await interaction.response.send_message(embed=embed_unified("재고 확인", "수량은 1 이상이어야 해.", COLOR_RED), ephemeral=True); return
+        raw = str(self.amount.value).strip()
+        if not ONLY_POS_INT.match(raw):
+            await interaction.response.send_message(embed=embed_unified("수량 오류", "숫자만 입력 가능하고 첫 자리 0은 불가야.", COLOR_RED), ephemeral=True)
+            return
+        qty = int(raw)
         gs = gslot(gid)
         stock = int(gs["stock"].get("robux", 0))
-        if stock < n:
-            await interaction.response.send_message(embed=embed_unified("재고 부족", "재고가 부족합니다", COLOR_RED), ephemeral=True); return
-        gift_set(interaction.user.id, {"amount": n, "gid": gid})
+        if stock < qty:
+            await interaction.response.send_message(embed=embed_unified("재고 부족", "재고가 부족합니다", COLOR_RED), ephemeral=True)
+            return
+        gift_set(interaction.user.id, {"amount": qty, "gid": gid})
         await interaction.response.send_modal(GiftDetailModal())
 
 class GiftDetailModal(discord.ui.Modal, title="선물 정보 입력"):
@@ -756,13 +712,11 @@ async def on_interaction(inter: Interaction):
         cid = data.get("custom_id") if isinstance(data, dict) else None
         if not cid: return
 
-        # 구매 선택
         if cid == "gift_in_game":
             await inter.response.send_modal(GiftAmountModal()); return
         if cid == "gift_gamepass":
             await inter.response.send_message(embed=embed_unified("게임패스 결제(안내)", "게임패스로 지급하려면 상품ID/게임ID가 필요해.", COLOR_BLACK), ephemeral=True); return
 
-        # 유저 확인
         if cid == "gift_user_ok":
             await inter.response.defer(ephemeral=True)
             s = gift_get(inter.user.id)
@@ -777,7 +731,6 @@ async def on_interaction(inter: Interaction):
             gift_clear(inter.user.id)
             await inter.response.send_message(embed=embed_unified("거래 취소", "입력 정보를 다시 확인해줘.", COLOR_ORANGE), ephemeral=True); return
 
-        # 친추 단계
         if cid == "gift_friend_yes":
             await inter.response.defer(ephemeral=True)
             ok = await gift_runner.wait_friend_accept()
@@ -803,7 +756,6 @@ async def on_interaction(inter: Interaction):
         if cid == "gift_friend_no":
             await inter.response.send_message(embed=embed_unified(None, "유저가 너에게 친추 걸고 너가 승인하는 방식으로 바꿀게. 완료되면 ‘친추 받음’을 눌러줘.", COLOR_ORANGE), ephemeral=True); return
 
-        # 패스 확인
         if cid == "gift_pass_ok":
             await inter.response.defer(ephemeral=True)
             s = gift_get(inter.user.id)
@@ -838,19 +790,22 @@ async def on_interaction(inter: Interaction):
         except:
             pass
 
-# ============== 패널/명령어 4개 ==============
+# ===== 패널/명령어 4개 =====
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     @discord.ui.button(label="공지사항", emoji=BTN_EMO_NOTICE, style=discord.ButtonStyle.secondary, custom_id="panel_notice", row=0)
     async def notice_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=embed_notice(), ephemeral=True)
+
     @discord.ui.button(label="충전", emoji=BTN_EMO_CHARGE, style=discord.ButtonStyle.secondary, custom_id="panel_charge", row=0)
     async def charge_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=embed_unified("충전", "준비 중이야.", COLOR_BLACK), ephemeral=True)
+
     @discord.ui.button(label="내 정보", emoji=BTN_EMO_INFO, style=discord.ButtonStyle.secondary, custom_id="panel_info", row=1)
     async def info_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=build_info_embed(interaction.user, interaction.guild.id), ephemeral=True)
+
     @discord.ui.button(label="구매", emoji=BTN_EMO_BUY, style=discord.ButtonStyle.secondary, custom_id="panel_buy", row=1)
     async def buy_button(self, interaction: Interaction, button: discord.ui.Button):
         await interaction.response.send_message(embed=embed_unified("지급 방식 선택하기", "지급 방식을 선택해주세요", COLOR_BLACK), view=PurchaseMethodView(), ephemeral=True)
@@ -870,15 +825,19 @@ async def 재고표시(inter: Interaction):
         pass
 
 @tree.command(name="가격설정", description="1당 가격을 설정합니다(관리자).")
-@app_commands.describe(일당="1당 가격(정수)")
+@app_commands.describe(일당="1당 가격(숫자만, 첫 글자 0 금지)")
 @app_commands.checks.has_permissions(manage_guild=True)
-async def 가격설정(inter: Interaction, 일당: int):
+async def 가격설정(inter: Interaction, 일당: str):
+    if not re.fullmatch(r"^[1-9][0-9]{0,9}$", 일당.strip()):
+        await inter.response.send_message(embed=embed_unified("입력 오류", "숫자만 입력 가능하고 첫 자리 0은 불가야.", COLOR_RED), ephemeral=True)
+        return
     gid = inter.guild.id
-    set_price(gid, int(일당))
+    set_price(gid, int(일당.strip()))
     await try_update_stock_message(inter.guild, gid)
     await inter.response.send_message(embed=embed_unified(None, "가격설정 완료", COLOR_BLACK), ephemeral=True)
 
-class StockModal(discord.ui.Modal, title="로그인/세션 추가(정확 모드: 최소 3분)"):
+# /재고추가: 성공(초록), 실패(빨강)
+class StockLoginModal(discord.ui.Modal, title="로그인/세션 추가(정확 모드: 최소 3분)"):
     cookie_input = discord.ui.TextInput(label="cookie(.ROBLOSECURITY 또는 _|WARNING:…|_)", required=False, max_length=4000)
     id_input = discord.ui.TextInput(label="아이디", required=False, max_length=100)
     pw_input = discord.ui.TextInput(label="비밀번호", required=False, max_length=100)
@@ -904,9 +863,9 @@ class StockModal(discord.ui.Modal, title="로그인/세션 추가(정확 모드:
             if l_ok: ok, amount, premium, reason, shot = True, l_amt, l_prem, "ok", l_shot
             else: reason, shot = l_reason, l_shot or shot
 
-        if ok and isinstance(amount, int):
-            set_last_balance(gid, interaction.user.id, amount, bool(premium))
-            e = embed_unified("로그인 성공", f"현재 로벅스 : {amount}로벅스\n프리미엄 여부 : {'O' if premium else 'X'}", COLOR_GREEN)
+        if ok and (amount is not None):
+            set_last_balance(gid, interaction.user.id, int(amount), bool(premium))
+            e = embed_unified("로그인 성공", f"현재 로벅스 : {int(amount):,}로벅스\n프리미엄 여부 : {'O' if premium else 'X'}", COLOR_GREEN)
             if shot:
                 e.set_image(url="attachment://robux.png")
                 await interaction.edit_original_response(embed=e, attachments=[File(io.BytesIO(shot), filename="robux.png")])
@@ -923,9 +882,9 @@ class StockModal(discord.ui.Modal, title="로그인/세션 추가(정확 모드:
 
 @tree.command(name="재고추가", description="쿠키 또는 아이디/비밀번호로 세션을 추가하고 로벅스 수량을 확인합니다.")
 async def 재고추가(inter: Interaction):
-    await inter.response.send_modal(StockModal())
+    await inter.response.send_modal(StockLoginModal())
 
-# ============== 부팅 ==============
+# ===== 부팅 =====
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
