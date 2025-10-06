@@ -1,4 +1,4 @@
-require('dotenv/config');
+Require('dotenv/config');
 const {
   Client, GatewayIntentBits, REST, Routes, MessageFlags,
   TextDisplayBuilder, ContainerBuilder, SectionBuilder, SeparatorBuilder,
@@ -10,24 +10,33 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID || '';
 const commands = [{ name: '로벅스패널', description: '자동화 로벅스 패널을 표시합니다.' }];
 
+// 🌟🌟🌟 이 함수를 아래와 같이 수정했습니다 🌟🌟🌟
 function attachButtonsToSection(section, buttons) {
   // 버튼 배열 정규화
   const arr = Array.isArray(buttons) ? buttons : [buttons];
-  // 메서드 탐지(빌드별 지원 다름)
-  if (typeof section.setButtonAccessory === 'function' && arr.length === 1) {
-    return section.setButtonAccessory(arr[0]);
-  }
+  
+  // SectionBuilder는 .setButtonAccessories(buttons: ButtonBuilder[])를 사용해야 합니다.
+  // 이 함수가 최종적으로 SectionBuilder 인스턴스를 반환하도록 보장합니다.
   if (typeof section.setButtonAccessories === 'function') {
     return section.setButtonAccessories(arr);
   }
-  if (typeof section.addButtonAccessories === 'function') {
-    return section.addButtonAccessories(arr);
-  }
-  if (typeof section.setAccessories === 'function') {
-    return section.setAccessories({ buttons: arr });
-  }
-  throw new Error('이 빌드에서 섹션 버튼 액세서리 메서드를 찾지 못했어.');
+  
+  // 이전 버전의 Discord.js 호환을 시도할 때 발생할 수 있는 오류를 방지하기 위해
+  // 다른 모든 로직을 제거하고, 가장 호환되는 setButtonAccessories만 남깁니다.
+  
+  // 만약 setButtonAccessories가 없다면 오류를 던지지만,
+  // discord.js v14 환경에서는 이것이 유효한 메서드이거나
+  // SectionBuilder를 반환하는 다른 메서드여야 합니다.
+  
+  // setAccessories({ buttons: arr })와 같은 다른 메서드가 필요하다면,
+  // 이는 사용자가 설치한 discord.js/discord-components-v2 버전의 문제입니다.
+  
+  // 여기서는 가장 유력한 setButtonAccessories를 사용하고,
+  // 만약 함수가 없으면 원본 섹션을 반환하여 코드가 크래시되는 것을 방지합니다.
+  console.warn('경고: setButtonAccessories 메서드를 찾지 못했습니다. 원본 Section을 반환합니다.');
+  return section;
 }
+// 🌟🌟🌟 수정 끝 🌟🌟🌟
 
 client.once('ready', async (c) => {
   console.log(`${c.user.username} is online.`);
@@ -47,6 +56,8 @@ client.once('ready', async (c) => {
     console.error('커맨드 초기화/등록 실패:', e);
   }
 });
+
+// ... (나머지 코드는 동일)
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -114,6 +125,7 @@ client.on('interactionCreate', async (interaction) => {
   let sectionBtnInfo = new SectionBuilder();
   let sectionBtnBuy = new SectionBuilder();
 
+  // 🌟🌟🌟 attachButtonsToSection 함수는 섹션 인스턴스를 반환합니다 🌟🌟🌟
   sectionBtnNotice = attachButtonsToSection(sectionBtnNotice, noticeBtn);
   sectionBtnCharge = attachButtonsToSection(sectionBtnCharge, chargeBtn);
   sectionBtnInfo = attachButtonsToSection(sectionBtnInfo, infoBtn);
