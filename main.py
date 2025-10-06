@@ -18,7 +18,8 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// 슬래시 커맨드 초기화 → /로벅스패널만 등록
+// 길드용 슬래시 커맨드(즉시 반영). 네 서버 ID: 1419200424636055592
+const GUILD_ID = '1419200424636055592';
 const commands = [
   { name: '로벅스패널', description: '자동화 로벅스 패널을 표시합니다.' },
 ];
@@ -26,8 +27,9 @@ const commands = [
 client.once('ready', async (c) => {
   console.log(`${c.user.username} is online.`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-  await rest.put(Routes.applicationCommands(c.user.id), { body: commands });
-  console.log('슬래시 커맨드 등록 완료: /로벅스패널');
+  // 전역 대신 길드 등록 → 바로 테스트 가능
+  await rest.put(Routes.applicationGuildCommands(c.user.id, GUILD_ID), { body: commands });
+  console.log('길드 슬래시 커맨드 등록 완료: /로벅스패널');
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -42,7 +44,7 @@ client.on('interactionCreate', async (interaction) => {
   );
   const sectionTop = new SectionBuilder().addTextDisplayComponents(topText);
 
-  // 2) 긴 막대기(간격 좁게)
+  // 2) 상단 긴 막대기(좁게)
   const sepTop = new SeparatorBuilder().setSpacing('Small');
 
   // 3) 재고 섹션 + 핑크 비활성 버튼
@@ -73,10 +75,10 @@ client.on('interactionCreate', async (interaction) => {
     .addTextDisplayComponents(salesText)
     .setButtonAccessory(salesBtn);
 
-  // 5) 중간 긴 막대기
+  // 5) 중간 긴 막대기(좁게)
   const sepMid = new SeparatorBuilder().setSpacing('Small');
 
-  // 6) 하단 2x2 버튼(회색, 활성) — 섹션 4개로 분리(섹션당 버튼 1개)
+  // 6) 하단 2x2 버튼(회색, 활성) — 섹션 4개로 분리
   const noticeBtn = new ButtonBuilder()
     .setCustomId('notice')
     .setEmoji({ name: 'emoji_5', id: '1424003478275231916' })
@@ -106,7 +108,7 @@ client.on('interactionCreate', async (interaction) => {
   const sectionBtnInfo   = new SectionBuilder().setButtonAccessory(infoBtn);
   const sectionBtnBuy    = new SectionBuilder().setButtonAccessory(buyBtn);
 
-  // 7) 하단 긴 막대기
+  // 7) 하단 긴 막대기(좁게)
   const sepBottom = new SeparatorBuilder().setSpacing('Small');
 
   // 8) 푸터 섹션
@@ -136,7 +138,7 @@ client.on('interactionCreate', async (interaction) => {
   });
 });
 
-// 2x2 버튼 눌러도 화면 반응 배너 안 뜨게 묵음 처리
+// 하단 2x2는 누를 수 있지만, 화면 반응 배너는 안 뜨게 묵음 처리
 client.on('interactionCreate', async (i) => {
   if (!i.isButton()) return;
   try { await i.deferUpdate(); } catch (_) {}
