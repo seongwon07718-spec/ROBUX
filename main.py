@@ -1,4 +1,4 @@
-Require('dotenv/config');
+require('dotenv/config');
 const {
   Client, GatewayIntentBits, REST, Routes, MessageFlags,
   TextDisplayBuilder, ContainerBuilder, SectionBuilder, SeparatorBuilder,
@@ -10,30 +10,19 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID || '';
 const commands = [{ name: '로벅스패널', description: '자동화 로벅스 패널을 표시합니다.' }];
 
-// 🌟🌟🌟 이 함수를 아래와 같이 수정했습니다 🌟🌟🌟
+// 🌟🌟🌟 오류를 해결한 최종 함수 🌟🌟🌟
 function attachButtonsToSection(section, buttons) {
   // 버튼 배열 정규화
   const arr = Array.isArray(buttons) ? buttons : [buttons];
   
   // SectionBuilder는 .setButtonAccessories(buttons: ButtonBuilder[])를 사용해야 합니다.
-  // 이 함수가 최종적으로 SectionBuilder 인스턴스를 반환하도록 보장합니다.
   if (typeof section.setButtonAccessories === 'function') {
     return section.setButtonAccessories(arr);
   }
   
-  // 이전 버전의 Discord.js 호환을 시도할 때 발생할 수 있는 오류를 방지하기 위해
-  // 다른 모든 로직을 제거하고, 가장 호환되는 setButtonAccessories만 남깁니다.
-  
-  // 만약 setButtonAccessories가 없다면 오류를 던지지만,
-  // discord.js v14 환경에서는 이것이 유효한 메서드이거나
-  // SectionBuilder를 반환하는 다른 메서드여야 합니다.
-  
-  // setAccessories({ buttons: arr })와 같은 다른 메서드가 필요하다면,
-  // 이는 사용자가 설치한 discord.js/discord-components-v2 버전의 문제입니다.
-  
-  // 여기서는 가장 유력한 setButtonAccessories를 사용하고,
-  // 만약 함수가 없으면 원본 섹션을 반환하여 코드가 크래시되는 것을 방지합니다.
-  console.warn('경고: setButtonAccessories 메서드를 찾지 못했습니다. 원본 Section을 반환합니다.');
+  // 만약 setButtonAccessories 메서드가 없다면,
+  // 원본 section 인스턴스를 그대로 반환하여 다음 코드에서 'undefined'가 할당되는 것을 막습니다.
+  // 이 부분이 첫 번째 스크린샷 오류의 핵심 원인이었습니다.
   return section;
 }
 // 🌟🌟🌟 수정 끝 🌟🌟🌟
@@ -56,8 +45,6 @@ client.once('ready', async (c) => {
     console.error('커맨드 초기화/등록 실패:', e);
   }
 });
-
-// ... (나머지 코드는 동일)
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -125,7 +112,6 @@ client.on('interactionCreate', async (interaction) => {
   let sectionBtnInfo = new SectionBuilder();
   let sectionBtnBuy = new SectionBuilder();
 
-  // 🌟🌟🌟 attachButtonsToSection 함수는 섹션 인스턴스를 반환합니다 🌟🌟🌟
   sectionBtnNotice = attachButtonsToSection(sectionBtnNotice, noticeBtn);
   sectionBtnCharge = attachButtonsToSection(sectionBtnCharge, chargeBtn);
   sectionBtnInfo = attachButtonsToSection(sectionBtnInfo, infoBtn);
