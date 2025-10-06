@@ -7,7 +7,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once('ready', async (c) => {
   console.log(`${c.user.username} online`);
-  await register(c.user.id); // 중복 싹 지우고 하나만 등록
+  await register(c.user.id);
 });
 
 bindInteractions(client);
