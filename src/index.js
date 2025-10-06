@@ -178,7 +178,7 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isChatInputCommand() && interaction.commandName === '로벅스패널') {
     try {
       await interaction.reply({
-        flags: MessageFlags.IsComponentsV2,
+        // flags: MessageFlags.IsComponentsV2, // ← v2 플래그 제거(전송 실패 원인)
         components: [buildContainer()],
       });
     } catch (e) {
