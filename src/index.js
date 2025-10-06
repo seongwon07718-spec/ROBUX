@@ -18,21 +18,21 @@ const {
   SeparatorBuilder,
 } = require('@discordjs/builders');
 
-// env 헬퍼: PowerShell $env, .env 둘 다 지원
+// env 우선(.env 또는 PowerShell $env 둘 다 지원)
 function env(name, fallback = '') {
   const v = process.env[name];
   return v && v.trim().length > 0 ? v.trim() : fallback;
 }
-
 const TOKEN = env('DISCORD_TOKEN');
-const APP_ID_ENV = env('APP_ID'); // 없으면 런타임 봇 ID로 대체
+const APP_ID_ENV = env('APP_ID');        // 없으면 런타임 봇 ID 사용
+const USE_GUILD = env('GUILD_ID');       // 있으면 길드만 등록(즉시), 없으면 전역만 등록
 
 if (!TOKEN) {
-  console.error('DISCORD_TOKEN 비어있음. PowerShell: $env:DISCORD_TOKEN="토큰"; node index.js 혹은 .env에 넣어줘.');
+  console.error('DISCORD_TOKEN이 비어있음. $env:DISCORD_TOKEN="토큰"; node index.js 또는 .env에 설정해줘.');
   process.exit(1);
 }
 
-// 섹션에 버튼 붙이는 헬퍼(빌드별 메서드 자동 매칭 + 레이아웃 시도)
+// 섹션에 버튼 액세서리 붙이는 헬퍼(빌드별 API 자동 매칭 + 레이아웃 시도)
 function attachButtonsToSection(section, buttons) {
   const arr = Array.isArray(buttons) ? buttons : [buttons];
 
@@ -51,11 +51,12 @@ function attachButtonsToSection(section, buttons) {
   if (typeof section.setAccessories === 'function') {
     return section.setAccessories({ buttons: arr });
   }
-  throw new Error('섹션 버튼 액세서리 메서드 없음(@discordjs/builders 버전 확인 필요).');
+  throw new Error('섹션 버튼 액세서리 메서드를 찾지 못함(@discordjs/builders d.ts 확인 필요).');
 }
 
-// 컨테이너 조립
+// 컨테이너 조립(로벅스 패널)
 function buildContainer() {
+  // 상단 안내
   const topText = new TextDisplayBuilder().setContent(
     '자동화 로벅스\n' +
     '아래 버튼을 눌러 이용해주세요\n' +
@@ -65,26 +66,26 @@ function buildContainer() {
 
   const sepTop = new SeparatorBuilder().setSpacing('Small');
 
-  // 재고(핑크, 비활성)
+  // 재고 섹션 + 파랑(Primary) 비활성
   const stockText = new TextDisplayBuilder().setContent(
     '** <a:upuoipipi:1423892277373304862>로벅스 재고**\n60초마다 갱신됩니다'
   );
   const stockBtn = new ButtonBuilder()
     .setCustomId('stock_zero')
     .setLabel('0로벅스')
-    .setStyle(ButtonStyle.Danger)
+    .setStyle(ButtonStyle.Primary) // 파랑으로 변경
     .setDisabled(true);
   let sectionStock = new SectionBuilder().addTextDisplayComponents(stockText);
   sectionStock = attachButtonsToSection(sectionStock, stockBtn);
 
-  // 누적(핑크, 비활성)
+  // 누적 섹션 + 파랑(Primary) 비활성
   const salesText = new TextDisplayBuilder().setContent(
     '** <a:upuoipipi:1423892277373304862>누적 판매량**\n총 판매된 로벅스'
   );
   const salesBtn = new ButtonBuilder()
     .setCustomId('sales_zero')
     .setLabel('0로벅스')
-    .setStyle(ButtonStyle.Danger)
+    .setStyle(ButtonStyle.Primary) // 파랑으로 변경
     .setDisabled(true);
   let sectionSales = new SectionBuilder().addTextDisplayComponents(salesText);
   sectionSales = attachButtonsToSection(sectionSales, salesBtn);
@@ -124,7 +125,6 @@ function buildContainer() {
   sectionBtnBuy    = attachButtonsToSection(sectionBtnBuy, buyBtn);
 
   const sepBottom = new SeparatorBuilder().setSpacing('Small');
-
   const footerText = new TextDisplayBuilder().setContent('자동화 로벅스 / 2025 / GMT+09:00');
   const sectionFooter = new SectionBuilder().addTextDisplayComponents(footerText);
 
@@ -150,34 +150,43 @@ client.once('ready', async (c) => {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
   try {
-    // 전역 커맨드 “초기화 → 단일 등록”(중복 방지)
+    // 1) 전역/길드 모두 초기화(중복 완전 제거)
     await rest.put(Routes.applicationCommands(appId), { body: [] }).catch(() => {});
-    await rest.put(Routes.applicationCommands(appId), {
-      body: [{ name: '로벅스패널', description: '자동화 로벅스 패널을 표시합니다.' }],
-    });
-    console.log('전역 커맨드 등록 완료(반영 1~5분)');
+    if (USE_GUILD) {
+      await rest.put(Routes.applicationGuildCommands(appId, USE_GUILD), { body: [] }).catch(() => {});
+    }
+
+    // 2) 한 군데만 등록
+    if (USE_GUILD) {
+      await rest.put(Routes.applicationGuildCommands(appId, USE_GUILD), {
+        body: [{ name: '로벅스패널', description: '자동화 로벅스 패널을 표시합니다.' }],
+      });
+      console.log('길드 커맨드 등록 완료(즉시 반영): /로벅스패널');
+    } else {
+      await rest.put(Routes.applicationCommands(appId), {
+        body: [{ name: '로벅스패널', description: '자동화 로벅스 패널을 표시합니다.' }],
+      });
+      console.log('전역 커맨드 등록 완료(반영 1~5분): /로벅스패널');
+    }
   } catch (e) {
     console.error('커맨드 등록 실패:', e?.message || e);
   }
 });
 
 client.on('interactionCreate', async (interaction) => {
-  // 슬래시 명령
+  // 패널 명령
   if (interaction.isChatInputCommand() && interaction.commandName === '로벅스패널') {
     try {
-      const container = buildContainer();
       await interaction.reply({
         flags: MessageFlags.IsComponentsV2,
-        components: [container],
+        components: [buildContainer()],
       });
     } catch (e) {
-      // Received one or more errors 디버깅 보조
       console.error('패널 전송 실패:', e?.message || e);
     }
     return;
   }
-
-  // 버튼은 눌러도 화면 반응 배너 안 뜨게 묵음 처리
+  // 하단 2x2 버튼은 눌러도 반응 배너 안 뜨게
   if (interaction.isButton()) {
     try { await interaction.deferUpdate(); } catch (_) {}
   }
