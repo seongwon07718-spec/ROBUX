@@ -5,6 +5,8 @@ const {
   MessageFlags,
   TextDisplayBuilder,
   ContainerBuilder,
+  SeparatorBuilder,
+  SeparatorSpacingSize,
 } = require('discord.js');
 
 const client = new Client({
@@ -22,17 +24,26 @@ client.on('ready', (client) => {
 
 client.on('messageCreate', async (message) => {
   if (message.content === 'ping') {
-    const textComponent = new TextDisplayBuilder().setContent(
-      '**자동화 로벅스** — 아래 버튼을 눌러 이용해주세요\n자충 오류 문의는 [오류 문의하기](https://discord.com/channels/1419200424636055592/1423477824865439884)'
+    // 제목 텍스트
+    const title = new TextDisplayBuilder().setContent('자동화 로벅스');
+
+    // 긴 막대기(구분선)
+    const separator = new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Medium);
+
+    // 본문 텍스트
+    const body = new TextDisplayBuilder().setContent(
+      '아래 버튼을 눌러 이용해주세요\n자충 오류 문의는 [오류 문의하기](https://discord.com/channels/1419200424636055592/1423477824865439884)'
     );
 
-    const containerComponent = new ContainerBuilder().addTextDisplayComponents(
-      textComponent // 하나만 추가
-    );
+    // 컨테이너에 순서대로 추가: 제목 → 구분선 → 본문
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(title)
+      .addSeparatorComponents(separator)
+      .addTextDisplayComponents(body);
 
-    message.channel.send({
+    await message.channel.send({
       flags: MessageFlags.IsComponentsV2,
-      components: [containerComponent],
+      components: [container],
     });
   }
 });
