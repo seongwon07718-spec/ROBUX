@@ -67,9 +67,14 @@ client.on('interactionCreate', async (interaction) => {
       .setLabel('0로벅스')
       .setStyle(ButtonStyle.Danger) // 핑크 톤
       .setDisabled(true); // 못 누르게
-    const sectionStock = new SectionBuilder()
-      .addTextDisplayComponents(stockText)
-      .setButtonAccessory(stockBtn);
+
+    // 섹션에 버튼 달기: 단일/배열 메서드 둘 다 지원(환경에 맞는 쪽 자동 사용)
+    let sectionStock = new SectionBuilder().addTextDisplayComponents(stockText);
+    if (typeof sectionStock.setButtonAccessory === 'function') {
+      sectionStock = sectionStock.setButtonAccessory(stockBtn);
+    } else if (typeof sectionStock.setButtonAccessories === 'function') {
+      sectionStock = sectionStock.setButtonAccessories([stockBtn]);
+    }
 
     // 4) 누적 판매량 섹션 + 핑크 비활성 버튼
     const salesText = new TextDisplayBuilder().setContent(
@@ -81,9 +86,13 @@ client.on('interactionCreate', async (interaction) => {
       .setLabel('0로벅스')
       .setStyle(ButtonStyle.Danger)
       .setDisabled(true);
-    const sectionSales = new SectionBuilder()
-      .addTextDisplayComponents(salesText)
-      .setButtonAccessory(salesBtn);
+
+    let sectionSales = new SectionBuilder().addTextDisplayComponents(salesText);
+    if (typeof sectionSales.setButtonAccessory === 'function') {
+      sectionSales = sectionSales.setButtonAccessory(salesBtn);
+    } else if (typeof sectionSales.setButtonAccessories === 'function') {
+      sectionSales = sectionSales.setButtonAccessories([salesBtn]);
+    }
 
     // 5) 중간 긴 막대기
     const sepMid = new SeparatorBuilder().setSpacing('Small');
@@ -113,11 +122,23 @@ client.on('interactionCreate', async (interaction) => {
       .setLabel('구매')
       .setStyle(ButtonStyle.Secondary);
 
-    // 섹션 4개로 나눔(섹션 하나당 버튼 하나 → 검증 에러 방지)
-    const sectionBtnNotice = new SectionBuilder().setButtonAccessory(noticeBtn);
-    const sectionBtnCharge = new SectionBuilder().setButtonAccessory(chargeBtn);
-    const sectionBtnInfo   = new SectionBuilder().setButtonAccessory(infoBtn);
-    const sectionBtnBuy    = new SectionBuilder().setButtonAccessory(buyBtn);
+    // 하단 버튼도 섹션 하나당 버튼 하나(검증 에러 방지)
+    let sectionBtnNotice = new SectionBuilder();
+    let sectionBtnCharge = new SectionBuilder();
+    let sectionBtnInfo   = new SectionBuilder();
+    let sectionBtnBuy    = new SectionBuilder();
+
+    if (typeof sectionBtnNotice.setButtonAccessory === 'function') {
+      sectionBtnNotice = sectionBtnNotice.setButtonAccessory(noticeBtn);
+      sectionBtnCharge = sectionBtnCharge.setButtonAccessory(chargeBtn);
+      sectionBtnInfo   = sectionBtnInfo.setButtonAccessory(infoBtn);
+      sectionBtnBuy    = sectionBtnBuy.setButtonAccessory(buyBtn);
+    } else if (typeof sectionBtnNotice.setButtonAccessories === 'function') {
+      sectionBtnNotice = sectionBtnNotice.setButtonAccessories([noticeBtn]);
+      sectionBtnCharge = sectionBtnCharge.setButtonAccessories([chargeBtn]);
+      sectionBtnInfo   = sectionBtnInfo.setButtonAccessories([infoBtn]);
+      sectionBtnBuy    = sectionBtnBuy.setButtonAccessories([buyBtn]);
+    }
 
     // 7) 하단 긴 막대기
     const sepBottom = new SeparatorBuilder().setSpacing('Small');
@@ -128,14 +149,14 @@ client.on('interactionCreate', async (interaction) => {
     );
     const sectionFooter = new SectionBuilder().addTextDisplayComponents(footerText);
 
-    // 컨테이너 조립(섹션/구분선만 넣음)
+    // 컨테이너 조립(전부 컨테이너 안)
     const container = new ContainerBuilder()
       .addSectionComponents(sectionTop)
       .addSeparatorComponents(sepTop)
       .addSectionComponents(sectionStock)
       .addSectionComponents(sectionSales)
       .addSeparatorComponents(sepMid)
-      // 2x2: 위 두 개 → 아래 두 개 (렌더러가 세로로 쌓아주고, UI는 2x2처럼 보이도록 구성된 빌드 기준)
+      // 2x2: 위 두 개 → 아래 두 개 (렌더러가 행 배치)
       .addSectionComponents(sectionBtnNotice)
       .addSectionComponents(sectionBtnCharge)
       .addSectionComponents(sectionBtnInfo)
@@ -151,7 +172,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // 하단 2x2 버튼은 눌러도 화면 반응 배너 안 뜨게 묵음 처리
+  // 하단 2x2 버튼 눌러도 화면 반응 배너 안 뜨게 묵음 처리
   if (interaction.isButton()) {
     try {
       await interaction.deferUpdate();
