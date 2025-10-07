@@ -1,204 +1,115 @@
-'use strict';
-require('dotenv/config');
-
 const {
-  Client,
-  GatewayIntentBits,
-  REST,
-  Routes,
-  MessageFlags,
-  ButtonBuilder,
-  ButtonStyle,
-  ActionRowBuilder,
+    SlashCommandBuilder,
+    EmbedBuilder,
+    TextDisplayBuilder,
+    MessageFlags,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
+    SectionBuilder,
+    ThumbnailBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    MediaGalleryBuilder,
+    ContainerBuilder,
+    AttachmentBuilder,
+    FileBuilder
 } = require('discord.js');
+const path = require('path');
+const fs = require('fs');
 
-const {
-  ContainerBuilder,
-  SectionBuilder,
-  TextDisplayBuilder,
-  SeparatorBuilder,
-} = require('@discordjs/builders');
 
-// env 헬퍼(.env, PowerShell $env 모두 지원)
-function env(name, fallback = '') {
-  const v = process.env[name];
-  return v && v.trim().length > 0 ? v.trim() : fallback;
-}
-const TOKEN = env('DISCORD_TOKEN');
-const APP_ID_ENV = env('APP_ID');   // 없으면 런타임 봇 ID 사용
-const GUILD_ID = env('GUILD_ID');   // 있으면 길드 등록(즉시), 없으면 전역 등록(1~5분)
+module.exports = {
+    data: new SlashCommandBuilder()
+        .setName('new-update')
+        .setDescription('This is components version 2.'),
+    async execute(interaction, client) {
+        // Command execution logic goes here
 
-if (!TOKEN) {
-  console.error('DISCORD_TOKEN 없음. $env:DISCORD_TOKEN="토큰"; node index.js 또는 .env에 넣어줘.');
-  process.exit(1);
-}
+        const container = new ContainerBuilder();
 
-/* ========= 컨테이너(텍스트/막대기만) ========= */
-function buildMainContainer() {
-  const title = new TextDisplayBuilder().setContent('자동화 로벅스');
-  const sectionTitle = new SectionBuilder().addTextDisplayComponents(title);
+        const media = new MediaGalleryBuilder()
+            .addItems([
+                {
+                    media: {
+                        url: 'https://i.ibb.co/yFsBTGDL/docs-header.jpg'
+                    }
+                }
+            ])
+        
+        container.addMediaGalleryComponents(media);
 
-  const line1 = new TextDisplayBuilder().setContent('인게임 패스, 게임패스 지원');
-  const sep1 = new SeparatorBuilder().setSpacing('Small');
+        const textTop = new TextDisplayBuilder()
+            .setContent(`## Introducing New Components for Messages!\nWe're bringing new components to messages that you can use in your apps. They allow you to have full control over the layout of your messages.\n\nOur previous components system. while functional, had limitations:\n- Content, attachments, embed, buttons, and components had to follow fixed positioning rules\n- Visual styling options were limited\n\nOur new component system addresses these challenged with fully composible components that can be arragned and laid out in any order, allowing for a more flexible and visually appealing design. Check out the [changelog](https://i.ibb.co/yFsBTGDL/docs-header.jpg) for more details.`);
 
-  const line2 = new TextDisplayBuilder().setContent(
-    '아래 버튼을 눌려 이용해주세요!\n' +
-    '자충 오류시 [문의 바로가기](https://discord.com/channels/1419200424636055592/1423477824865439884)'
-  );
-  const sep2 = new SeparatorBuilder().setSpacing('Small');
+        container.addTextDisplayComponents(textTop);
 
-  const footer = new TextDisplayBuilder().setContent('자동화 로벅스 / 2025 / GMT+09:00');
+        const media2 = new MediaGalleryBuilder()
+            .addItems([
+                {
+                    media: {
+                        url: 'https://i.ibb.co/RTSs4JWp/components-hero.png'
+                    }
+                }
+            ])
 
-  // **수정: Components V2 컴포넌트는 .toJSON()으로 변환되어야 합니다.**
-  return new ContainerBuilder()
-    .addSectionComponents(sectionTitle)
-    .addTextDisplayComponents(line1)
-    .addSeparatorComponents(sep1)
-    .addTextDisplayComponents(line2)
-    .addSeparatorComponents(sep2)
-    .addTextDisplayComponents(footer).toJSON(); 
-}
+        container.addMediaGalleryComponents(media2);
 
-/* ========= 액션로우 버튼(컨테이너 아래) ========= */
-function buildMainRows() {
-  const btnNotice = new ButtonBuilder()
-    .setCustomId('notice')
-    .setLabel('공지사항')
-    .setEmoji({ name: 'emoji_5', id: '1424003478275231916' })
-    .setStyle(ButtonStyle.Secondary);
+        const text1 = new TextDisplayBuilder().setContent('A breif overview of components');
+        const button1 = new ButtonBuilder().setLabel('Overview').setURL('https://youtube.com').setStyle(ButtonStyle.Link);
 
-  const btnCharge = new ButtonBuilder()
-    .setCustomId('charge')
-    .setLabel('충전')
-    .setEmoji({ name: 'charge', id: '1424003480007475281' })
-    .setStyle(ButtonStyle.Secondary);
+        const section1 = new SectionBuilder()
+            .addTextDisplayComponents(text1)
+            .setButtonAccessory(button1);
 
-  const btnInfo = new ButtonBuilder()
-    .setCustomId('info')
-    .setLabel('내 정보')
-    .setEmoji({ name: 'info', id: '1424003482247237908' })
-    .setStyle(ButtonStyle.Secondary);
+        container.addSectionComponents(section1);
 
-  const btnBuy = new ButtonBuilder()
-    .setCustomId('buy')
-    .setLabel('구매')
-    .setEmoji({ name: 'category', id: '1424003481240469615' })
-    .setStyle(ButtonStyle.Secondary);
+        const text2 = new TextDisplayBuilder().setContent('A breif overview of components');
+        const button2 = new ButtonBuilder().setLabel('Overview').setURL('https://youtube.com').setStyle(ButtonStyle.Link);
 
-  return [new ActionRowBuilder().addComponents(btnNotice, btnCharge, btnInfo, btnBuy)];
-}
+        const section2 = new SectionBuilder()
+            .addTextDisplayComponents(text2)
+            .setButtonAccessory(button2);
 
-/* ========= “내 정보” 컨테이너(버튼 없음) ========= */
-function buildProfileContainer({ username, balance, total, orders }) {
-  const title = new TextDisplayBuilder().setContent(`**${username}님 정보**`);
-  const sectionTitle = new SectionBuilder().addTextDisplayComponents(title);
+        container.addSectionComponents(section2);
 
-  const sep = new SeparatorBuilder().setSpacing('Small');
+        const text3 = new TextDisplayBuilder().setContent('A breif overview of components');
+        const button3 = new ButtonBuilder().setLabel('Overview').setURL('https://youtube.com').setStyle(ButtonStyle.Link);
 
-  const line = new TextDisplayBuilder().setContent(
-    `**남은 금액** = __${balance}원__\n` +
-    `**누적 금액** = __${total}원__\n` +
-    `**구매 횟수** = __${orders}번__`
-  );
+        const section3 = new SectionBuilder()
+            .addTextDisplayComponents(text3)
+            .setButtonAccessory(button3);
 
-  // **수정: Components V2 컴포넌트는 .toJSON()으로 변환되어야 합니다.**
-  return new ContainerBuilder()
-    .addSectionComponents(sectionTitle)
-    .addSeparatorComponents(sep)
-    .addTextDisplayComponents(line).toJSON();
-}
+        container.addSectionComponents(section3);
 
-/* ========= DB 안전 헬퍼(더미) =========
-   실제 DB 붙일 때 이 함수만 교체하면 됨.
-*/
-async function getUserProfileSafe(userId) {
-  try {
-    // TODO: 실제 DB 조회
-    // 예) const row = await db.user.findById(userId);
-    const row = null; // 더미
 
-    if (!row) return { balance: 0, total: 0, orders: 0 };
+        const separator = new SeparatorBuilder();
 
-    return {
-      balance: Number(row.balance) || 0,
-      total: Number(row.total) || 0,
-      orders: Number(row.orders) || 0,
-    };
-  } catch (e) {
-    console.error('DB 조회 실패:', e?.message || e);
-    return { balance: 0, total: 0, orders: 0 };
-  }
-}
+        container.addSeparatorComponents(separator);
 
-/* ========= 클라이언트/등록/핸들러 ========= */
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+        const text4 = new TextDisplayBuilder().setContent(`-# This message was composed using components, check out the request:`)
 
-client.once('ready', async (c) => {
-  console.log(`${c.user.username} online`);
-  const appId = APP_ID_ENV || c.user.id;
-  const rest = new REST({ version: '10' }).setToken(TOKEN);
+        container.addTextDisplayComponents(text4);
 
-  try {
-    // 중복 제거: 전역/길드 모두 초기화
-    await rest.put(Routes.applicationCommands(appId), { body: [] }).catch(() => {});
-    if (GUILD_ID) {
-      await rest.put(Routes.applicationGuildCommands(appId, GUILD_ID), { body: [] }).catch(() => {});
+        const filePath = path.join(__dirname, '../../../message-data.json');
+        const fileContent = await fs.promises.readFile(filePath, 'utf8');
+
+        const attachment = new AttachmentBuilder(Buffer.from(fileContent), {
+            name: 'message.json'
+        })
+
+        const file = new FileBuilder().setURL('attachment://message.json');
+
+        container.addFileComponents(file);
+
+        interaction.reply({
+            flags: MessageFlags.IsComponentsV2,
+            components: [container],
+            files: [attachment]
+        })
+
+
+
+
+
     }
-
-    // 한 군데만 등록
-    const body = [{ name: '로벅스패널', description: '자동화 로벅스 패널을 표시합니다.' }];
-    if (GUILD_ID) {
-      await rest.put(Routes.applicationGuildCommands(appId, GUILD_ID), { body });
-      console.log('길드 커맨드 등록 완료(즉시): /로벅스패널');
-    } else {
-      await rest.put(Routes.applicationCommands(appId), { body });
-      console.log('전역 커맨드 등록 완료(반영 1~5분): /로벅스패널');
-    }
-  } catch (e) {
-    console.error('커맨드 등록 실패:', e?.message || e);
-  }
-});
-
-client.on('interactionCreate', async (interaction) => {
-  // 슬래시 커맨드 → 패널 출력
-  if (interaction.isChatInputCommand() && interaction.commandName === '로벅스패널') {
-    try {
-      // **수정: Container JSON과 ActionRowBuilder 배열을 합쳐서 전달**
-      await interaction.reply({
-        flags: MessageFlags.IsComponentsV2,
-        components: [
-          buildMainContainer(),   // 컨테이너 (JSON)
-          ...buildMainRows(),     // 액션 로우 (Builder)
-        ],
-      });
-    } catch (e) {
-      console.error('패널 전송 실패:', e?.message || e);
-    }
-    return;
-  }
-
-  // 버튼 묵음 처리
-  if (interaction.isButton()) {
-    try { await interaction.deferUpdate(); } catch (_) {}
-
-    if (interaction.customId === 'info') {
-      try {
-        const profile = await getUserProfileSafe(interaction.user.id);
-        const container = buildProfileContainer({
-          username: interaction.user.username,
-          balance: profile.balance,
-          total: profile.total,
-          orders: profile.orders,
-        });
-        await interaction.followUp({
-          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, // **수정: Ephemeral(임시) 플래그 추가**
-          components: [container], // 컨테이너 (JSON)
-        });
-      } catch (e) {
-        console.error('내 정보 전송 실패:', e?.message || e);
-      }
-    }
-  }
-});
-
-client.login(TOKEN);
+};
