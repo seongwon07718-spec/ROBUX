@@ -49,41 +49,40 @@ function buildMainContainer() {
 
   const footer = new TextDisplayBuilder().setContent('자동화 로벅스 / 2025 / GMT+09:00');
 
+  // **수정: Components V2 컴포넌트는 .toJSON()으로 변환되어야 합니다.**
   return new ContainerBuilder()
     .addSectionComponents(sectionTitle)
     .addTextDisplayComponents(line1)
     .addSeparatorComponents(sep1)
     .addTextDisplayComponents(line2)
     .addSeparatorComponents(sep2)
-    .addTextDisplayComponents(footer);
+    .addTextDisplayComponents(footer).toJSON(); 
 }
 
-/* ========= 액션로우 버튼(컨테이너 아래) =========
-   이모지는 네가 준 커스텀 이모지 그대로 유지
-*/
+/* ========= 액션로우 버튼(컨테이너 아래) ========= */
 function buildMainRows() {
   const btnNotice = new ButtonBuilder()
     .setCustomId('notice')
     .setLabel('공지사항')
-    .setEmoji({ name: 'emoji_5', id: '1424003478275231916' }) // <:emoji_5:1424003478275231916>
+    .setEmoji({ name: 'emoji_5', id: '1424003478275231916' })
     .setStyle(ButtonStyle.Secondary);
 
   const btnCharge = new ButtonBuilder()
     .setCustomId('charge')
     .setLabel('충전')
-    .setEmoji({ name: 'charge', id: '1424003480007475281' })  // <:charge:1424003480007475281>
+    .setEmoji({ name: 'charge', id: '1424003480007475281' })
     .setStyle(ButtonStyle.Secondary);
 
   const btnInfo = new ButtonBuilder()
     .setCustomId('info')
     .setLabel('내 정보')
-    .setEmoji({ name: 'info', id: '1424003482247237908' })    // <:info:1424003482247237908>
+    .setEmoji({ name: 'info', id: '1424003482247237908' })
     .setStyle(ButtonStyle.Secondary);
 
   const btnBuy = new ButtonBuilder()
     .setCustomId('buy')
     .setLabel('구매')
-    .setEmoji({ name: 'category', id: '1424003481240469615' }) // <:category:1424003481240469615>
+    .setEmoji({ name: 'category', id: '1424003481240469615' })
     .setStyle(ButtonStyle.Secondary);
 
   return [new ActionRowBuilder().addComponents(btnNotice, btnCharge, btnInfo, btnBuy)];
@@ -102,10 +101,11 @@ function buildProfileContainer({ username, balance, total, orders }) {
     `**구매 횟수** = __${orders}번__`
   );
 
+  // **수정: Components V2 컴포넌트는 .toJSON()으로 변환되어야 합니다.**
   return new ContainerBuilder()
     .addSectionComponents(sectionTitle)
     .addSeparatorComponents(sep)
-    .addTextDisplayComponents(line);
+    .addTextDisplayComponents(line).toJSON();
 }
 
 /* ========= DB 안전 헬퍼(더미) =========
@@ -163,11 +163,12 @@ client.on('interactionCreate', async (interaction) => {
   // 슬래시 커맨드 → 패널 출력
   if (interaction.isChatInputCommand() && interaction.commandName === '로벅스패널') {
     try {
+      // **수정: Container JSON과 ActionRowBuilder 배열을 합쳐서 전달**
       await interaction.reply({
         flags: MessageFlags.IsComponentsV2,
         components: [
-          buildMainContainer(),   // 컨테이너(텍스트/막대기)
-          ...buildMainRows(),     // 컨테이너 아래 버튼(이모지 포함)
+          buildMainContainer(),   // 컨테이너 (JSON)
+          ...buildMainRows(),     // 액션 로우 (Builder)
         ],
       });
     } catch (e) {
@@ -190,8 +191,8 @@ client.on('interactionCreate', async (interaction) => {
           orders: profile.orders,
         });
         await interaction.followUp({
-          flags: MessageFlags.IsComponentsV2,
-          components: [container],
+          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, // **수정: Ephemeral(임시) 플래그 추가**
+          components: [container], // 컨테이너 (JSON)
         });
       } catch (e) {
         console.error('내 정보 전송 실패:', e?.message || e);
