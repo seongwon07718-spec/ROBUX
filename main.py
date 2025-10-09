@@ -27,6 +27,15 @@ cur.execute('''
     )
 ''')
 
+cur.execute('''
+            CREATE TABLE IF NOT EXISTS payment_methods (
+            user_id TEXT PRIMARY KRY,
+            account_transfer TEXT CHECK(account_transfer IN ('자원', '미지원')),
+            coin_payment TEXT CHECK(coin_payment IN ('자원', '미지원')),
+            mun_sang_payment TEXT CHECK(mun_sang_payment IN ('자원', '미지원'))
+            )
+            ''')
+
 conn.commit()
 
 def add_or_update_user(user_id, balance, total_amount, transaction_count):
@@ -60,6 +69,24 @@ def get_user_info(user_id):
     if result:
         return result
     return None
+
+def set_payment_methods(user_id, account_transfer, coin_payment, mun_sang):
+    cur.execute('''
+        INSERT INTO payment_methods (user_id, account_transfer, coin_payment, mun_sang_payment)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+        account_transfer=excluded.account_transfer,
+        coin_payment=excluded.coin_payment,
+        mun_sang_payment=excluded.mun_sang_payment
+    ''', (user_id, account_transfer, coin_payment, mun_sang))
+    conn.commit()
+
+def get_payment_methods(user_id):
+    cur.execute('SELECT account_transfer, coin_payment, mun_sang_payment FROM payment_methods WHERE user_id = ?', (user_id,))
+    result = cur.fetchone()
+    if result:
+        return result
+    return ('미지원', '미지원', '미지원')
 
 async def check_vending_access(user_id):
     banned = get_user_ban(user_id)
@@ -124,6 +151,19 @@ class NoticeView(ui.LayoutView):
         container.add_item(ui.TextDisplay("__3자 입금__할 시 법적 조치합니다\n충전 신청하고 잠수시 __자판기 이용금지__\n__오류__나 __버그__문의는 티켓 열어주세요"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
+        self.add_item(container)
+
+class PaymentMethodView(ui.LayoutView):
+    def __init__(self, account_transfer, coin_payment, mun_sang):
+        super().__init__(timeout=None)
+        container = ui.Container()
+        container.add_item(ui.TextDisplay("**결제 수단 설정**"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(f"**계좌이체** = __{account_transfer}__"))
+        container.add_item(ui.TextDisplay(f"**코인결제** = __{coin_payment}__"))
+        container.add_item(ui.TextDisplay(f"**문상결제** = __{mun_sang}__"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
         self.add_item(container)
 
 # 버튼 오류 방지를 위한 뷰 저장소
@@ -244,6 +284,36 @@ async def vending_machine_ban(interaction: discord.Interaction, target_user: dis
         view = UnbanSetView(target_user.name)
         await interaction.response.send_message(view=view, ephemeral=True)
 
+@bot.tree.command(name="결제수단_설정", description="결제 수단 설정")
+@discord.app_commands.describe(
+    account_transfer="계좌이체 설정",
+    coin_payment="코인결제 설정",
+    mun_sang="문상결제 설정"
+)
+@discord.app_commands.choices(
+
+    account_transfer=[
+        discord.app_commands.Choice(name='지원', value='지원'),
+        discord.app_commands.Choice(name='미지원', value='미지원')
+    ],
+    coin_payment=[
+        discord.app_commands.Choice(name='지원', value='지원'),
+        discord.app_commands.Choice(name='미지원', value='미지원')
+    ],
+    mun_sang=[
+        discord.app_commands.Choice(name='지원', value='지원'),
+        discord.app_commands.Choice(name='미지원', value='미지원')
+    ]
+)
+async def payment_method_set(
+    interaction: discord.Interaction, account_transfer: discord.app_commands.Choice[str],
+    coin_payment: discord.app_commands.Choice[str], mun_sang: discord.app_commands.Choice[str]
+):
+    user_id = str(interaction.user.id)
+    set_payment_methods(user_id, account_transfer.value, coin_payment.value, mun_sang.value)
+    view = PaymentMethodView(account_transfer.value, coin_payment.value, mun_sang.value)
+    await interaction.response.send_message(view=view, ephemeral=True)
+
 @bot.event
 async def on_ready():
     print(f"로벅스 자판기 봇이 {bot.user}로 로그인했습니다.")
@@ -253,4 +323,4 @@ async def on_ready():
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
-bot.run("토큰을_여기에_입력하세요")
+bot.run("")
