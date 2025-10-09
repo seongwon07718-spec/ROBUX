@@ -150,21 +150,26 @@ class ChargeView(ui.LayoutView):
         container.add_item(ui.TextDisplay("아래 원하시는 결제수단을 클릭해주세요"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
+        # 커스텀 이모지
+        custom_emoji7 = PartialEmoji(name="TOSS", id=1423544803559342154)
+        custom_emoji8 = PartialEmoji(name="bitcoin", id=1423544805975265374)
+        custom_emoji9 = PartialEmoji(name="1200x630wa", id=1423544804721164370)
+
         buttons = []
         if account_transfer == "지원":
-            buttons.append(ui.Button(label="계좌이체", custom_id="pay_account"))
+            buttons.append(ui.Button(label="계좌이체", custom_id="pay_account", emoji=custom_emoji7, style=discord.ButtonStyle.primary))
         else:
-            buttons.append(ui.Button(label="계좌이체 (미지원)", disabled=True))
+            buttons.append(ui.Button(label="계좌이체", disabled=True, emoji=custom_emoji7, style=discord.ButtonStyle.primary))
 
         if coin_payment == "지원":
-            buttons.append(ui.Button(label="코인결제", custom_id="pay_coin"))
+            buttons.append(ui.Button(label="코인결제", custom_id="pay_coin", emoji=custom_emoji8, style=discord.ButtonStyle.danger))
         else:
-            buttons.append(ui.Button(label="코인결제 (미지원)", disabled=True))
+            buttons.append(ui.Button(label="코인결제", disabled=True, emoji=custom_emoji8, style=discord.ButtonStyle.danger))
 
         if mun_sang == "지원":
-            buttons.append(ui.Button(label="문상결제", custom_id="pay_munsang"))
+            buttons.append(ui.Button(label="문상결제", custom_id="pay_munsang", emoji=custom_emoji9, style=discord.ButtonStyle.success))
         else:
-            buttons.append(ui.Button(label="문상결제 (미지원)", disabled=True))
+            buttons.append(ui.Button(label="문상결제", disabled=True, emoji=custom_emoji9, style=discord.ButtonStyle.success))
 
         action_row = ui.ActionRow(*buttons)
         container.add_item(action_row)
@@ -371,4 +376,4 @@ async def on_ready():
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
-bot.run("토큰을_여기에_입력하세요")
+bot.run("")
