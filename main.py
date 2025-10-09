@@ -141,6 +141,47 @@ class PaymentMethodView(ui.LayoutView):
         container.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
         self.add_item(container)
 
+class ChargeView(ui.LayoutView):
+    def __init__(self, account_transfer, coin_payment, mun_sang):
+        super().__init__(timeout=None)
+        container = ui.Container()
+        container.add_item(ui.TextDisplay("**결제수단 선택**"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("아래 원하시는 결제수단을 클릭해주세요"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        buttons = []
+        if account_transfer == "지원":
+            buttons.append(ui.Button(label="계좌이체", custom_id="pay_account"))
+        else:
+            buttons.append(ui.Button(label="계좌이체 (미지원)", disabled=True))
+
+        if coin_payment == "지원":
+            buttons.append(ui.Button(label="코인결제", custom_id="pay_coin"))
+        else:
+            buttons.append(ui.Button(label="코인결제 (미지원)", disabled=True))
+
+        if mun_sang == "지원":
+            buttons.append(ui.Button(label="문상결제", custom_id="pay_munsang"))
+        else:
+            buttons.append(ui.Button(label="문상결제 (미지원)", disabled=True))
+
+        action_row = ui.ActionRow(*buttons)
+        container.add_item(action_row)
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        supported = []
+        if account_transfer == "지원":
+            supported.append("계좌이체")
+        if coin_payment == "지원":
+            supported.append("코인결제")
+        if mun_sang == "지원":
+            supported.append("문상결제")
+
+        supported_text = ", ".join(supported) if supported else "없음"
+        container.add_item(ui.TextDisplay(f"결제가능한 서비스 = {supported_text}"))
+        self.add_item(container)
+
 class UserInfoView(ui.LayoutView):
     def __init__(self, user_name, balance, total_amount, transaction_count):
         super().__init__(timeout=None)
@@ -165,6 +206,8 @@ class NoticeView(ui.LayoutView):
         container.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
         self.add_item(container)
 
+# 버튼 상호작용 오류 방지를 위한 뷰 저장소
+# 이 딕셔너리에 View 객체를 참조하면 Python의 GC에 의해 제거되지 않아 오래된 메시지의 버튼도 작동 가능
 active_views = {}
 
 class MyLayout(ui.LayoutView):
@@ -224,8 +267,11 @@ class MyLayout(ui.LayoutView):
             view = VendingBanView()
             await interaction.response.send_message(view=view, ephemeral=True)
             return
-
-        await interaction.response.send_message("설정중...", ephemeral=True)
+        
+        # 유저 결제수단 데이터 불러오기
+        account, coin, mun_sang = get_payment_methods(user_id)
+        view = ChargeView(account, coin, mun_sang)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     async def button_3_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
@@ -257,7 +303,8 @@ class MyLayout(ui.LayoutView):
 @bot.tree.command(name="버튼패널", description="로벅스 버튼 패널 표시하기")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
-    active_views[interaction.message.id if interaction.message else "no_msg_id"] = layout
+    # 뷰 보존을 위해 저장 (메시지 ID가 없는 경우를 대비하여 None 대신 "no_msg_id" 사용)
+    active_views[str(interaction.message.id) if interaction.message else "no_msg_id"] = layout
     await interaction.response.send_message(view=layout)
 
 @bot.tree.command(name="자판기_이용_설정", description="자판기 밴 설정 포함 대상 유저 옵션")
@@ -282,12 +329,11 @@ async def vending_machine_ban(interaction: discord.Interaction, target_user: dis
 
 @bot.tree.command(name="결제수단_설정", description="결제 수단 설정")
 @discord.app_commands.describe(
-    account_transfer="계좌이체 설정",
-    coin_payment="코인결제 설정",
-    mun_sang="문상결제 설정"
+    account_transfer="계좌이체 지원 여부",
+    coin_payment="코인결제 지원 여부",
+    mun_sang="문상결제 지원 여부"
 )
 @discord.app_commands.choices(
-
     account_transfer=[
         discord.app_commands.Choice(name='지원', value='지원'),
         discord.app_commands.Choice(name='미지원', value='미지원')
@@ -302,8 +348,10 @@ async def vending_machine_ban(interaction: discord.Interaction, target_user: dis
     ]
 )
 async def payment_method_set(
-    interaction: discord.Interaction, account_transfer: discord.app_commands.Choice[str],
-    coin_payment: discord.app_commands.Choice[str], mun_sang: discord.app_commands.Choice[str]
+    interaction: discord.Interaction,
+    account_transfer: discord.app_commands.Choice[str],
+    coin_payment: discord.app_commands.Choice[str],
+    mun_sang: discord.app_commands.Choice[str]
 ):
     user_id = str(interaction.user.id)
     set_payment_methods(user_id, account_transfer.value, coin_payment.value, mun_sang.value)
@@ -314,6 +362,10 @@ async def payment_method_set(
 async def on_ready():
     print(f"로벅스 자판기 봇이 {bot.user}로 로그인했습니다.")
     try:
+        # 봇이 켜질 때 이전에 남아있던 뷰들 다시 등록 시도 (Persistency)
+        for view_key, view_obj in active_views.items():
+            if view_key != "no_msg_id": # 메시지 ID가 실제 있는 경우만
+                bot.add_view(view_obj)
         synced = await bot.tree.sync()
         print(f'{len(synced)}개의 명령어가 동기화되었습니다.')
     except Exception as e:
