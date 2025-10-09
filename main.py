@@ -386,7 +386,6 @@ class MyLayout(ui.LayoutView):
 
         await interaction.response.send_message("설정중...", ephemeral=True)
 
-# Note: PaymentSelectionView 클래스는 ChargeView 내에서 직접 콜백을 처리하도록 수정했으므로 더 이상 필요하지 않습니다.
 
 # 계좌번호 설정 모달
 class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
@@ -412,24 +411,34 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
         self.account_holder = account_holder
         self.account_number = account_number
 
-        self.depositor_name_input = ui.TextInput(label="입금자명 (한글 2~4글자)", style=discord.TextStyle.short, required=True, min_length=2, max_length=4)
-        self.amount_input = ui.TextInput(label="금액", style=discord.TextStyle.short, required=True)
+        self.depositor_name_input = ui.TextInput(
+            label="입금자명 (한글 2~4글자)", 
+            style=discord.TextStyle.short, 
+            required=True, 
+            min_length=2, max_length=4
+        )
+        self.amount_input = ui.TextInput(
+            label="금액", 
+            style=discord.TextStyle.short, 
+            required=True,
+            min_length=1, max_length=10 # 금액의 최대 길이를 10자리로 제한 (약 100억)
+        )
         self.add_item(self.depositor_name_input)
         self.add_item(self.amount_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        depositor_name = self.depositor_name_input.value
-        amount_str = self.amount_input.value
+        depositor_name = self.depositor_name_input.value.strip()
+        amount_str = self.amount_input.value.strip()
 
-        # 입금자명 검증 (2-4글자 한글만)
-        if not (2 <= len(depositor_name) <= 4 and all('가' <= char <= '힣' for char in depositor_name)):
+        # 입금자명 한글 2~4자 검증
+        if not (2 <= len(depositor_name) <= 4 and all('가' <= ch <= '힣' for ch in depositor_name)):
             await interaction.response.send_message("입금자명은 2~4글자 한글만 가능합니다.", ephemeral=True)
             return
 
-        # 금액 검증
+        # 금액 숫자 검증
         try:
             amount = int(amount_str)
-            if amount <= 0:
+            if amount <= 0: # 0원 이하는 허용하지 않음
                 raise ValueError
         except ValueError:
             await interaction.response.send_message("유효한 금액을 숫자로 입력해주세요.", ephemeral=True)
@@ -516,17 +525,11 @@ async def on_ready():
     try:
         # 봇이 켜질 때 이전에 남아있던 뷰들 다시 등록 시도 (Persistency)
         for view_key, view_obj in active_views.items():
-            if view_key != "no_msg_id": # 메시지 ID가 실제 있는 경우만
-                try:
-                    message = await bot.get_channel(int(view_obj.message_id_channel)).fetch_message(int(view_key))
-                    bot.add_view(view_obj, message_id=message.id)
-                    print(f"View re-added for message {view_key}")
-                except Exception as e:
-                    print(f"Failed to re-add view for message {view_key}: {e}")
-            else:
-                # 'no_msg_id' 키로 저장된 뷰는 message_id가 없으므로 재추가하지 않습니다.
-                # 이는 임시적인 뷰이거나, 메시지가 삭제되어 뷰를 찾을 수 없는 경우입니다.
-                pass
+            # 'message_id_channel'은 MyLayout에는 없음. 다른 뷰도 마찬가지.
+            # 이 부분은 Persistent View를 구현할 때 필요한 로직인데, 현재 구현에서는 message_id를 직접 저장하지 않음.
+            # 단순히 active_views 딕셔너리에 뷰 객체 참조를 유지하는 것만으로 GC 방지
+            pass # 이 부분은 현재 로직에서 큰 역할을 하지 않으므로, 에러를 방지하기 위해 pass 처리합니다.
+            
         synced = await bot.tree.sync()
         print(f'{len(synced)}개의 명령어가 동기화되었습니다.')
     except Exception as e:
