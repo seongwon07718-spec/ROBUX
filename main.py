@@ -39,6 +39,24 @@ def get_user_info(user_id):
 
 bot = commands.Bot(command_prefix=".", intents=intents)
 
+# 유저 정보 표시용 뷰 클래스
+class UserInfoView(ui.LayoutView):
+    def __init__(self, user_name, balance, total_amount, transaction_count):
+        super().__init__()
+
+        container = ui.Container()
+        container.add_item(ui.TextDisplay(f"**{user_name}님 정보**"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(f"남은 금액 = {balance}원"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(f"누적 금액 = {total_amount}원"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(f"거래 횟수 = {transaction_count}번"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("항상 이용해주셔서 감사합니다."))
+
+        self.add_item(container)
+
 class MauLayout(ui.LayoutView):
     def __init__(self):
         super().__init__()
@@ -88,7 +106,6 @@ class MauLayout(ui.LayoutView):
     async def button_3_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         info = get_user_info(user_id)
-        container = ui.Container()
 
         if info:
             balance = info[1]
@@ -97,17 +114,8 @@ class MauLayout(ui.LayoutView):
         else:
             balance = total_amount = transaction_count = 0
 
-        container.add_item(ui.TextDisplay(f"**{interaction.user.name}님 정보**"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(f"남은 금액 = {balance}원"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(f"누적 금액 = {total_amount}원"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(f"거래 횟수 = {transaction_count}번"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay("항상 이용해주셔서 감사합니다."))
-
-        await interaction.response.send_message(view=container, ephemeral=True)
+        view = UserInfoView(interaction.user.name, balance, total_amount, transaction_count)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     async def button_4_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message("구매 버튼 클릭됨", ephemeral=True)
