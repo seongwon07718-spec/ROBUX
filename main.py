@@ -215,24 +215,27 @@ class ChargeView(ui.LayoutView):
         custom_emoji8 = PartialEmoji(name="bitcoin", id=1423544805975265374) # 비트코인 이모지
         custom_emoji9 = PartialEmoji(name="1200x630wa", id=1423544804721164370) # 문화상품권 이모지
 
-        buttons_row1 = []
+        # 버튼 생성 및 콜백 연결
+        account_button = None
         if account_transfer == "지원":
-            buttons_row1.append(ui.Button(label="계좌이체", custom_id="pay_account", emoji=custom_emoji7, style=discord.ButtonStyle.primary))
+            account_button = ui.Button(label="계좌이체", custom_id="pay_account", emoji=custom_emoji7, style=discord.ButtonStyle.primary)
+            account_button.callback = self.account_button_callback  # 여기에 콜백 연결
         else:
-            buttons_row1.append(ui.Button(label="계좌이체", disabled=True, emoji=custom_emoji7, style=discord.ButtonStyle.secondary)) # 미지원 버튼은 secondary style로
+            account_button = ui.Button(label="계좌이체", disabled=True, emoji=custom_emoji7, style=discord.ButtonStyle.secondary)
 
+        coin_button = None
         if coin_payment == "지원":
-            buttons_row1.append(ui.Button(label="코인결제", custom_id="pay_coin", emoji=custom_emoji8, style=discord.ButtonStyle.primary))
+            coin_button = ui.Button(label="코인결제", custom_id="pay_coin", emoji=custom_emoji8, style=discord.ButtonStyle.primary)
         else:
-            buttons_row1.append(ui.Button(label="코인결제", disabled=True, emoji=custom_emoji8, style=discord.ButtonStyle.secondary))
+            coin_button = ui.Button(label="코인결제", disabled=True, emoji=custom_emoji8, style=discord.ButtonStyle.secondary)
 
+        mun_sang_button = None
         if mun_sang == "지원":
-            buttons_row1.append(ui.Button(label="문상결제", custom_id="pay_munsang", emoji=custom_emoji9, style=discord.ButtonStyle.primary))
+            mun_sang_button = ui.Button(label="문상결제", custom_id="pay_munsang", emoji=custom_emoji9, style=discord.ButtonStyle.primary)
         else:
-            buttons_row1.append(ui.Button(label="문상결제", disabled=True, emoji=custom_emoji9, style=discord.ButtonStyle.secondary))
+            mun_sang_button = ui.Button(label="문상결제", disabled=True, emoji=custom_emoji9, style=discord.ButtonStyle.secondary)
 
-        # 한 액션로우에 5개 버튼 제한, 3개는 문제없음
-        action_row = ui.ActionRow(*buttons_row1)
+        action_row = ui.ActionRow(account_button, coin_button, mun_sang_button)
         container.add_item(action_row)
         
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
@@ -248,6 +251,22 @@ class ChargeView(ui.LayoutView):
         supported_text = ", ".join(supported) if supported else "없음"
         container.add_item(ui.TextDisplay(f"결제가능한 서비스 = {supported_text}"))
         self.add_item(container)
+    
+    # 계좌이체 버튼 콜백 함수 추가
+    async def account_button_callback(self, interaction: discord.Interaction):
+        try:
+            user_id = str(interaction.user.id)
+            bank_name, account_holder, account_number = get_bank_account(user_id)
+
+            if not bank_name:
+                await interaction.response.send_message("먼저 `/계좌번호_설정` 명령어로 계좌 정보를 설정해주세요.", ephemeral=True)
+                return
+
+            modal = AccountTransferModal(bank_name, account_holder, account_number)
+            await interaction.response.send_modal(modal)
+        except Exception as e:
+            print(f"계좌이체 버튼 오류: {e}")
+            await interaction.response.send_message("오류가 발생했습니다. 다시 시도해주세요.", ephemeral=True)
 
 
 class UserInfoView(ui.LayoutView):
@@ -367,36 +386,7 @@ class MyLayout(ui.LayoutView):
 
         await interaction.response.send_message("설정중...", ephemeral=True)
 
-# 결제 수단 버튼 클릭 콜백 클래스 (ChargeView 내부의 버튼에 연결)
-class PaymentSelectionView(ui.LayoutView):
-    def __init__(self, charge_view):
-        super().__init__(timeout=None)
-        self.charge_view = charge_view # ChargeView 객체를 참조
-        # ChargeView에서 생성된 버튼들을 가져와서 현재 뷰에 연결
-        for row in charge_view.children:
-            if isinstance(row, ui.ActionRow):
-                for item in row.children:
-                    if isinstance(item, ui.Button):
-                        # custom_id를 기반으로 동적으로 콜백 연결
-                        if item.custom_id == "pay_account":
-                            item.callback = self.pay_account_callback
-                        # 여기에 다른 결제 수단 버튼들의 콜백을 추가할 수 있습니다.
-                        # 예: elif item.custom_id == "pay_coin": item.callback = self.pay_coin_callback
-                        # ...
-                        self.add_item(item)
-            elif not isinstance(row, ui.Separator) and not isinstance(row, ui.TextDisplay):
-                 self.add_item(row) # 기타 레이아웃 요소도 추가
-
-    async def pay_account_callback(self, interaction: discord.Interaction):
-        user_id = str(interaction.user.id)
-        bank_name, account_holder, account_number = get_bank_account(user_id)
-
-        if not bank_name:
-            await interaction.response.send_message("먼저 `/계좌번호_설정` 명령어로 계좌 정보를 설정해주세요.", ephemeral=True)
-            return
-
-        modal = AccountTransferModal(bank_name, account_holder, account_number)
-        await interaction.response.send_modal(modal)
+# Note: PaymentSelectionView 클래스는 ChargeView 내에서 직접 콜백을 처리하도록 수정했으므로 더 이상 필요하지 않습니다.
 
 # 계좌번호 설정 모달
 class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
