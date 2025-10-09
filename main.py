@@ -76,7 +76,7 @@ class VendingBanView(ui.LayoutView):
         container.add_item(ui.TextDisplay("현재 고객님은 자판기 이용이 __불가능__합니다"))
         container.add_item(ui.TextDisplay("자세한 이유를 알고 싶다면 __문의하기__ 해주세요"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay("현재 자판기 이용이 제한되어 있습니다"))
+        container.add_item(ui.TextDisplay("자판기 이용이 제한되어 있습니다"))
         self.add_item(container)
 
 # 내 정보 버튼 뷰, 공지사항 뷰 등 기존과 동일
@@ -199,7 +199,11 @@ async def button_panel(interaction: discord.Interaction):
     await interaction.response.send_message(view=layout)
 
 @bot.tree.command(name="자판기_이용_설정", description="자판기 밴 설정")
-@discord.app_commands.describe(ban_status="밴 여부 확인")
+@discord.app_commands.describe(
+    target_user="대상 유저",
+    ban_status="밴 여부 확인"
+)
+
 @discord.app_commands.choices(ban_status=[
     discord.app_commands.Choice(name='허용', value='x'),
     discord.app_commands.Choice(name='차단', value='o')
@@ -209,9 +213,9 @@ async def vending_machine_ban(interaction: discord.Interaction, ban_status: disc
     set_user_ban(user_id, ban_status.value)
 
     if ban_status.value == 'o':
-        await interaction.response.send_message(f"{interaction.user.name}님, 자판기 이용이 제한됩니다. (밴 상태: o)", ephemeral=True)
+        await interaction.response.send_message(f"{interaction.user.name}님, 자판기 이용이 제한됩니다.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"{interaction.user.name}님, 자판기 이용이 허용됩니다. (밴 상태: x)", ephemeral=True)
+        await interaction.response.send_message(f"{interaction.user.name}님, 자판기 이용이 허용됩니다.", ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -222,4 +226,4 @@ async def on_ready():
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
-bot.run("토큰을_여기에_입력하세요")
+bot.run("")
