@@ -28,13 +28,13 @@ cur.execute('''
 ''')
 
 cur.execute('''
-            CREATE TABLE IF NOT EXISTS payment_methods (
-            user_id TEXT PRIMARY KRY,
-            account_transfer TEXT CHECK(account_transfer IN ('자원', '미지원')),
-            coin_payment TEXT CHECK(coin_payment IN ('자원', '미지원')),
-            mun_sang_payment TEXT CHECK(mun_sang_payment IN ('자원', '미지원'))
-            )
-            ''')
+    CREATE TABLE IF NOT EXISTS payment_methods (
+        user_id TEXT PRIMARY KEY,
+        account_transfer TEXT CHECK(account_transfer IN ('지원', '미지원')),
+        coin_payment TEXT CHECK(coin_payment IN ('지원', '미지원')),
+        mun_sang_payment TEXT CHECK(mun_sang_payment IN ('지원', '미지원'))
+    )
+''')
 
 conn.commit()
 
@@ -60,7 +60,7 @@ def get_user_ban(user_id):
     cur.execute('SELECT banned FROM user_bans WHERE user_id = ?', (user_id,))
     result = cur.fetchone()
     if result:
-        return result[0]  # 'o' or 'x'
+        return result[0]
     return 'x'
 
 def get_user_info(user_id):
@@ -92,7 +92,6 @@ async def check_vending_access(user_id):
     banned = get_user_ban(user_id)
     return banned != 'o'
 
-# 밴 안내 컨테이너 뷰
 class VendingBanView(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -129,6 +128,19 @@ class UnbanSetView(ui.LayoutView):
         container.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
         self.add_item(container)
 
+class PaymentMethodView(ui.LayoutView):
+    def __init__(self, account_transfer, coin_payment, mun_sang):
+        super().__init__(timeout=None)
+        container = ui.Container()
+        container.add_item(ui.TextDisplay("**결제 수단 설정**"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(f"**계좌이체** = __{account_transfer}__"))
+        container.add_item(ui.TextDisplay(f"**코인결제** = __{coin_payment}__"))
+        container.add_item(ui.TextDisplay(f"**문상결제** = __{mun_sang}__"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
+        self.add_item(container)
+
 class UserInfoView(ui.LayoutView):
     def __init__(self, user_name, balance, total_amount, transaction_count):
         super().__init__(timeout=None)
@@ -153,20 +165,6 @@ class NoticeView(ui.LayoutView):
         container.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
         self.add_item(container)
 
-class PaymentMethodView(ui.LayoutView):
-    def __init__(self, account_transfer, coin_payment, mun_sang):
-        super().__init__(timeout=None)
-        container = ui.Container()
-        container.add_item(ui.TextDisplay("**결제 수단 설정**"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(f"**계좌이체** = __{account_transfer}__"))
-        container.add_item(ui.TextDisplay(f"**코인결제** = __{coin_payment}__"))
-        container.add_item(ui.TextDisplay(f"**문상결제** = __{mun_sang}__"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
-        self.add_item(container)
-
-# 버튼 오류 방지를 위한 뷰 저장소
 active_views = {}
 
 class MyLayout(ui.LayoutView):
@@ -205,7 +203,6 @@ class MyLayout(ui.LayoutView):
 
         self.add_item(container)
 
-        # 각 버튼 콜백에 밴 체크 후 밴 시 제한 메시지 띄우기
         button_1.callback = self.button_1_callback
         button_2.callback = self.button_2_callback
         button_3.callback = self.button_3_callback
@@ -216,7 +213,7 @@ class MyLayout(ui.LayoutView):
         if not await check_vending_access(user_id):
             view = VendingBanView()
             await interaction.response.send_message(view=view, ephemeral=True)
-            return 
+            return
 
         view = NoticeView()
         await interaction.response.send_message(view=view, ephemeral=True)
@@ -260,7 +257,6 @@ class MyLayout(ui.LayoutView):
 @bot.tree.command(name="버튼패널", description="로벅스 버튼 패널 표시하기")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
-    # 뷰 보존을 위해 저장
     active_views[interaction.message.id if interaction.message else "no_msg_id"] = layout
     await interaction.response.send_message(view=layout)
 
@@ -323,4 +319,4 @@ async def on_ready():
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
-bot.run("")
+bot.run("토큰을_여기에_입력하세요")
