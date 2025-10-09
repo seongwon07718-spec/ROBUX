@@ -17,8 +17,16 @@ cur.execute('''
         balance INTEGER,
         total_amount INTEGER,
         transaction_count INTEGER
-    )
-''')
+            )
+        ''')
+
+cur.execute('''
+        CREATE TABLE IF NOT EXISTS user_bans (
+            user_id TEXT PRIMARY KEY,
+            banned TEXT CHECK(banned IN ('o', 'x'))
+            )
+        ''')
+
 conn.commit()
 
 def add_or_update_user(user_id, balance, total_amount, transaction_count):
@@ -31,6 +39,19 @@ def add_or_update_user(user_id, balance, total_amount, transaction_count):
         transaction_count=excluded.transaction_count
     ''', (user_id, balance, total_amount, transaction_count))
     conn.commit()
+
+def set_user_ban(user_id, banned_status):
+    cur.execute('''
+                INSERT INTO user_bans (user_id, banned) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET banned=excluded.banned''', (user_id, banned_status))
+    conn.commit()
+
+def get_user_ban(user_id):
+    cur.execute('SELECT banned FROM user_bans WHERE user_id = ?', (user_id,))
+    result = cur.fetchone()
+    if result:
+        return result[0]  # 'o' or 'x'
+    return 'x'
 
 def get_user_info(user_id):
     cur.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
@@ -128,10 +149,39 @@ class MyLayout(ui.LayoutView):
     async def button_4_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message("설정중...", ephemeral=True)
 
+# 명령어
 @bot.tree.command(name="버튼패널", description="로벅스 버튼 패널 표시하기")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
-    await interaction.response.send_message("로벅스 자판기 패널", view=layout)
+    await interaction.response.send_message(view=layout)
+
+@bot.tree.command(name="자판기_이용_설정", description="자판기 밴 설정")
+@discord.app_commands.describe(ban_status="밴 여부 확인")
+@discord.app_commands.choices(ban_status=[
+
+    discord.app_commands.Choice(name='허용', value='x'),
+    discord.app_commands.Choice(name='차단', value='o')
+])
+async def vending_machine_ban(interaction: discord.Interaction, ban_status: discord.app_commands.Choice[str]):
+    user_id = str(interaction.user.id)
+    set_user_ban(user_id, ban_status.value)
+
+    if ban_status.value == 'o':
+        await interaction.response.send_message(f"{interaction.user.name}님, 자판기 이용이 제한됩니다. (밴 상태: o)", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"{interaction.user.name}님, 자판기 이용이 허용됩니다. (밴 상태: x)", ephemeral=True)
+
+        async def check_vending_access(user_id):
+            banned = get_user_ban(user_id)
+            if banned == 'o':
+                return False
+            return True
+
+        user_id = str(interaction.user.id)
+        if not await check_vending_access(user_id):
+
+            await interaction.response.send_message("자판기 이용이 제한되어 있습니다.", ephemeral=True)
+    return
 
 @bot.event
 async def on_ready():
@@ -142,4 +192,4 @@ async def on_ready():
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
-bot.run("토큰을_여기에_입력하세요")
+bot.run("")
