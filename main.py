@@ -36,6 +36,16 @@ cur.execute('''
     )
 ''')
 
+# 계좌번호 정보 저장 테이블 추가
+cur.execute('''
+    CREATE TABLE IF NOT EXISTS bank_accounts (
+        user_id TEXT PRIMARY KEY,
+        bank_name TEXT,
+        account_holder TEXT,
+        account_number TEXT
+    )
+''')
+
 conn.commit()
 
 def add_or_update_user(user_id, balance, total_amount, transaction_count):
@@ -87,6 +97,26 @@ def get_payment_methods(user_id):
     if result:
         return result
     return ('미지원', '미지원', '미지원')
+
+# 계좌번호 설정 함수
+def set_bank_account(user_id, bank_name, account_holder, account_number):
+    cur.execute('''
+        INSERT INTO bank_accounts (user_id, bank_name, account_holder, account_number)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+        bank_name=excluded.bank_name,
+        account_holder=excluded.account_holder,
+        account_number=excluded.account_number
+    ''', (user_id, bank_name, account_holder, account_number))
+    conn.commit()
+
+# 계좌번호 조회 함수
+def get_bank_account(user_id):
+    cur.execute('SELECT bank_name, account_holder, account_number FROM bank_accounts WHERE user_id = ?', (user_id,))
+    result = cur.fetchone()
+    if result:
+        return result
+    return (None, None, None)
 
 async def check_vending_access(user_id):
     banned = get_user_ban(user_id)
@@ -141,6 +171,37 @@ class PaymentMethodView(ui.LayoutView):
         container.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
         self.add_item(container)
 
+class BankAccountSetView(ui.LayoutView):
+    def __init__(self, bank_name, account_holder, account_number):
+        super().__init__(timeout=None)
+        container = ui.Container()
+        container.add_item(ui.TextDisplay("**정보 변경**"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(f"**은행명** = __{bank_name}__"))
+        container.add_item(ui.TextDisplay(f"**예금주** = __{account_holder}__"))
+        container.add_item(ui.TextDisplay(f"**계좌번호** = __{account_number}__"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
+        self.add_item(container)
+
+class ChargeRequestCompleteView(ui.LayoutView):
+    def __init__(self, bank_name, account_holder, account_number, amount):
+        super().__init__(timeout=None)
+        container = ui.Container()
+        container.add_item(ui.TextDisplay("**계좌이체 신청 완료**"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(f"은행명 = {bank_name}"))
+        container.add_item(ui.TextDisplay(f"예금주 = {account_holder}"))
+        container.add_item(ui.TextDisplay(f"계좌번호 = `{account_number}`"))
+        container.add_item(ui.TextDisplay(f"")) # 한 줄 띄움
+        container.add_item(ui.TextDisplay(f"입금 금액 = {amount}원"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("-# 5분안에 입금해주셔야 지충됩니다."))
+        container.add_item(ui.TextDisplay("-# 입금자명 틀릴시 자충 인식 안 합니다."))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("자충 오류시 티켓 열고 이중창해주세요."))
+        self.add_item(container)
+
 class ChargeView(ui.LayoutView):
     def __init__(self, account_transfer, coin_payment, mun_sang):
         super().__init__(timeout=None)
@@ -150,29 +211,30 @@ class ChargeView(ui.LayoutView):
         container.add_item(ui.TextDisplay("아래 원하시는 결제수단을 클릭해주세요"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        # 커스텀 이모지
-        custom_emoji7 = PartialEmoji(name="TOSS", id=1423544803559342154)
-        custom_emoji8 = PartialEmoji(name="bitcoin", id=1423544805975265374)
-        custom_emoji9 = PartialEmoji(name="1200x630wa", id=1423544804721164370)
+        custom_emoji7 = PartialEmoji(name="TOSS", id=1423544803559342154) # TOSS 이모지
+        custom_emoji8 = PartialEmoji(name="bitcoin", id=1423544805975265374) # 비트코인 이모지
+        custom_emoji9 = PartialEmoji(name="1200x630wa", id=1423544804721164370) # 문화상품권 이모지
 
-        buttons = []
+        buttons_row1 = []
         if account_transfer == "지원":
-            buttons.append(ui.Button(label="계좌이체", custom_id="pay_account", emoji=custom_emoji7, style=discord.ButtonStyle.primary))
+            buttons_row1.append(ui.Button(label="계좌이체", custom_id="pay_account", emoji=custom_emoji7, style=discord.ButtonStyle.primary))
         else:
-            buttons.append(ui.Button(label="계좌이체", disabled=True, emoji=custom_emoji7, style=discord.ButtonStyle.primary))
+            buttons_row1.append(ui.Button(label="계좌이체", disabled=True, emoji=custom_emoji7, style=discord.ButtonStyle.secondary)) # 미지원 버튼은 secondary style로
 
         if coin_payment == "지원":
-            buttons.append(ui.Button(label="코인결제", custom_id="pay_coin", emoji=custom_emoji8, style=discord.ButtonStyle.danger))
+            buttons_row1.append(ui.Button(label="코인결제", custom_id="pay_coin", emoji=custom_emoji8, style=discord.ButtonStyle.primary))
         else:
-            buttons.append(ui.Button(label="코인결제", disabled=True, emoji=custom_emoji8, style=discord.ButtonStyle.danger))
+            buttons_row1.append(ui.Button(label="코인결제", disabled=True, emoji=custom_emoji8, style=discord.ButtonStyle.secondary))
 
         if mun_sang == "지원":
-            buttons.append(ui.Button(label="문상결제", custom_id="pay_munsang", emoji=custom_emoji9, style=discord.ButtonStyle.success))
+            buttons_row1.append(ui.Button(label="문상결제", custom_id="pay_munsang", emoji=custom_emoji9, style=discord.ButtonStyle.primary))
         else:
-            buttons.append(ui.Button(label="문상결제", disabled=True, emoji=custom_emoji9, style=discord.ButtonStyle.success))
+            buttons_row1.append(ui.Button(label="문상결제", disabled=True, emoji=custom_emoji9, style=discord.ButtonStyle.secondary))
 
-        action_row = ui.ActionRow(*buttons)
+        # 한 액션로우에 5개 버튼 제한, 3개는 문제없음
+        action_row = ui.ActionRow(*buttons_row1)
         container.add_item(action_row)
+        
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         supported = []
@@ -186,6 +248,7 @@ class ChargeView(ui.LayoutView):
         supported_text = ", ".join(supported) if supported else "없음"
         container.add_item(ui.TextDisplay(f"결제가능한 서비스 = {supported_text}"))
         self.add_item(container)
+
 
 class UserInfoView(ui.LayoutView):
     def __init__(self, user_name, balance, total_amount, transaction_count):
@@ -231,10 +294,10 @@ class MyLayout(ui.LayoutView):
         container.add_item(sessao2)
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        custom_emoji1 = PartialEmoji(name="emoji_5", id=1424003478275231916)
-        custom_emoji2 = PartialEmoji(name="charge", id=1424003480007475281)
-        custom_emoji3 = PartialEmoji(name="info", id=1424003482247237908)
-        custom_emoji4 = PartialEmoji(name="category", id=1424003481240469615)
+        custom_emoji1 = PartialEmoji(name="emoji_5", id=1424003478275231916) # 공지사항 이모지
+        custom_emoji2 = PartialEmoji(name="charge", id=1424003480007475281) # 충전 이모지
+        custom_emoji3 = PartialEmoji(name="info", id=1424003482247237908) # 내 정보 이모지
+        custom_emoji4 = PartialEmoji(name="category", id=1424003481240469615) # 구매 이모지
 
         button_1 = ui.Button(label="공지사항", custom_id="button_1", emoji=custom_emoji1)
         button_2 = ui.Button(label="충전", custom_id="button_2", emoji=custom_emoji2)
@@ -273,7 +336,6 @@ class MyLayout(ui.LayoutView):
             await interaction.response.send_message(view=view, ephemeral=True)
             return
         
-        # 유저 결제수단 데이터 불러오기
         account, coin, mun_sang = get_payment_methods(user_id)
         view = ChargeView(account, coin, mun_sang)
         await interaction.response.send_message(view=view, ephemeral=True)
@@ -305,11 +367,100 @@ class MyLayout(ui.LayoutView):
 
         await interaction.response.send_message("설정중...", ephemeral=True)
 
+# 결제 수단 버튼 클릭 콜백 클래스 (ChargeView 내부의 버튼에 연결)
+class PaymentSelectionView(ui.LayoutView):
+    def __init__(self, charge_view):
+        super().__init__(timeout=None)
+        self.charge_view = charge_view # ChargeView 객체를 참조
+        # ChargeView에서 생성된 버튼들을 가져와서 현재 뷰에 연결
+        for row in charge_view.children:
+            if isinstance(row, ui.ActionRow):
+                for item in row.children:
+                    if isinstance(item, ui.Button):
+                        # custom_id를 기반으로 동적으로 콜백 연결
+                        if item.custom_id == "pay_account":
+                            item.callback = self.pay_account_callback
+                        # 여기에 다른 결제 수단 버튼들의 콜백을 추가할 수 있습니다.
+                        # 예: elif item.custom_id == "pay_coin": item.callback = self.pay_coin_callback
+                        # ...
+                        self.add_item(item)
+            elif not isinstance(row, ui.Separator) and not isinstance(row, ui.TextDisplay):
+                 self.add_item(row) # 기타 레이아웃 요소도 추가
+
+    async def pay_account_callback(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        bank_name, account_holder, account_number = get_bank_account(user_id)
+
+        if not bank_name:
+            await interaction.response.send_message("먼저 `/계좌번호_설정` 명령어로 계좌 정보를 설정해주세요.", ephemeral=True)
+            return
+
+        modal = AccountTransferModal(bank_name, account_holder, account_number)
+        await interaction.response.send_modal(modal)
+
+# 계좌번호 설정 모달
+class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
+    bank_name_input = ui.TextInput(label="은행명", style=discord.TextStyle.short, required=True, max_length=20)
+    account_holder_input = ui.TextInput(label="예금주", style=discord.TextStyle.short, required=True, max_length=20)
+    account_number_input = ui.TextInput(label="계좌번호", style=discord.TextStyle.short, required=True, min_length=5, max_length=30)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        bank_name = self.bank_name_input.value
+        account_holder = self.account_holder_input.value
+        account_number = self.account_number_input.value
+
+        set_bank_account(user_id, bank_name, account_holder, account_number)
+        view = BankAccountSetView(bank_name, account_holder, account_number)
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+# 계좌이체 신청 모달
+class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
+    def __init__(self, bank_name, account_holder, account_number):
+        super().__init__()
+        self.bank_name = bank_name
+        self.account_holder = account_holder
+        self.account_number = account_number
+
+        self.depositor_name_input = ui.TextInput(label="입금자명 (한글 2~4글자)", style=discord.TextStyle.short, required=True, min_length=2, max_length=4)
+        self.amount_input = ui.TextInput(label="금액", style=discord.TextStyle.short, required=True)
+        self.add_item(self.depositor_name_input)
+        self.add_item(self.amount_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        depositor_name = self.depositor_name_input.value
+        amount_str = self.amount_input.value
+
+        # 입금자명 검증 (2-4글자 한글만)
+        if not (2 <= len(depositor_name) <= 4 and all('가' <= char <= '힣' for char in depositor_name)):
+            await interaction.response.send_message("입금자명은 2~4글자 한글만 가능합니다.", ephemeral=True)
+            return
+
+        # 금액 검증
+        try:
+            amount = int(amount_str)
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message("유효한 금액을 숫자로 입력해주세요.", ephemeral=True)
+            return
+        
+        # 실제 충전 신청 로직
+        user_id = str(interaction.user.id)
+        # save_charge_request(user_id, depositor_name, amount) # 필요시 이 함수로 DB에 저장
+        
+        view = ChargeRequestCompleteView(self.bank_name, self.account_holder, self.account_number, amount)
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+
 @bot.tree.command(name="버튼패널", description="로벅스 버튼 패널 표시하기")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
     # 뷰 보존을 위해 저장 (메시지 ID가 없는 경우를 대비하여 None 대신 "no_msg_id" 사용)
-    active_views[str(interaction.message.id) if interaction.message else "no_msg_id"] = layout
+    # 봇 재시작 후에도 이전 메시지의 버튼을 다시 연결하기 위함 (Peristence)
+    if interaction.message:
+        message_id_key = str(interaction.message.id)
+        active_views[message_id_key] = layout
     await interaction.response.send_message(view=layout)
 
 @bot.tree.command(name="자판기_이용_설정", description="자판기 밴 설정 포함 대상 유저 옵션")
@@ -363,6 +514,12 @@ async def payment_method_set(
     view = PaymentMethodView(account_transfer.value, coin_payment.value, mun_sang.value)
     await interaction.response.send_message(view=view, ephemeral=True)
 
+@bot.tree.command(name="계좌번호_설정", description="봇에 사용될 계좌 정보를 설정합니다.")
+async def set_bank_account_cmd(interaction: discord.Interaction):
+    modal = AccountSettingModal()
+    await interaction.response.send_modal(modal)
+
+
 @bot.event
 async def on_ready():
     print(f"로벅스 자판기 봇이 {bot.user}로 로그인했습니다.")
@@ -370,10 +527,19 @@ async def on_ready():
         # 봇이 켜질 때 이전에 남아있던 뷰들 다시 등록 시도 (Persistency)
         for view_key, view_obj in active_views.items():
             if view_key != "no_msg_id": # 메시지 ID가 실제 있는 경우만
-                bot.add_view(view_obj)
+                try:
+                    message = await bot.get_channel(int(view_obj.message_id_channel)).fetch_message(int(view_key))
+                    bot.add_view(view_obj, message_id=message.id)
+                    print(f"View re-added for message {view_key}")
+                except Exception as e:
+                    print(f"Failed to re-add view for message {view_key}: {e}")
+            else:
+                # 'no_msg_id' 키로 저장된 뷰는 message_id가 없으므로 재추가하지 않습니다.
+                # 이는 임시적인 뷰이거나, 메시지가 삭제되어 뷰를 찾을 수 없는 경우입니다.
+                pass
         synced = await bot.tree.sync()
         print(f'{len(synced)}개의 명령어가 동기화되었습니다.')
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
-bot.run("")
+bot.run("토큰을_여기에_입력하세요")
