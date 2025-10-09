@@ -1,115 +1,90 @@
-const {
-    SlashCommandBuilder,
-    EmbedBuilder,
-    TextDisplayBuilder,
-    MessageFlags,
-    SeparatorBuilder,
-    SeparatorSpacingSize,
-    SectionBuilder,
-    ThumbnailBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    MediaGalleryBuilder,
-    ContainerBuilder,
-    AttachmentBuilder,
-    FileBuilder
-} = require('discord.js');
-const path = require('path');
-const fs = require('fs');
+from unittest import result
+import discord
+import sqlite3
+from discord import PartialEmoji, ui
+from discord.ext import commands
+intents= discord.Intents.all()
 
+# DB 설정
+conn = sqlite3.connect('database.db')
+cur = conn.cursor()
 
-module.exports = {
-    data: new SlashCommandBuilder()
-        .setName('new-update')
-        .setDescription('This is components version 2.'),
-    async execute(interaction, client) {
-        // Command execution logic goes here
+cur.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    balance INTEGER,
+    total_amount INTEGER,
+    transaction_count INTEGER
+)   
+''')
+conn.commit()
 
-        const container = new ContainerBuilder();
+def add_or_update_user(user_id, balance, total_amount, transaction_count):
 
-        const media = new MediaGalleryBuilder()
-            .addItems([
-                {
-                    media: {
-                        url: 'https://i.ibb.co/yFsBTGDL/docs-header.jpg'
-                    }
-                }
-            ])
-        
-        container.addMediaGalleryComponents(media);
+    cur.execute('''
+                INSERT INTO users (user_id, balance, total_amount, transaction_count)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                balance = excluded.balance,
+                total_amount = excluded.total_amount,
+                transaction_count = excluded.transaction_count
+    ''', (user_id, balance, total_amount, transaction_count))
+    conn.commit()
 
-        const textTop = new TextDisplayBuilder()
-            .setContent(`## Introducing New Components for Messages!\nWe're bringing new components to messages that you can use in your apps. They allow you to have full control over the layout of your messages.\n\nOur previous components system. while functional, had limitations:\n- Content, attachments, embed, buttons, and components had to follow fixed positioning rules\n- Visual styling options were limited\n\nOur new component system addresses these challenged with fully composible components that can be arragned and laid out in any order, allowing for a more flexible and visually appealing design. Check out the [changelog](https://i.ibb.co/yFsBTGDL/docs-header.jpg) for more details.`);
+    def get_user_info(user_id):
+        cur.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        return cur.fetchone()
+    if result:
+        return {"balance": result[0], "total_amount": result[1], "transaction_count": result[2]}
+    else:
+        return None
 
-        container.addTextDisplayComponents(textTop);
+bot = commands.Bot(".", intents=intents)
 
-        const media2 = new MediaGalleryBuilder()
-            .addItems([
-                {
-                    media: {
-                        url: 'https://i.ibb.co/RTSs4JWp/components-hero.png'
-                    }
-                }
-            ])
+class MauLayout(ui.LayoutView):
+    def __init__(self):
+        super().__init__()
 
-        container.addMediaGalleryComponents(media2);
+        # 메인 임베드 제목
+        container = ui.Container(ui.TextDisplay("**로벅스 자판기**\n아래 버튼을 눌려 이용해주세요\n자충 오류시 [문의 바로가기](https://discord.com/channels/1419200424636055592/1423477824865439884)"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        const text1 = new TextDisplayBuilder().setContent('A breif overview of components');
-        const button1 = new ButtonBuilder().setLabel('Overview').setURL('https://youtube.com').setStyle(ButtonStyle.Link);
+        # 로벅스 실시간 재고
+        sessao = ui.Section(ui.TextDisplay("**로벅스 재고**\n-# 60초마다 갱신됩니다"), accessory=ui.Button(label="0로벅스", disabled=True))
+        container.add_item(sessao)
 
-        const section1 = new SectionBuilder()
-            .addTextDisplayComponents(text1)
-            .setButtonAccessory(button1);
+        # 총 판매량
+        sessao = ui.Section(ui.TextDisplay("**총 판매량**\n-# 총 판매된 로벅스량"), accessory=ui.Button(label="0로벅스", disabled=True))
+        container.add_item(sessao)
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        container.addSectionComponents(section1);
+        # 임베드 버튼 & 커스텀 이모지
+        custom_emoji1 = PartialEmoji(name="emoji_5", id=1424003478275231916)
+        custom_emoji2 = PartialEmoji(name="charge", id=1424003480007475281)
+        custom_emoji3 = PartialEmoji(name="info", id=1424003482247237908)
+        custom_emoji4 = PartialEmoji(name="category", id=1424003481240469615)
 
-        const text2 = new TextDisplayBuilder().setContent('A breif overview of components');
-        const button2 = new ButtonBuilder().setLabel('Overview').setURL('https://youtube.com').setStyle(ButtonStyle.Link);
+        button_1 = ui.Button(label="공지사항", custom_id="button_1", emoji=custom_emoji1)
+        button_2 = ui.Button(label="충전", custom_id="button_2", emoji=custom_emoji2)
+        button_3 = ui.Button(label="내 정보", custom_id="button_3", emoji=custom_emoji3)
+        button_4 = ui.Button(label="구매", custom_id="button_4", emoji=custom_emoji4)
 
-        const section2 = new SectionBuilder()
-            .addTextDisplayComponents(text2)
-            .setButtonAccessory(button2);
+        linha = ui.ActionRow(button_1, button_2)
+        linha2 = ui.ActionRow(button_3, button_4)
 
-        container.addSectionComponents(section2);
+        container.add_item(linha)
+        container.add_item(linha2)
 
-        const text3 = new TextDisplayBuilder().setContent('A breif overview of components');
-        const button3 = new ButtonBuilder().setLabel('Overview').setURL('https://youtube.com').setStyle(ButtonStyle.Link);
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        const section3 = new SectionBuilder()
-            .addTextDisplayComponents(text3)
-            .setButtonAccessory(button3);
+        # 메인 임베드 하단
+        container.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
 
-        container.addSectionComponents(section3);
+        self.add_item(container)
 
+@bot.command()
+async def teste(ctx: commands.Context):
+    layout = MauLayout()
+    await ctx.reply(view=layout)
 
-        const separator = new SeparatorBuilder();
-
-        container.addSeparatorComponents(separator);
-
-        const text4 = new TextDisplayBuilder().setContent(`-# This message was composed using components, check out the request:`)
-
-        container.addTextDisplayComponents(text4);
-
-        const filePath = path.join(__dirname, '../../../message-data.json');
-        const fileContent = await fs.promises.readFile(filePath, 'utf8');
-
-        const attachment = new AttachmentBuilder(Buffer.from(fileContent), {
-            name: 'message.json'
-        })
-
-        const file = new FileBuilder().setURL('attachment://message.json');
-
-        container.addFileComponents(file);
-
-        interaction.reply({
-            flags: MessageFlags.IsComponentsV2,
-            components: [container],
-            files: [attachment]
-        })
-
-
-
-
-
-    }
-};
+bot.run("")
