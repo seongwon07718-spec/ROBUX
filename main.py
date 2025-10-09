@@ -58,15 +58,15 @@ def get_user_info(user_id):
     cur.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
     result = cur.fetchone()
     if result:
-        return result  # (user_id, balance, total_amount, transaction_count)
+        return result
     return None
 
-# 비동기 밴 체크 함수
+# 밴 여부 체크 (비동기로 감싸기)
 async def check_vending_access(user_id):
     banned = get_user_ban(user_id)
-    return banned != 'o'  # 밴이 'o'이면 False 반환
+    return banned != 'o'
 
-# 제한 안내용 컨테이너 뷰
+# 밴 안내 컨테이너 뷰
 class VendingBanView(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -79,7 +79,8 @@ class VendingBanView(ui.LayoutView):
         container.add_item(ui.TextDisplay("현재 자판기 이용이 제한되어 있습니다"))
         self.add_item(container)
 
-# 내 정보 버튼 뷰
+# 내 정보 버튼 뷰, 공지사항 뷰 등 기존과 동일
+
 class UserInfoView(ui.LayoutView):
     def __init__(self, user_name, balance, total_amount, transaction_count):
         super().__init__(timeout=None)
@@ -93,36 +94,29 @@ class UserInfoView(ui.LayoutView):
         container.add_item(ui.TextDisplay("항상 이용해주셔서 감사합니다."))
         self.add_item(container)
 
-# 공지사항 버튼 뷰
 class NoticeView(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
         container = ui.Container()
         container.add_item(ui.TextDisplay("**공지사항**"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(
-            "__3자 입금__할 시 법적 조치합니다\n"
-            "충전 신청하고 잠수시 __자판기 이용금지__\n"
-            "__오류__나 __버그__문의는 티켓 열어주세요"
-        ))
+        container.add_item(ui.TextDisplay("__3자 입금__할 시 법적 조치합니다\n충전 신청하고 잠수시 __자판기 이용금지__\n__오류__나 __버그__문의는 티켓 열어주세요"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
         self.add_item(container)
 
-# 메인 레이아웃 및 버튼 콜백
 class MyLayout(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
-
+        
         container = ui.Container(ui.TextDisplay(
-            "**로벅스 자판기**\n아래 버튼을 눌려 이용해주세요\n"
-            "자충 오류시 [문의 바로가기](http://discord.com/channels/1419200424636055592/1423477824865439884)"
+            "**로벅스 자판기**\n아래 버튼을 눌려 이용해주세요\n자충 오류시 [문의 바로가기](http://discord.com/channels/1419200424636055592/1423477824865439884)"
         ))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-
+        
         sessao = ui.Section(ui.TextDisplay("**로벅스 재고**\n-# 60초마다 갱신됩니다"), accessory=ui.Button(label="0로벅스", disabled=True))
         container.add_item(sessao)
-
+        
         sessao2 = ui.Section(ui.TextDisplay("**총 판매량**\n-# 총 판매된 로벅스량"), accessory=ui.Button(label="0로벅스", disabled=True))
         container.add_item(sessao2)
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
@@ -147,7 +141,7 @@ class MyLayout(ui.LayoutView):
 
         self.add_item(container)
 
-        # 모든 버튼 콜백에 밴 체크 함수 적용하여 제한된 유저는 이용 불가 메시지 표시
+        # 각 버튼 콜백 내에서 밴 상태 체크 후 밴 시 제한 메시지 띄우기
         button_1.callback = self.button_1_callback
         button_2.callback = self.button_2_callback
         button_3.callback = self.button_3_callback
@@ -199,7 +193,6 @@ class MyLayout(ui.LayoutView):
 
         await interaction.response.send_message("설정중...", ephemeral=True)
 
-# 명령어
 @bot.tree.command(name="버튼패널", description="로벅스 버튼 패널 표시하기")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
