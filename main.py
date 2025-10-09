@@ -1,9 +1,17 @@
 import discord
 import sqlite3
+import asyncio
 from discord import PartialEmoji, ui
 from discord.ext import commands
 
 intents = discord.Intents.all()
+bot = commands.Bot(command_prefix=".", intents=intents)
+
+async def update_panel_periodically(message, bot):
+    while True:
+        new_view = MyLayout()
+        await message.edit(view=new_view)
+        await asyncio.sleep(60)
 
 # DB 설정
 conn = sqlite3.connect('database.db')
@@ -39,43 +47,58 @@ def get_user_info(user_id):
 
 bot = commands.Bot(command_prefix=".", intents=intents)
 
-# 유저 정보 표시용 뷰 클래스
+# 내 정보 버튼 뷰
 class UserInfoView(ui.LayoutView):
     def __init__(self, user_name, balance, total_amount, transaction_count):
-        super().__init__()
+        super().__init__(timeout=None)
 
         container = ui.Container()
         container.add_item(ui.TextDisplay(f"**{user_name}님 정보**"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(f"남은 금액 = {balance}원"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(f"누적 금액 = {total_amount}원"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay(f"거래 횟수 = {transaction_count}번"))
+        container.add_item(ui.TextDisplay(f"**남은 금액** = __{balance}원__"))
+        container.add_item(ui.TextDisplay(f"**누적 금액** = __{total_amount}원__"))
+        container.add_item(ui.TextDisplay(f"**거래 횟수** = __{transaction_count}번__"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("항상 이용해주셔서 감사합니다."))
 
         self.add_item(container)
 
-class MauLayout(ui.LayoutView):
+# 공지사항 버튼 뷰
+class NoticeView(ui.LayoutView):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        container = ui.Container()
+        container.add_item(ui.TextDisplay("**공지사항**"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("__3자 입금__할 시 법적 조치합니다\n충전 신청하고 잠수시 __자판기 이용금지__\n__오류__나 __버그__문의는 티켓 열어주세요"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
+
+        self.add_item(container)
+
+class MyLayout(ui.LayoutView):
     def __init__(self):
         super().__init__()
-
-        container = ui.Container(ui.TextDisplay("로벅스 자판기\n아래 버튼을 눌려 이용해주세요\n자충 오류시 문의 바로가기"))
+       
+        # 메인 임베드
+        container = ui.Container(ui.TextDisplay("**로벅스 자판기**\n아래 버튼을 눌려 이용해주세요\n자충 오류시 [문의 바로가기](http://discord.com/channels/1419200424636055592/1423477824865439884)"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        sessao = ui.Section(ui.TextDisplay("로벅스 재고\n-# 60초마다 갱신됩니다"), accessory=ui.Button(label="0로벅스", disabled=True))
+        sessao = ui.Section(ui.TextDisplay("**로벅스 재고**\n-# 60초마다 갱신됩니다"), accessory=ui.Button(label="0로벅스", disabled=True))
         container.add_item(sessao)
 
-        sessao2 = ui.Section(ui.TextDisplay("총 판매량\n-# 총 판매된 로벅스량"), accessory=ui.Button(label="0로벅스", disabled=True))
+        sessao2 = ui.Section(ui.TextDisplay("**총 판매량**\n-# 총 판매된 로벅스량"), accessory=ui.Button(label="0로벅스", disabled=True))
         container.add_item(sessao2)
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
+        # 커스텀 이모지
         custom_emoji1 = PartialEmoji(name="emoji_5", id=1424003478275231916)
         custom_emoji2 = PartialEmoji(name="charge", id=1424003480007475281)
         custom_emoji3 = PartialEmoji(name="info", id=1424003482247237908)
         custom_emoji4 = PartialEmoji(name="category", id=1424003481240469615)
 
+        # 메인 버튼
         button_1 = ui.Button(label="공지사항", custom_id="button_1", emoji=custom_emoji1)
         button_2 = ui.Button(label="충전", custom_id="button_2", emoji=custom_emoji2)
         button_3 = ui.Button(label="내 정보", custom_id="button_3", emoji=custom_emoji3)
@@ -88,6 +111,7 @@ class MauLayout(ui.LayoutView):
         container.add_item(linha2)
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
+        # 메인 하단 메시지
         container.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
 
         self.add_item(container)
@@ -98,10 +122,11 @@ class MauLayout(ui.LayoutView):
         button_4.callback = self.button_4_callback
 
     async def button_1_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("공지사항 버튼 클릭됨", ephemeral=True)
+        view = NoticeView()
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     async def button_2_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("충전 버튼 클릭됨", ephemeral=True)
+        await interaction.response.send_message("설정중...", ephemeral=True)
 
     async def button_3_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
@@ -118,11 +143,20 @@ class MauLayout(ui.LayoutView):
         await interaction.response.send_message(view=view, ephemeral=True)
 
     async def button_4_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("구매 버튼 클릭됨", ephemeral=True)
+        await interaction.response.send_message("설정중...", ephemeral=True)
 
-@bot.command()
-async def teste(ctx: commands.Context):
-    layout = MauLayout()
-    await ctx.reply(view=layout)
+@bot.tree.command(name="버튼패널", description="로벅스 버튼 패널 표시하기")
+async def button_panel(interaction: discord.Interaction):
+    layout = MyLayout()
+    await interaction.response.send_message("로벅스 자판기 패널", view=layout)
 
-bot.run("토큰을_여기에_입력하세요")
+@bot.event
+async def on_ready():
+    print(f"로벅스 자판기 봇이 {bot.user}로 로그인햇습니다.")
+    try:
+        synced = await bot.tree.sync()
+        print(f'{len(synced)}개의 명령어가 동기화되었습니다.')
+    except Exception as e:
+        print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
+
+bot.run("")
