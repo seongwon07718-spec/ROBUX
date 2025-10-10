@@ -1,4 +1,4 @@
-mport discord
+import discord
 import sqlite3
 import asyncio # asyncio는 직접 사용하지 않지만, discord.py는 비동기 라이브러리이므로 필요할 수 있습니다.
 from discord import PartialEmoji, ui
@@ -412,36 +412,57 @@ class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
         await interaction.response.send_message(view=view, ephemeral=True)
 
 # 계좌이체 신청 모달
+# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+# 이 부분이 수정되었습니다.
+# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
 class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
     def __init__(self, bank_name, account_holder, account_number):
-        super().__init__()
+        super().__init__(timeout=None)
         self.bank_name = bank_name
         self.account_holder = account_holder
         self.account_number = account_number
 
         self.depositor_name_input = ui.TextInput(
-            label="입금자명", 
-            style=discord.TextStyle.short, 
-            required=True, 
-            min_length=2, max_length=4
+            label="입금자명",
+            style=discord.TextStyle.short,
+            required=True,
+            min_length=2, max_length=10
         )
         self.amount_input = ui.TextInput(
-            label="금액", 
-            style=discord.TextStyle.short, 
+            label="금액",
+            placeholder="숫자만 입력해주세요. (예: 5000)",
+            style=discord.TextStyle.short,
             required=True,
-            min_length=3, max_length=15 
+            min_length=3, max_length=15
         )
         self.add_item(self.depositor_name_input)
         self.add_item(self.amount_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        depositor_name = self.depositor_name_input.value
+        amount = self.amount_input.value
+
+        try:
+            amount_value = int(amount.replace(',', ''))
+        except ValueError:
+            await interaction.response.send_message("금액은 숫자로만 입력해주세요!", ephemeral=True)
+            return
+
+        view = ChargeRequestCompleteView(
+            bank_name=self.bank_name,
+            account_holder=self.account_holder,
+            account_number=self.account_number,
+            amount=f"{amount_value:,}"
+        )
+        
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 # --- 슬래시 명령어 정의 ---
 
 @bot.tree.command(name="버튼패널", description="버튼 패널을 표시합니다.")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
-    # 뷰 보존을 위해 저장 (현재는 단순히 참조를 유지하여 GC 방지, Persistent View 재등록 로직은 제외)
-    # active_views[str(interaction.message.id) if interaction.message else "no_msg_id"] = layout
-    await interaction.response.send_message(view=layout, ephemeral=None) # 기본적으로 임시 메시지로 응답
+    await interaction.response.send_message(view=layout, ephemeral=None)
 
 @bot.tree.command(name="자판기_이용_설정", description="자판기 이용을 금지할 수 있습니다")
 @discord.app_commands.describe(
@@ -508,11 +529,10 @@ async def set_bank_account_cmd(interaction: discord.Interaction):
 async def on_ready():
     print(f"로벅스 자판기 봇이 {bot.user}로 로그인했습니다.")
     try:
-        # 슬래시 명령어 동기화
         synced = await bot.tree.sync()
         print(f'{len(synced)}개의 명령어가 동기화되었습니다.')
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
 # --- 봇 실행 ---
-bot.run("") # 여기에 봇 토큰을 입력하세요
+bot.run("YOUR_BOT_TOKEN_HERE") # 여기에 봇 토큰을 입력하세요
