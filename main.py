@@ -1,6 +1,6 @@
 import discord
 import sqlite3
-import asyncio # asyncio는 직접 사용하지 않지만, discord.py는 비동기 라이브러리이므로 필요할 수 있습니다.
+import asyncio
 from discord import PartialEmoji, ui
 from discord.ext import commands
 
@@ -256,7 +256,7 @@ class ChargeView(ui.LayoutView):
             user_id = str(interaction.user.id)
             bank_name, account_holder, account_number = get_bank_account(user_id)
 
-            if not bank_name:
+            if not bank_name or not account_holder or not account_number:
                 await interaction.response.send_message("먼저 `/계좌번호_설정` 명령어로 계좌 정보를 설정해주세요.", ephemeral=True)
                 return
 
@@ -298,30 +298,72 @@ class NoticeView(ui.LayoutView):
         c.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
         self.add_item(c)
 
-# 버튼 상호작용 오류 방지를 위한 뷰 저장소 (Persistent View를 위한 기본 틀, 현재 코드에서 직접적인 재등록 로직은 비활성화)
-active_views = {}
+# --- 카운트다운 섹션 클래스 ---
+class CountdownSection(ui.Section):
+    def __init__(self, seconds=60):
+        self.seconds_left = seconds
+        self.initial_seconds = seconds # 리셋을 위해 초기값 저장
+        self.countdown_text = f"**로벅스 재고**\n-# {self.seconds_left}초 남았습니다"
+        super().__init__(
+            ui.TextDisplay(self.countdown_text), 
+            accessory=ui.Button(label="0로벅스", disabled=True)
+        )
+        
+    async def start_countdown(self, message):
+        self.seconds_left = self.initial_seconds # 타이머 시작 시 초기값으로 설정
+        while self.seconds_left > 0:
+            self.countdown_text = f"**로벅스 재고**\n-# {self.seconds_left}초 남았습니다"
+            self.children[0] = ui.TextDisplay(self.countdown_text)
+            
+            try:
+                await message.edit(view=message.view)
+            except discord.NotFound:
+                # 메시지가 이미 삭제된 경우
+                print("메시지를 찾을 수 없어 카운트다운 중단.")
+                break
+            except discord.Forbidden:
+                # 봇이 메시지를 편집할 권한이 없는 경우
+                print("메시지를 편집할 권한이 없어 카운트다운 중단.")
+                break
+            except Exception as e:
+                print(f"카운트다운 업데이트 오류: {e}")
+                break
+                
+            await asyncio.sleep(1)  # 1초 대기
+            self.seconds_left -= 1
+        
+        # 카운트다운 완료 후 메시지 업데이트 (예: "갱신 중..." 또는 "재고 업데이트 완료")
+        self.countdown_text = "**로벅스 재고**\n-# 갱신되었습니다!"
+        self.children[0] = ui.TextDisplay(self.countdown_text)
+        try:
+            await message.edit(view=message.view)
+        except (discord.NotFound, discord.Forbidden):
+            pass
+        # 다음 카운트다운을 시작하거나, 필요시 다른 작업 수행
 
+# --- 메인 레이아웃 뷰 ---
 class MyLayout(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None) # 뷰 만료 시간 없음
         
         c = ui.Container(ui.TextDisplay(
-            "**로벅스 자판기**\n-# 버튼을 눌러 이용해주세요 !"
+            "**로벅스 자판기**\n아래 버튼을 눌러 이용해주세요\n자충 오류시 [문의 바로가기](http://discord.com/channels/1419200424636055592/1423477824865439884)"
         ))
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         
-        # 로벅스 재고 및 총 판매량 섹션 (업데이트 로직은 별도 구현 필요)
-        sessao = ui.Section(ui.TextDisplay("**로벅스 재고**\n-# 60초마다 갱신됩니다"), accessory=ui.Button(label="0로벅스", disabled=True))
-        c.add_item(sessao)
+        # 카운트다운 섹션 통합
+        self.countdown_section = CountdownSection(60) # 60초 카운트다운 설정
+        c.add_item(self.countdown_section)
+        
+        sessao2 = ui.Section(ui.TextDisplay("**총 판매량**\n-# 총 판매된 로벅스량"), accessory=ui.Button(label="0로벅스", disabled=True))
+        c.add_item(sessao2)
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        # 이모지 (예시 ID, 실제 사용 시 올바른 ID로 변경)
         custom_emoji1 = PartialEmoji(name="emoji_5", id=1424003478275231916)
         custom_emoji2 = PartialEmoji(name="charge", id=1424003480007475281)
         custom_emoji3 = PartialEmoji(name="info", id=1424003482247237908)
         custom_emoji4 = PartialEmoji(name="category", id=1424003481240469615)
 
-        # 메인 버튼들
         button_1 = ui.Button(label="공지사항", custom_id="button_1", emoji=custom_emoji1)
         button_2 = ui.Button(label="충전", custom_id="button_2", emoji=custom_emoji2)
         button_3 = ui.Button(label="내 정보", custom_id="button_3", emoji=custom_emoji3)
@@ -332,9 +374,11 @@ class MyLayout(ui.LayoutView):
 
         c.add_item(linha)
         c.add_item(linha2)
+        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        c.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
+
         self.add_item(c)
 
-        # 콜백 함수 연결
         button_1.callback = self.button_1_callback
         button_2.callback = self.button_2_callback
         button_3.callback = self.button_3_callback
@@ -377,7 +421,12 @@ class MyLayout(ui.LayoutView):
             total_amount = info[2]
             transaction_count = info[3]
         else:
-            balance = total_amount = transaction_count = 0
+            # 초기 사용자 정보가 없을 경우 0으로 설정 후 DB에 추가 (선택 사항)
+            balance = 0
+            total_amount = 0
+            transaction_count = 0
+            add_or_update_user(user_id, balance, total_amount, transaction_count)
+
 
         view = UserInfoView(interaction.user.name, balance, total_amount, transaction_count)
         await interaction.response.send_message(view=view, ephemeral=True)
@@ -392,6 +441,15 @@ class MyLayout(ui.LayoutView):
 
         await interaction.response.send_message("구매 기능은 아직 구현되지 않았습니다.", ephemeral=True) # 임시 메시지
 
+    # 타이머 시작 메서드
+    async def start_timers(self, message):
+        # 60초마다 카운트다운을 반복하도록 수정
+        while True:
+            await self.countdown_section.start_countdown(message)
+            # 카운트다운이 끝나면 60초를 다시 대기하지 않고 바로 재시작하도록 로직 변경
+            # 만약 다음 카운트다운 전 일시정지가 필요하다면 여기에 await asyncio.sleep(재시작_대기_시간) 추가
+            # await asyncio.sleep(1) # '갱신되었습니다!' 표시 후 1초 대기 후 다음 카운트다운 시작
+
 
 # --- 모달 클래스 정의 ---
 
@@ -403,9 +461,9 @@ class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
 
     async def on_submit(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
-        bank_name = self.bank_name_input.value
-        account_holder = self.account_holder_input.value
-        account_number = self.account_number_input.value
+        bank_name = self.bank_name_input.value.strip()
+        account_holder = self.account_holder_input.value.strip()
+        account_number = self.account_number_input.value.strip()
 
         set_bank_account(user_id, bank_name, account_holder, account_number)
         view = BankAccountSetView(bank_name, account_holder, account_number)
@@ -420,7 +478,7 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
         self.account_number = account_number
 
         self.depositor_name_input = ui.TextInput(
-            label="입금자명", 
+            label="입금자명 (한글 2~4글자)", 
             style=discord.TextStyle.short, 
             required=True, 
             min_length=2, max_length=4
@@ -429,7 +487,7 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
             label="금액", 
             style=discord.TextStyle.short, 
             required=True,
-            min_length=1, max_length=4000 
+            min_length=1, max_length=10 # 금액의 최대 길이를 10자리로 제한 (약 100억)
         )
         self.add_item(self.depositor_name_input)
         self.add_item(self.amount_input)
@@ -465,9 +523,12 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
 @bot.tree.command(name="버튼패널", description="로벅스 자판기 버튼 패널을 표시합니다.")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
-    # 뷰 보존을 위해 저장 (현재는 단순히 참조를 유지하여 GC 방지, Persistent View 재등록 로직은 제외)
-    # active_views[str(interaction.message.id) if interaction.message else "no_msg_id"] = layout
-    await interaction.response.send_message(view=layout, ephemeral=None) # 기본적으로 임시 메시지로 응답
+    await interaction.response.send_message(view=layout) # ephemeral=None으로 설정하면 모두에게 보임
+
+    # 메시지 전송 후 원본 메시지를 가져와 타이머 시작
+    original_message = await interaction.original_response()
+    asyncio.create_task(layout.start_timers(original_message))
+
 
 @bot.tree.command(name="자판기_이용_설정", description="특정 유저의 자판기 이용 밴 상태를 설정합니다.")
 @discord.app_commands.describe(
@@ -541,4 +602,4 @@ async def on_ready():
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
 # --- 봇 실행 ---
-bot.run("") # 여기에 봇 토큰을 입력하세요
+bot.run("YOUR_BOT_TOKEN") # 여기에 봇 토큰을 입력하세요
