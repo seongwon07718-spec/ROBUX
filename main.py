@@ -187,11 +187,11 @@ class ChargeRequestCompleteView(ui.LayoutView):
         c = ui.Container()
         c.add_item(ui.TextDisplay("**계좌이체 신청 완료**"))
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        c.add_item(ui.TextDisplay(f"은행명 = {bank_name}"))
-        c.add_item(ui.TextDisplay(f"예금주 = {account_holder}"))
-        c.add_item(ui.TextDisplay(f"계좌번호 = `{account_number}`"))
-        c.add_item(ui.TextDisplay(f""))
-        c.add_item(ui.TextDisplay(f"입금 금액 = {amount}원"))
+        c.add_item(ui.TextDisplay(f"**은행명** = {bank_name}"))
+        c.add_item(ui.TextDisplay(f"**예금주** = {account_holder}"))
+        c.add_item(ui.TextDisplay(f"**계좌번호** = `{account_number}`"))
+        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        c.add_item(ui.TextDisplay(f"**입금 금액** = {amount}원"))
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("-# 5분안에 입금해주셔야 지충됩니다."))
         c.add_item(ui.TextDisplay("-# 입금자명 틀릴시 자충 인식 안 합니다."))
@@ -311,7 +311,7 @@ class MyLayout(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         
         # 로벅스 재고 및 총 판매량 섹션 (업데이트 로직은 별도 구현 필요)
-        sessao = ui.Section(ui.TextDisplay("**로벅스 재고**\n-# 60초마다 갱신됩니다"), accessory=ui.Button(label="0로벅스", disabled=True))
+        sessao = ui.Section(ui.TextDisplay("**로벅스 재고\n-# 60초마다 갱신됩니다.**"), accessory=ui.Button(label="0로벅스", disabled=True))
         c.add_item(sessao)
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
@@ -535,4 +535,4 @@ async def on_ready():
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
 # --- 봇 실행 ---
-bot.run("YOUR_BOT_TOKEN_HERE") # 여기에 봇 토큰을 입력하세요
+bot.run("") # 여기에 봇 토큰을 입력하세요
