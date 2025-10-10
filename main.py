@@ -1,117 +1,227 @@
 import discord
 import sqlite3
-import asyncio # asyncio는 직접 사용하지 않지만, discord.py는 비동기 라이브러리이므로 필요할 수 있습니다.
+import asyncio
+import datetime
+import threading # 여러 사용자 동시 접속 시 DB 안정성을 위한 락
 from discord import PartialEmoji, ui
 from discord.ext import commands
 
-# --- 인텐트 및 봇 설정 ---
+# 인텐트 및 봇 설정
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=".", intents=intents)
 
-# --- DB 설정 및 테이블 생성 ---
-conn = sqlite3.connect('database.db')
-cur = conn.cursor()
+# DB 연결 옵션 추가 (경고 방지 및 스레드 안전성)
+# check_same_thread=False는 asyncio와 SQLite 사용 시 필수적입니다.
+conn = sqlite3.connect('database.db', detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES, check_same_thread=False)
+conn.row_factory = sqlite3.Row # 결과를 딕셔너리처럼 접근 가능하게 설정 (dict 튜플 대신)
 
-cur.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        balance INTEGER,
-        total_amount INTEGER,
-        transaction_count INTEGER
-    )
-''')
+# DB 접근 시 스레드 간 충돌 방지를 위한 락 (Lock)
+db_lock = threading.RLock()
 
-cur.execute('''
-    CREATE TABLE IF NOT EXISTS user_bans (
-        user_id TEXT PRIMARY KEY,
-        banned TEXT CHECK(banned IN ('o', 'x'))
-    )
-''')
+# DB 초기화
+def initialize_database():
+    with db_lock: # DB 작업은 락으로 보호
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                balance INTEGER DEFAULT 0,
+                total_amount INTEGER DEFAULT 0,
+                transaction_count INTEGER DEFAULT 0
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS user_bans (
+                user_id TEXT PRIMARY KEY,
+                banned TEXT CHECK(banned IN ('o', 'x')) DEFAULT 'x'
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS payment_methods (
+                user_id TEXT PRIMARY KEY,
+                account_transfer TEXT CHECK(account_transfer IN ('지원', '미지원')) DEFAULT '미지원',
+                coin_payment TEXT CHECK(coin_payment IN ('지원', '미지원')) DEFAULT '미지원',
+                mun_sang_payment TEXT CHECK(mun_sang_payment IN ('지원', '미지원')) DEFAULT '미지원'
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS bank_accounts (
+                user_id TEXT PRIMARY KEY,
+                bank_name TEXT,
+                account_holder TEXT,
+                account_number TEXT
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS charge_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                depositor_name TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                status TEXT DEFAULT '대기',
+                request_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
 
-cur.execute('''
-    CREATE TABLE IF NOT EXISTS payment_methods (
-        user_id TEXT PRIMARY KEY,
-        account_transfer TEXT CHECK(account_transfer IN ('지원', '미지원')),
-        coin_payment TEXT CHECK(coin_payment IN ('지원', '미지원')),
-        mun_sang_payment TEXT CHECK(mun_sang_payment IN ('지원', '미지원'))
-    )
-''')
+initialize_database()
 
-cur.execute('''
-    CREATE TABLE IF NOT EXISTS bank_accounts (
-        user_id TEXT PRIMARY KEY,
-        bank_name TEXT,
-        account_holder TEXT,
-        account_number TEXT
-    )
-''')
-
-conn.commit()
-
-# --- DB 관련 함수들 ---
+# DB 함수 정의 (모든 DB 접근은 락으로 보호)
 def add_or_update_user(user_id, balance, total_amount, transaction_count):
-    cur.execute('''
+    with db_lock:
+        cur.execute('''
         INSERT INTO users (user_id, balance, total_amount, transaction_count)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
         balance=excluded.balance,
         total_amount=excluded.total_amount,
         transaction_count=excluded.transaction_count
-    ''', (user_id, balance, total_amount, transaction_count))
-    conn.commit()
+        ''', (user_id, balance, total_amount, transaction_count))
+        conn.commit()
 
 def set_user_ban(user_id, status):
-    cur.execute('''
-        INSERT INTO user_bans (user_id, banned) VALUES (?, ?)
+    with db_lock:
+        cur.execute('''
+        INSERT INTO user_bans (user_id, banned)
+        VALUES (?, ?)
         ON CONFLICT(user_id) DO UPDATE SET banned=excluded.banned
-    ''', (user_id, status))
-    conn.commit()
+        ''', (user_id, status))
+        conn.commit()
 
 def get_user_ban(user_id):
-    cur.execute('SELECT banned FROM user_bans WHERE user_id = ?', (user_id,))
-    result = cur.fetchone()
-    return result[0] if result else 'x' # 기본값 'x' (밴 아님)
+    with db_lock:
+        cur.execute('SELECT banned FROM user_bans WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        return result['banned'] if result else 'x'
 
 def get_user_info(user_id):
-    cur.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-    return cur.fetchone()
+    with db_lock:
+        cur.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        return cur.fetchone()
 
 def set_payment_methods(user_id, account_transfer, coin_payment, mun_sang):
-    cur.execute('''
+    with db_lock:
+        cur.execute('''
         INSERT INTO payment_methods (user_id, account_transfer, coin_payment, mun_sang_payment)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
         account_transfer=excluded.account_transfer,
         coin_payment=excluded.coin_payment,
         mun_sang_payment=excluded.mun_sang_payment
-    ''', (user_id, account_transfer, coin_payment, mun_sang))
-    conn.commit()
+        ''', (user_id, account_transfer, coin_payment, mun_sang))
+        conn.commit()
 
 def get_payment_methods(user_id):
-    cur.execute('SELECT account_transfer, coin_payment, mun_sang_payment FROM payment_methods WHERE user_id = ?', (user_id,))
-    result = cur.fetchone()
-    return result if result else ('미지원', '미지원', '미지원')
+    with db_lock:
+        cur.execute('SELECT account_transfer, coin_payment, mun_sang_payment FROM payment_methods WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        # Row 객체에서 값 가져올 때 인덱스 대신 컬럼 이름으로 접근하도록 수정
+        return (result['account_transfer'], result['coin_payment'], result['mun_sang_payment']) if result else ('미지원', '미지원', '미지원')
 
 def set_bank_account(user_id, bank_name, account_holder, account_number):
-    cur.execute('''
+    with db_lock:
+        cur.execute('''
         INSERT INTO bank_accounts (user_id, bank_name, account_holder, account_number)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
         bank_name=excluded.bank_name,
         account_holder=excluded.account_holder,
         account_number=excluded.account_number
-    ''', (user_id, bank_name, account_holder, account_number))
-    conn.commit()
+        ''', (user_id, bank_name, account_holder, account_number))
+        conn.commit()
 
 def get_bank_account(user_id):
-    cur.execute('SELECT bank_name, account_holder, account_number FROM bank_accounts WHERE user_id = ?', (user_id,))
-    result = cur.fetchone()
-    return result if result else (None, None, None)
+    with db_lock:
+        cur.execute('SELECT bank_name, account_holder, account_number FROM bank_accounts WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        # Row 객체에서 값 가져올 때 인덱스 대신 컬럼 이름으로 접근하도록 수정
+        return (result['bank_name'], result['account_holder'], result['account_number']) if result else (None, None, None)
+
+def create_charge_request(user_id, depositor_name, amount):
+    with db_lock:
+        cur.execute('''
+        INSERT INTO charge_requests (user_id, depositor_name, amount, status)
+        VALUES (?, ?, ?, '대기')
+        ''', (user_id, depositor_name, amount))
+        conn.commit()
 
 async def check_vending_access(user_id):
     return get_user_ban(user_id) != 'o'
 
-# --- UI 뷰 클래스 정의 ---
+# 자동 충전 처리 태스크 (5분 제한 및 컨테이너 메시지 포함)
+async def auto_process_charge_requests():
+    while True:
+        try:
+            now = datetime.datetime.now() # 현재 시간
+            with db_lock:
+                cur.execute("SELECT id, user_id, amount, depositor_name, request_time FROM charge_requests WHERE status = '대기'")
+                requests = cur.fetchall() # 모든 대기중인 요청 가져오기
+            
+            for req in requests:
+                req_id = req['id']
+                user_id = req['user_id']
+                amount = req['amount']
+                depositor_name = req['depositor_name']
+                request_time_str = req['request_time'] # SQLite에서 가져온 시간 문자열
+                
+                # SQLite의 request_time 문자열을 datetime 객체로 변환
+                # datetime.datetime.fromisoformat은 'Z'를 인식 못하므로 '+'로 변환
+                request_time = datetime.datetime.fromisoformat(request_time_str.replace('Z', '+00:00'))
+
+                time_diff = (now - request_time).total_seconds() # 경과 시간 계산
+                
+                user = await bot.fetch_user(int(user_id)) # 사용자 객체 가져오기 (알림용)
+                if not user:
+                    print(f"사용자 ID {user_id}를 찾을 수 없어 스킵")
+                    with db_lock:
+                        cur.execute("UPDATE charge_requests SET status = '실패' WHERE id = ?", (req_id,))
+                        conn.commit()
+                    continue
+
+                if time_diff > 300:  # 5분(300초) 초과
+                    # 만료 처리
+                    with db_lock:
+                        cur.execute("UPDATE charge_requests SET status = '만료' WHERE id = ?", (req_id,))
+                        conn.commit()
+                    
+                    # 만료 알림 전송 (컨테이너 뷰 사용)
+                    try:
+                        view = ChargeExpiredView(depositor_name, amount)
+                        await user.send(view=view)
+                        print(f"충전 요청 {req_id} 만료 처리 및 알림 전송 (5분 초과)")
+                    except Exception as e:
+                        print(f"만료 알림 전송 실패 user_id={user_id}: {e}")
+                    
+                    continue  # 다음 요청으로 넘어감
+                
+                # 5분 이내의 요청만 처리 (실제 충전)
+                user_info = get_user_info(user_id) # 최신 유저 정보 가져오기 (락 이미 걸림)
+                
+                old_balance = user_info['balance'] if user_info else 0
+                new_balance = old_balance + amount
+                total_amount = (user_info['total_amount'] if user_info else 0) + amount
+                transaction_count = (user_info['transaction_count'] if user_info else 0) + 1
+
+                add_or_update_user(user_id, new_balance, total_amount, transaction_count) # 사용자 정보 업데이트
+
+                with db_lock:
+                    cur.execute("UPDATE charge_requests SET status = '완료' WHERE id = ?", (req_id,))
+                    conn.commit()
+                
+                print(f"자동충전 완료: 사용자 {user_id}, 금액 {amount}원")
+                
+                # 충전 완료 알림 전송 (컨테이너 뷰 사용)
+                try:
+                    view = ChargeCompleteView(old_balance, new_balance)
+                    await user.send(view=view)
+                except Exception as e:
+                    print(f"충전 완료 알림 전송 실패 user_id={user_id}: {e}")
+                    
+        except Exception as e:
+            print(f"자동충전 처리 태스크 전체 오류: {e}")
+        
+        await asyncio.sleep(30) # 30초마다 확인
+
+# --- UI 뷰 클래스 정의 --- (요청하신 대로 모든 메시지가 컨테이너로 표시됩니다)
 
 # 자판기 밴 상태 안내 뷰
 class VendingBanView(ui.LayoutView):
@@ -180,7 +290,7 @@ class BankAccountSetView(ui.LayoutView):
         c.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
         self.add_item(c)
 
-# 계좌이체 신청 완료 안내 뷰
+# 계좌이체 신청 완료 안내 뷰 (사용자가 모달 제출 후 받음)
 class ChargeRequestCompleteView(ui.LayoutView):
     def __init__(self, bank_name, account_holder, account_number, amount):
         super().__init__(timeout=None)
@@ -213,66 +323,55 @@ class ChargeView(ui.LayoutView):
         custom_emoji8 = PartialEmoji(name="bitcoin", id=1423544805975265374) # 비트코인 이모지 (예시 ID)
         custom_emoji9 = PartialEmoji(name="1200x630wa", id=1423544804721164370) # 문화상품권 이모지 (예시 ID)
 
-        account_button = None
-        if account_transfer == "지원":
-            account_button = ui.Button(label="계좌이체", custom_id="pay_account", emoji=custom_emoji7, style=discord.ButtonStyle.primary)
-            account_button.callback = self.account_button_callback
-        else:
-            account_button = ui.Button(label="계좌이체", disabled=True, emoji=custom_emoji7, style=discord.ButtonStyle.secondary)
+        # 지원 여부에 따라 버튼 활성화/비활성화
+        account_button = ui.Button(label="계좌이체", custom_id="pay_account", emoji=custom_emoji7,
+                                   style=discord.ButtonStyle.primary if account_transfer == "지원" else discord.ButtonStyle.secondary,
+                                   disabled=account_transfer != "지원")
+        account_button.callback = self.account_button_callback
 
-        coin_button = None
-        if coin_payment == "지원":
-            coin_button = ui.Button(label="코인결제", custom_id="pay_coin", emoji=custom_emoji8, style=discord.ButtonStyle.primary)
-            coin_button.callback = self.coin_button_callback # 코인결제 콜백 추가 (필요시 구현)
-        else:
-            coin_button = ui.Button(label="코인결제", disabled=True, emoji=custom_emoji8, style=discord.ButtonStyle.secondary)
+        coin_button = ui.Button(label="코인결제", custom_id="pay_coin", emoji=custom_emoji8,
+                                style=discord.ButtonStyle.primary if coin_payment == "지원" else discord.ButtonStyle.secondary,
+                                disabled=coin_payment != "지원")
+        coin_button.callback = self.coin_button_callback
 
-        mun_sang_button = None
-        if mun_sang == "지원":
-            mun_sang_button = ui.Button(label="문상결제", custom_id="pay_munsang", emoji=custom_emoji9, style=discord.ButtonStyle.primary)
-            mun_sang_button.callback = self.munsang_button_callback # 문상결제 콜백 추가 (필요시 구현)
-        else:
-            mun_sang_button = ui.Button(label="문상결제", disabled=True, emoji=custom_emoji9, style=discord.ButtonStyle.secondary)
+        mun_sang_button = ui.Button(label="문상결제", custom_id="pay_munsang", emoji=custom_emoji9,
+                                    style=discord.ButtonStyle.primary if mun_sang == "지원" else discord.ButtonStyle.secondary,
+                                    disabled=mun_sang != "지원")
+        mun_sang_button.callback = self.munsang_button_callback
 
         c.add_item(ui.ActionRow(account_button, coin_button, mun_sang_button))
         
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         supported = []
-        if account_transfer == "지원":
-            supported.append("계좌이체")
-        if coin_payment == "지원":
-            supported.append("코인결제")
-        if mun_sang == "지원":
-            supported.append("문상결제")
+        if account_transfer == "지원": supported.append("계좌이체")
+        if coin_payment == "지원": supported.append("코인결제")
+        if mun_sang == "지원": supported.append("문상결제")
 
         supported_text = ", ".join(supported) if supported else "없음"
         c.add_item(ui.TextDisplay(f"결제가능한 서비스 = {supported_text}"))
         self.add_item(c)
     
-    # 계좌이체 버튼 콜백
     async def account_button_callback(self, interaction: discord.Interaction):
         try:
             user_id = str(interaction.user.id)
             bank_name, account_holder, account_number = get_bank_account(user_id)
 
             if not bank_name:
-                await interaction.response.send_message("먼저 `/계좌번호_설정` 명령어로 계좌 정보를 설정해주세요.", ephemeral=True)
+                await interaction.response.send_message(view=ErrorMessageView("먼저 `/계좌번호_설정` 명령어로 계좌 정보를 설정해주세요."), ephemeral=True)
                 return
 
             modal = AccountTransferModal(bank_name, account_holder, account_number)
             await interaction.response.send_modal(modal)
         except Exception as e:
             print(f"계좌이체 버튼 오류: {e}")
-            await interaction.response.send_message("오류가 발생했습니다. 다시 시도해주세요.", ephemeral=True)
+            await interaction.response.send_message(view=ErrorMessageView("오류가 발생했습니다. 다시 시도해주세요."), ephemeral=True)
 
-    # 코인결제 버튼 콜백 (필요시 구현)
     async def coin_button_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("코인결제 기능은 아직 구현되지 않았습니다.", ephemeral=True)
+        await interaction.response.send_message(view=ErrorMessageView("코인결제 기능은 아직 구현되지 않았습니다."), ephemeral=True)
 
-    # 문상결제 버튼 콜백 (필요시 구현)
     async def munsang_button_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("문상결제 기능은 아직 구현되지 않았습니다.", ephemeral=True)
+        await interaction.response.send_message(view=ErrorMessageView("문상결제 기능은 아직 구현되지 않았습니다."), ephemeral=True)
 
 class UserInfoView(ui.LayoutView):
     def __init__(self, user_name, balance, total_amount, transaction_count):
@@ -280,8 +379,8 @@ class UserInfoView(ui.LayoutView):
         c = ui.Container()
         c.add_item(ui.TextDisplay(f"**{user_name}님 정보**"))
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        c.add_item(ui.TextDisplay(f"**남은 금액** = __{balance}원__"))
-        c.add_item(ui.TextDisplay(f"**누적 금액** = __{total_amount}원__"))
+        c.add_item(ui.TextDisplay(f"**남은 금액** = __{balance:,}원__"))
+        c.add_item(ui.TextDisplay(f"**누적 금액** = __{total_amount:,}원__"))
         c.add_item(ui.TextDisplay(f"**거래 횟수** = __{transaction_count}번__"))
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("항상 이용해주셔서 감사합니다."))
@@ -297,9 +396,6 @@ class NoticeView(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
         self.add_item(c)
-
-# 버튼 상호작용 오류 방지를 위한 뷰 저장소 (Persistent View를 위한 기본 틀, 현재 코드에서 직접적인 재등록 로직은 비활성화)
-active_views = {}
 
 class MyLayout(ui.LayoutView):
     def __init__(self):
@@ -344,58 +440,45 @@ class MyLayout(ui.LayoutView):
     async def button_1_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         if not await check_vending_access(user_id):
-            view = VendingBanView()
-            await interaction.response.send_message(view=view, ephemeral=True)
+            await interaction.response.send_message(view=VendingBanView(), ephemeral=True)
             return
-
-        view = NoticeView()
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(view=NoticeView(), ephemeral=True)
 
     # 충전 버튼 콜백
     async def button_2_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         if not await check_vending_access(user_id):
-            view = VendingBanView()
-            await interaction.response.send_message(view=view, ephemeral=True)
+            await interaction.response.send_message(view=VendingBanView(), ephemeral=True)
             return
         
         account, coin, mun_sang = get_payment_methods(user_id)
-        view = ChargeView(account, coin, mun_sang)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(view=ChargeView(account, coin, mun_sang), ephemeral=True)
 
     # 내 정보 버튼 콜백
     async def button_3_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         if not await check_vending_access(user_id):
-            view = VendingBanView()
-            await interaction.response.send_message(view=view, ephemeral=True)
+            await interaction.response.send_message(view=VendingBanView(), ephemeral=True)
             return
 
         info = get_user_info(user_id)
-        if info:
-            balance = info[1]
-            total_amount = info[2]
-            transaction_count = info[3]
-        else:
-            balance = total_amount = transaction_count = 0
+        balance = info['balance'] if info else 0
+        total_amount = info['total_amount'] if info else 0
+        transaction_count = info['transaction_count'] if info else 0
 
-        view = UserInfoView(interaction.user.name, balance, total_amount, transaction_count)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(view=UserInfoView(interaction.user.name, balance, total_amount, transaction_count), ephemeral=True)
 
     # 구매 버튼 콜백
     async def button_4_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         if not await check_vending_access(user_id):
-            view = VendingBanView()
-            await interaction.response.send_message(view=view, ephemeral=True)
+            await interaction.response.send_message(view=VendingBanView(), ephemeral=True)
             return
-
-        await interaction.response.send_message("구매 기능은 아직 구현되지 않았습니다.", ephemeral=True) # 임시 메시지
+        await interaction.response.send_message(view=ErrorMessageView("구매 기능은 아직 구현되지 않았습니다."), ephemeral=True)
 
 
 # --- 모달 클래스 정의 ---
 
-# 계좌번호 설정 모달
 class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
     bank_name_input = ui.TextInput(label="은행명", style=discord.TextStyle.short, required=True, max_length=20)
     account_holder_input = ui.TextInput(label="예금주", style=discord.TextStyle.short, required=True, max_length=20)
@@ -408,13 +491,8 @@ class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
         account_number = self.account_number_input.value
 
         set_bank_account(user_id, bank_name, account_holder, account_number)
-        view = BankAccountSetView(bank_name, account_holder, account_number)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(view=BankAccountSetView(bank_name, account_holder, account_number), ephemeral=True)
 
-# 계좌이체 신청 모달
-# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-# 이 부분이 수정되었습니다.
-# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
 class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
     def __init__(self, bank_name, account_holder, account_number):
         super().__init__(timeout=None)
@@ -422,47 +500,47 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
         self.account_holder = account_holder
         self.account_number = account_number
 
-        self.depositor_name_input = ui.TextInput(
-            label="입금자명",
-            style=discord.TextStyle.short,
-            required=True,
-            min_length=2, max_length=10
-        )
-        self.amount_input = ui.TextInput(
-            label="금액",
-            placeholder="숫자만 입력해주세요. (예: 5000)",
-            style=discord.TextStyle.short,
-            required=True,
-            min_length=3, max_length=15
-        )
+        self.depositor_name_input = ui.TextInput(label="입금자명", style=discord.TextStyle.short, required=True, min_length=2, max_length=10)
+        self.amount_input = ui.TextInput(label="금액", placeholder="숫자만 입력해주세요. (예: 5000)", style=discord.TextStyle.short, required=True, min_length=1, max_length=15)
         self.add_item(self.depositor_name_input)
         self.add_item(self.amount_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        depositor_name = self.depositor_name_input.value
-        amount = self.amount_input.value
+        user_id = str(interaction.user.id)
+        depositor_name = self.depositor_name_input.value.strip()
+        amount_str = self.amount_input.value.strip()
 
         try:
-            amount_value = int(amount.replace(',', ''))
+            amount_value = int(amount_str.replace(',', ''))
+            if amount_value <= 0:
+                raise ValueError("금액은 0보다 커야 합니다.")
         except ValueError:
-            await interaction.response.send_message("금액은 숫자로만 입력해주세요!", ephemeral=True)
+            await interaction.response.send_message(view=ErrorMessageView("금액은 유효한 숫자로 입력해주세요!"), ephemeral=True)
             return
-
-        view = ChargeRequestCompleteView(
-            bank_name=self.bank_name,
-            account_holder=self.account_holder,
-            account_number=self.account_number,
-            amount=f"{amount_value:,}"
-        )
         
-        await interaction.response.send_message(view=view, ephemeral=True)
+        # 충전 요청 DB에 기록 (auto_process_charge_requests가 처리)
+        create_charge_request(user_id, depositor_name, amount_value)
+
+        await interaction.response.send_message(view=ChargeRequestCompleteView(self.bank_name, self.account_holder, self.account_number, f"{amount_value:,}"), ephemeral=True)
+
+# 모든 일반적인 오류 메시지 (임시용)
+class ErrorMessageView(ui.LayoutView):
+    def __init__(self, message="오류가 발생했습니다. 다시 시도해주세요."):
+        super().__init__(timeout=None)
+        c = ui.Container()
+        c.add_item(ui.TextDisplay(f"❌ **오류 발생**"))
+        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        c.add_item(ui.TextDisplay(message))
+        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        c.add_item(ui.TextDisplay("문의가 필요하면 관리자에게 연락해주세요."))
+        self.add_item(c)
+
 
 # --- 슬래시 명령어 정의 ---
 
 @bot.tree.command(name="버튼패널", description="버튼 패널을 표시합니다.")
 async def button_panel(interaction: discord.Interaction):
-    layout = MyLayout()
-    await interaction.response.send_message(view=layout, ephemeral=None)
+    await interaction.response.send_message(view=MyLayout(), ephemeral=None)
 
 @bot.tree.command(name="자판기_이용_설정", description="자판기 이용을 금지할 수 있습니다")
 @discord.app_commands.describe(
@@ -480,11 +558,9 @@ async def vending_machine_ban(interaction: discord.Interaction, target_user: dis
     set_user_ban(user_id, ban_status.value)
 
     if ban_status.value == 'o':
-        view = BanSetView(target_user.name)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(view=BanSetView(target_user.name), ephemeral=True)
     else:
-        view = UnbanSetView(target_user.name)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(view=UnbanSetView(target_user.name), ephemeral=True)
 
 @bot.tree.command(name="결제수단_설정", description="봇에서 지원할 결제 수단을 설정합니다.")
 @discord.app_commands.describe(
@@ -514,8 +590,7 @@ async def payment_method_set(
 ):
     user_id = str(interaction.user.id)
     set_payment_methods(user_id, account_transfer.value, coin_payment.value, mun_sang.value)
-    view = PaymentMethodView(account_transfer.value, coin_payment.value, mun_sang.value)
-    await interaction.response.send_message(view=view, ephemeral=True)
+    await interaction.response.send_message(view=PaymentMethodView(account_transfer.value, coin_payment.value, mun_sang.value), ephemeral=True)
 
 @bot.tree.command(name="계좌번호_설정", description="봇에 사용될 계좌 정보를 설정합니다.")
 async def set_bank_account_cmd(interaction: discord.Interaction):
@@ -528,11 +603,13 @@ async def set_bank_account_cmd(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     print(f"로벅스 자판기 봇이 {bot.user}로 로그인했습니다.")
+    bot.loop.create_task(auto_process_charge_requests()) # 자동 충전 태스크 시작
     try:
         synced = await bot.tree.sync()
         print(f'{len(synced)}개의 명령어가 동기화되었습니다.')
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
+
 # --- 봇 실행 ---
-bot.run("") # 여기에 봇 토큰을 입력하세요
+bot.run("YOUR_BOT_TOKEN") # 여기에 봇 토큰을 입력하세요 (예: os.getenv('DISCORD_BOT_TOKEN'))
