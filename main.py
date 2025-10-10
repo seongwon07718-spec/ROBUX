@@ -306,16 +306,13 @@ class MyLayout(ui.LayoutView):
         super().__init__(timeout=None) # 뷰 만료 시간 없음
         
         c = ui.Container(ui.TextDisplay(
-            "**로벅스 자판기**\n아래 버튼을 눌러 이용해주세요\n자충 오류시 [문의 바로가기](http://discord.com/channels/1419200424636055592/1423477824865439884)"
+            "**로벅스 자판기**\n-# 버튼을 눌러 이용해주세요 !"
         ))
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         
         # 로벅스 재고 및 총 판매량 섹션 (업데이트 로직은 별도 구현 필요)
         sessao = ui.Section(ui.TextDisplay("**로벅스 재고**\n-# 60초마다 갱신됩니다"), accessory=ui.Button(label="0로벅스", disabled=True))
         c.add_item(sessao)
-        
-        sessao2 = ui.Section(ui.TextDisplay("**총 판매량**\n-# 총 판매된 로벅스량"), accessory=ui.Button(label="0로벅스", disabled=True))
-        c.add_item(sessao2)
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         # 이모지 (예시 ID, 실제 사용 시 올바른 ID로 변경)
@@ -335,9 +332,6 @@ class MyLayout(ui.LayoutView):
 
         c.add_item(linha)
         c.add_item(linha2)
-        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        c.add_item(ui.TextDisplay("윈드마켓 / 로벅스 자판기 / 2025 / GMT+09:00"))
-
         self.add_item(c)
 
         # 콜백 함수 연결
@@ -426,7 +420,7 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
         self.account_number = account_number
 
         self.depositor_name_input = ui.TextInput(
-            label="입금자명 (한글 2~4글자)", 
+            label="입금자명", 
             style=discord.TextStyle.short, 
             required=True, 
             min_length=2, max_length=4
@@ -435,7 +429,7 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
             label="금액", 
             style=discord.TextStyle.short, 
             required=True,
-            min_length=1, max_length=10 # 금액의 최대 길이를 10자리로 제한 (약 100억)
+            min_length=1, max_length=4000 
         )
         self.add_item(self.depositor_name_input)
         self.add_item(self.amount_input)
@@ -473,7 +467,7 @@ async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
     # 뷰 보존을 위해 저장 (현재는 단순히 참조를 유지하여 GC 방지, Persistent View 재등록 로직은 제외)
     # active_views[str(interaction.message.id) if interaction.message else "no_msg_id"] = layout
-    await interaction.response.send_message(view=layout, ephemeral=True) # 기본적으로 임시 메시지로 응답
+    await interaction.response.send_message(view=layout, ephemeral=None) # 기본적으로 임시 메시지로 응답
 
 @bot.tree.command(name="자판기_이용_설정", description="특정 유저의 자판기 이용 밴 상태를 설정합니다.")
 @discord.app_commands.describe(
@@ -547,4 +541,4 @@ async def on_ready():
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
 # --- 봇 실행 ---
-bot.run("YOUR_BOT_TOKEN") # 여기에 봇 토큰을 입력하세요
+bot.run("") # 여기에 봇 토큰을 입력하세요
