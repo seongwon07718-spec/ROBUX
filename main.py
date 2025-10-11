@@ -1,10 +1,11 @@
 import discord
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import asyncio
 import datetime
 import threading
 import re
-from flask import Flask, request, jsonify # Flask API 서버를 위한 임포트
+from flask import Flask, request, jsonify
 from discord import PartialEmoji, ui
 from discord.ext import commands
 
@@ -12,21 +13,32 @@ from discord.ext import commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=".", intents=intents)
 
-# === DB 설정 및 초기화 ===
-# DB 연결 (스레드 안전성 확보)
-conn = sqlite3.connect(
-    "database.db",
-    detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-    check_same_thread=False, # asyncio와 SQLite 사용 시 필수적
-)
-conn.row_factory = sqlite3.Row # 결과를 딕셔너리처럼 접근 가능하게 설정
-cur = conn.cursor()
+# === PostgreSQL DB 설정 ===
+DB_HOST = "localhost"
+DB_NAME = "vending_machine"
+DB_USER = "postgres"
+DB_PASSWORD = "password"
+DB_PORT = "5432"
 
-# DB 접근 시 스레드 간 충돌 방지를 위한 락 (Lock)
+# DB 락 설정
 db_lock = threading.RLock()
 
+def get_connection():
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        port=DB_PORT
+    )
+    return conn
+
 def initialize_database():
-    with db_lock: # DB 작업은 락으로 보호
+    with db_lock:
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        # PostgreSQL용 테이블 생성
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -35,20 +47,27 @@ def initialize_database():
                 transaction_count INTEGER DEFAULT 0
             )
         ''')
+        
         cur.execute('''
             CREATE TABLE IF NOT EXISTS user_bans (
                 user_id TEXT PRIMARY KEY,
-                banned TEXT CHECK(banned IN ('o', 'x')) DEFAULT 'x'
+                banned TEXT DEFAULT 'x',
+                CONSTRAINT check_banned CHECK (banned IN ('o', 'x'))
             )
         ''')
+        
         cur.execute('''
             CREATE TABLE IF NOT EXISTS payment_methods (
                 user_id TEXT PRIMARY KEY,
-                account_transfer TEXT CHECK(account_transfer IN ('지원', '미지원')) DEFAULT '미지원',
-                coin_payment TEXT CHECK(coin_payment IN ('지원', '미지원')) DEFAULT '미지원',
-                mun_sang_payment TEXT CHECK(mun_sang_payment IN ('지원', '미지원')) DEFAULT '미지원'
+                account_transfer TEXT DEFAULT '미지원',
+                coin_payment TEXT DEFAULT '미지원',
+                mun_sang_payment TEXT DEFAULT '미지원',
+                CONSTRAINT check_account_transfer CHECK (account_transfer IN ('지원', '미지원')),
+                CONSTRAINT check_coin_payment CHECK (coin_payment IN ('지원', '미지원')),
+                CONSTRAINT check_mun_sang CHECK (mun_sang_payment IN ('지원', '미지원'))
             )
         ''')
+        
         cur.execute('''
             CREATE TABLE IF NOT EXISTS bank_accounts (
                 user_id TEXT PRIMARY KEY,
@@ -57,9 +76,10 @@ def initialize_database():
                 account_number TEXT
             )
         ''')
+        
         cur.execute('''
             CREATE TABLE IF NOT EXISTS charge_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 depositor_name TEXT NOT NULL,
                 amount INTEGER NOT NULL,
@@ -67,94 +87,122 @@ def initialize_database():
                 request_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         conn.commit()
+        conn.close()
 
 initialize_database()
-
 # === DB 함수 정의 (모든 DB 접근은 락으로 보호) ===
 
 def add_or_update_user(user_id, balance, total_amount, transaction_count):
     with db_lock:
+        conn = get_connection()
+        cur = conn.cursor()
         cur.execute('''
             INSERT INTO users (user_id, balance, total_amount, transaction_count)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                balance=excluded.balance,
-                total_amount=excluded.total_amount,
-                transaction_count=excluded.transaction_count
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                balance = EXCLUDED.balance,
+                total_amount = EXCLUDED.total_amount,
+                transaction_count = EXCLUDED.transaction_count
         ''', (user_id, balance, total_amount, transaction_count))
         conn.commit()
+        conn.close()
 
 def set_user_ban(user_id, status):
     with db_lock:
+        conn = get_connection()
+        cur = conn.cursor()
         cur.execute('''
             INSERT INTO user_bans (user_id, banned)
-            VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET banned=excluded.banned
+            VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET banned = EXCLUDED.banned
         ''', (user_id, status))
         conn.commit()
+        conn.close()
 
 def get_user_ban(user_id):
     with db_lock:
-        cur.execute("SELECT banned FROM user_bans WHERE user_id = ?", (user_id,))
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute("SELECT banned FROM user_bans WHERE user_id = %s", (user_id,))
         result = cur.fetchone()
+        conn.close()
         return result["banned"] if result else "x"
 
 def get_user_info(user_id):
     with db_lock:
-        cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        return cur.fetchone()
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        return result
 
 def set_payment_methods(user_id, account_transfer, coin_payment, mun_sang):
     with db_lock:
+        conn = get_connection()
+        cur = conn.cursor()
         cur.execute('''
             INSERT INTO payment_methods (user_id, account_transfer, coin_payment, mun_sang_payment)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                account_transfer=excluded.account_transfer,
-                coin_payment=excluded.coin_payment,
-                mun_sang_payment=excluded.mun_sang_payment
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                account_transfer = EXCLUDED.account_transfer,
+                coin_payment = EXCLUDED.coin_payment,
+                mun_sang_payment = EXCLUDED.mun_sang_payment
         ''', (user_id, account_transfer, coin_payment, mun_sang))
         conn.commit()
-
-def get_payment_methods(user_id):
+        conn.close()
+     def get_payment_methods(user_id):
     with db_lock:
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cur.execute(
-            "SELECT account_transfer, coin_payment, mun_sang_payment FROM payment_methods WHERE user_id = ?",
-            (user_id,),
+            "SELECT account_transfer, coin_payment, mun_sang_payment FROM payment_methods WHERE user_id = %s",
+            (user_id,)
         )
         result = cur.fetchone()
+        conn.close()
         if result:
             return (result["account_transfer"], result["coin_payment"], result["mun_sang_payment"])
         return ("미지원", "미지원", "미지원")
 
 def set_bank_account(user_id, bank_name, account_holder, account_number):
     with db_lock:
+        conn = get_connection()
+        cur = conn.cursor()
         cur.execute('''
             INSERT INTO bank_accounts (user_id, bank_name, account_holder, account_number)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                bank_name=excluded.bank_name,
-                account_holder=excluded.account_holder,
-                account_number=excluded.account_number
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                bank_name = EXCLUDED.bank_name,
+                account_holder = EXCLUDED.account_holder,
+                account_number = EXCLUDED.account_number
         ''', (user_id, bank_name, account_holder, account_number))
         conn.commit()
+        conn.close()
 
 def get_bank_account(user_id):
     with db_lock:
-        cur.execute("SELECT bank_name, account_holder, account_number FROM bank_accounts WHERE user_id = ?", (user_id,))
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute("SELECT bank_name, account_holder, account_number FROM bank_accounts WHERE user_id = %s", (user_id,))
         result = cur.fetchone()
+        conn.close()
         if result:
             return (result["bank_name"], result["account_holder"], result["account_number"])
         return (None, None, None)
 
 def create_charge_request(user_id, depositor_name, amount):
     with db_lock:
+        conn = get_connection()
+        cur = conn.cursor()
         cur.execute('''
             INSERT INTO charge_requests (user_id, depositor_name, amount, status, request_time)
-            VALUES (?, ?, ?, '대기', ?)
-        ''', (user_id, depositor_name, amount, datetime.datetime.utcnow().isoformat())) # UTC 시간 저장
+            VALUES (%s, %s, %s, '대기', %s)
+        ''', (user_id, depositor_name, amount, datetime.datetime.now(datetime.timezone.utc)))
         conn.commit()
+        conn.close()
 
 async def check_vending_access(user_id):
     return get_user_ban(user_id) != "o"
@@ -164,20 +212,27 @@ async def auto_process_charge_requests():
         try:
             now = datetime.datetime.now(datetime.timezone.utc)  # UTC 시간으로 통일
             with db_lock:
+                conn = get_connection()
+                cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
                 cur.execute(
-                    "SELECT * FROM charge_requests WHERE status = '대기'"
+                    "SELECT id, user_id, amount, depositor_name, request_time FROM charge_requests WHERE status = '대기'"
                 )
                 requests = cur.fetchall()
+                conn.close()
 
             for req in requests:
                 req_id = req["id"]
                 user_id = req["user_id"]
                 amount = req["amount"]
                 depositor_name = req["depositor_name"]
-                # SQLite가 저장한 timestamp가 UTC 가정
+                # PostgreSQL은 timestamp를 자동으로 datetime으로 변환
                 request_time = req["request_time"]
-                if isinstance(request_time, str):  # 문자열이면 datetime으로 변환
+                
+                # 혹시 문자열로 저장된 경우를 대비 (psycopg2는 datetime으로 반환해야 함)
+                if isinstance(request_time, str):
+                    # isoformat()으로 저장된 UTC 시간 문자열을 datetime 객체로 변환
                     request_time = datetime.datetime.fromisoformat(request_time.replace('Z', '+00:00'))
+
 
                 elapsed = (now - request_time).total_seconds()
 
@@ -189,19 +244,23 @@ async def auto_process_charge_requests():
 
                 if elapsed > 300:  # 5분(300초) 초과 시 만료
                     with db_lock:
-                        cur.execute("UPDATE charge_requests SET status='만료' WHERE id=?", (req_id,))
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        cur.execute("UPDATE charge_requests SET status='만료' WHERE id=%s", (req_id,))
                         conn.commit()
+                        conn.close()
+                        
                     if user:
                         try:
-                            view = ChargeExpiredView(depositor_name, amount)
-                            await user.send(view=view)
+                            # ChargeExpiredView는 정의되지 않아 임시 메시지 사용
+                            await user.send(f"⚠️ **충전 요청 만료 안내**\n입금자명: __{depositor_name}__\n금액: __{amount:,}원__\n5분 이내 입금 확인이 안되어 충전 요청이 만료되었습니다. 다시 신청해주세요.")
                             print(f"충전 요청 {req_id} 만료 처리 및 알림 전송 (5분 초과)")
                         except Exception as e:
                             print(f"만료 알림 전송 실패 user_id={user_id}: {e}")
                     continue  # 다음 요청으로 넘어감
 
                 # 5분 이내의 요청만 처리 (실제 충전)
-                user_info = get_user_info(user_id)  # 최신 유저 정보 가져오기 (락 이미 걸림)
+                user_info = get_user_info(user_id)  # 최신 유저 정보 가져오기
                 
                 old_balance = user_info["balance"] if user_info else 0
                 new_balance = old_balance + amount
@@ -211,16 +270,19 @@ async def auto_process_charge_requests():
                 add_or_update_user(user_id, new_balance, total_amount, transaction_count)  # 사용자 정보 업데이트
 
                 with db_lock:
-                    cur.execute("UPDATE charge_requests SET status='완료' WHERE id=?", (req_id,))
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("UPDATE charge_requests SET status='완료' WHERE id=%s", (req_id,))
                     conn.commit()
+                    conn.close()
                 
                 print(f"자동충전 완료: 사용자 {user_id}, 금액 {amount}원")
                 
                 # 충전 완료 알림 전송 (컨테이너 뷰 사용)
                 if user:
                     try:
-                        view = ChargeCompleteView(old_balance, new_balance)
-                        await user.send(view=view)
+                        # ChargeCompleteView는 정의되지 않아 임시 메시지 사용
+                        await user.send(f"✅ **정상적으로 충전이 완료되었습니다**\n**원래 금액** = `{old_balance:,}원`\n**충전 후 금액** = `{new_balance:,}원`")
                     except Exception as e:
                         print(f"충전 완료 알림 전송 실패 user_id={user_id}: {e}")
                     
@@ -228,7 +290,6 @@ async def auto_process_charge_requests():
             print(f"자동충전 처리 태스크 전체 오류: {e}")
         
         await asyncio.sleep(30)  # 30초마다 확인
-
 # === UI 뷰 클래스 정의 ===
 
 # 충전 완료 컨테이너 뷰
@@ -268,7 +329,7 @@ class VendingBanView(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("자판기 이용이 제한되어 있습니다"))
         self.add_item(c)
-# 밴 설정 결과 안내 뷰 (차단)
+        # 밴 설정 결과 안내 뷰 (차단)
 class BanSetView(ui.LayoutView):
     def __init__(self, user_name):
         super().__init__(timeout=None)
@@ -321,8 +382,7 @@ class BankAccountSetView(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("성공적으로 완료되었습니다."))
         self.add_item(c)
-
-# 계좌이체 신청 완료 안내 뷰
+        # 계좌이체 신청 완료 안내 뷰
 class ChargeRequestCompleteView(ui.LayoutView):
     def __init__(self, bank_name, account_holder, account_number, amount):
         super().__init__(timeout=None)
@@ -340,6 +400,7 @@ class ChargeRequestCompleteView(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("자충 오류시 티켓 열고 이중창해주세요."))
         self.add_item(c)
+
 # 충전 결제수단 선택 뷰
 class ChargeView(ui.LayoutView):
     def __init__(self, account_transfer, coin_payment, mun_sang):
@@ -417,7 +478,6 @@ class UserInfoView(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("항상 이용해주셔서 감사합니다."))
         self.add_item(c)
-
 # 공지사항 뷰
 class NoticeView(ui.LayoutView):
     def __init__(self):
@@ -441,6 +501,7 @@ class ErrorMessageView(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay("문의가 필요하면 관리자에게 연락해주세요."))
         self.add_item(c)
+
 # 메인 레이아웃 클래스 (MyLayout)
 class MyLayout(ui.LayoutView):
     def __init__(self):
@@ -474,13 +535,6 @@ class MyLayout(ui.LayoutView):
         c.add_item(linha)
         c.add_item(linha2)
         self.add_item(c)
-
-        # 콜백 함수 연결
-        button_1.callback = self.button_1_callback
-        button_2.callback = self.button_2_callback
-        button_3.callback = self.button_3_callback
-        button_4.callback = self.button_4_callback
-
     # 공지사항 버튼 콜백
     async def button_1_callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
@@ -520,6 +574,7 @@ class MyLayout(ui.LayoutView):
             await interaction.response.send_message(view=VendingBanView(), ephemeral=True)
             return
         await interaction.response.send_message(view=ErrorMessageView("구매 기능은 아직 구현되지 않았습니다."), ephemeral=True)
+
 # === 모달 클래스 정의 ===
 
 # 계좌 설정 모달
@@ -536,7 +591,6 @@ class AccountSettingModal(ui.Modal, title="계좌번호 설정"):
 
         set_bank_account(user_id, bank_name, account_holder, account_number)
         await interaction.response.send_message(view=BankAccountSetView(bank_name, account_holder, account_number), ephemeral=True)
-
 # 계좌 이체 모달 (충전 신청용)
 class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
     def __init__(self, bank_name, account_holder, account_number):
@@ -568,17 +622,6 @@ class AccountTransferModal(ui.Modal, title="계좌이체 신청"):
 
         await interaction.response.send_message(view=ChargeRequestCompleteView(self.bank_name, self.account_holder, self.account_number, f"{amount_value:,}"), ephemeral=True)
 
-# === 일반적인 오류 메시지 뷰 ===
-class ErrorMessageView(ui.LayoutView):
-    def __init__(self, message="오류가 발생했습니다. 다시 시도해주세요."):
-        super().__init__(timeout=None)
-        c = ui.Container()
-        c.add_item(ui.TextDisplay(f"❌ **오류 발생**"))
-        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        c.add_item(ui.TextDisplay(message))
-        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        c.add_item(ui.TextDisplay("문의가 필요하면 관리자에게 연락해주세요."))
-        self.add_item(c)
 # === 슬래시 명령어 정의 ===
 
 @bot.tree.command(name="버튼패널", description="버튼 패널을 표시합니다.")
@@ -640,7 +683,6 @@ async def set_bank_account_cmd(interaction: discord.Interaction):
     modal = AccountSettingModal()
     await interaction.response.send_modal(modal)
 
-
 # === 디스코드 봇 이벤트 핸들러 ===
 
 @bot.event
@@ -654,21 +696,14 @@ async def on_ready():
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
 # === Flask API 서버 구현 시작 ===
-# 외부에서 HTTP 요청(예: 아이폰 단축어)을 받기 위한 웹 서버
 flask_app = Flask(__name__)
 
 @flask_app.route("/api/charge", methods=["POST"])
 def charge_api():
-    # 이 부분에서 봇 내부의 DB 함수들을 사용하게 됩니다.
-    # Flask 앱과 디스코드 봇이 같은 프로세스에서 실행되므로, 같은 conn, cur, db_lock을 공유합니다.
-    
     data = request.get_json()
     sms_text = data.get("message", "")
 
     # 정규식으로 입금자명, 금액 추출 (한글 2~4글자, 금액 숫자)
-    # 은행 메시지 형식에 따라 이 정규식 패턴을 미세 조정해야 합니다.
-    # 예: "국민 김철수 50000원 입금", "5만원 입금 신한 이지수"
-    # 현재 패턴: '입금자명' 뒤에 '님'/'이'가 오거나 안 올 수 있고, 그 뒤 공백, '금액' 뒤 '원'이 오는 형태
     pattern = r"([가-힣]{2,4})(?:님|이)?\s*(\d[\d,]*)원" 
     match = re.search(pattern, sms_text)
     
@@ -688,14 +723,17 @@ def charge_api():
 
     # DB에서 입금자명으로 디스코드 user_id 찾기
     with db_lock:
-        cur.execute("SELECT user_id FROM bank_accounts WHERE account_holder = ?", (depositor_name,))
-        row = cur.fetchone() # 결과를 Row 객체로 받음
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute("SELECT user_id FROM bank_accounts WHERE account_holder = %s", (depositor_name,))
+        row = cur.fetchone()
+        conn.close()
     
     if not row:
         print(f"API - 오류: 입금자명({depositor_name})과 매칭되는 디스코드 사용자 ID를 찾을 수 없습니다. 메시지: {sms_text}")
         return jsonify({"status": "error", "message": f"입금자 '{depositor_name}'과 연결된 디스코드 계정을 찾을 수 없습니다. '/계좌번호_설정'으로 등록해주세요."}), 404
 
-    discord_user_id = row["user_id"] # Row 객체에서 user_id 컬럼으로 접근
+    discord_user_id = row["user_id"]
 
     # 충전 요청을 DB에 저장 (auto_process_charge_requests가 이를 처리)
     create_charge_request(discord_user_id, depositor_name, amount)
