@@ -44,6 +44,11 @@ class MyLayout(ui.LayoutView):
             await interaction.response.send_message("지정된 역할을 찾을 수 없습니다. 서버 설정을 확인해주세요.", ephemeral=True)
             return
 
+        # 이미 역할이 있는지 확인하여 중복 부여 방지
+        if role in member.roles:
+            await interaction.response.send_message("이미 인증된 사용자입니다. 추가 조치는 필요하지 않습니다.", ephemeral=True)
+            return
+
         # 역할 부여 시도
         try:
             await member.add_roles(role, reason="인증 버튼을 통해 자동 부여")
@@ -51,7 +56,7 @@ class MyLayout(ui.LayoutView):
             await interaction.response.send_message("역할 부여에 실패했습니다. 봇 권한(역할 관리 및 역할 위치)을 확인해주세요.", ephemeral=True)
             return
 
-        # 1) 누른 사용자에게만 보이는 에페메럴 컨테이너 생성 및 전송
+        # 에페메럴 컨테이너 생성 및 전송 (누른 사람만 볼 수 있음)
         ephemeral_view = ui.LayoutView(timeout=60)  # 에페메럴 전용 뷰 (타임아웃은 선택사항)
         e_c = ui.Container(ui.TextDisplay("**인증완료**"))
         e_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
@@ -62,21 +67,7 @@ class MyLayout(ui.LayoutView):
         # 응답: 에페메럴 메시지 전송 (이 메시지는 누른 사람만 볼 수 있음)
         await interaction.response.send_message(view=ephemeral_view, ephemeral=True)
 
-        # 2) 원래 공개된 패널에서 버튼 비활성화(중복 클릭 방지) 및 메시지 업데이트
-        try:
-            # self는 원래 뷰 객체이므로 버튼을 비활성화하고 원래 메시지 편집
-            self.button_1.disabled = True
-            if interaction.message:
-                await interaction.message.edit(view=self)
-            else:
-                # interaction.message가 없을 경우, followup으로 공지(대개 발생하지 않음)
-                await interaction.followup.send("패널 업데이트에 실패했습니다.", ephemeral=False)
-        except Exception:
-            # 편집 실패 시 관리자용 안내 (에페메럴에는 이미 완료 메시지를 보냈으므로 큰 문제는 아님)
-            try:
-                await interaction.followup.send("패널 업데이트 중 오류가 발생했습니다. (관리자에게 문의하세요)", ephemeral=True)
-            except Exception:
-                pass
+        # 공개 패널은 그대로 유지 (여러 사람 인증 가능), 따라서 버튼을 비활성화하지 않음
 
 @bot.event
 async def on_ready():
