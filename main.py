@@ -31,54 +31,52 @@ class MyLayout(ui.LayoutView):
         self.c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
     async def on_verify_button(self, interaction: discord.Interaction):
-        # 버튼 누른 사용자에게 역할 부여 시도
         member = interaction.user
         guild = interaction.guild
 
-        # 상호작용 응답이 필요한 경우, defer를 사용해 응답 시간을 벌 수 있음
-        await interaction.response.defer(ephemeral=False, thinking=True)
-
+        # 서버 컨텍스트 확인
         if guild is None:
-            # 길드(서버) 컨텍스트가 아닌 경우
-            await interaction.followup.send("이 명령은 서버에서만 사용할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message("이 명령은 서버에서만 사용할 수 있습니다.", ephemeral=True)
             return
 
         role = guild.get_role(ROLE_ID)
         if role is None:
-            await interaction.followup.send("지정된 역할을 찾을 수 없습니다. 서버 설정을 확인해주세요.", ephemeral=True)
+            await interaction.response.send_message("지정된 역할을 찾을 수 없습니다. 서버 설정을 확인해주세요.", ephemeral=True)
             return
 
+        # 역할 부여 시도
         try:
-            # 역할 부여
             await member.add_roles(role, reason="인증 버튼을 통해 자동 부여")
-        except Exception as e:
-            # 권한 문제 등으로 실패할 경우
-            await interaction.followup.send("역할 부여에 실패했습니다. 봇 권한을 확인해주세요.", ephemeral=True)
+        except Exception:
+            await interaction.response.send_message("역할 부여에 실패했습니다. 봇 권한(역할 관리 및 역할 위치)을 확인해주세요.", ephemeral=True)
             return
 
-        # 역할 부여 성공 시 뷰 업데이트: 기존 컨테이너 내용을 교체하여 '인증완료' 메시지 표시
-        # 새로 교체할 컨테이너 생성
-        new_c = ui.Container(ui.TextDisplay("**인증완료**"))
-        new_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        new_c.add_item(ui.TextDisplay("역할지급 완료되었습니다\n이제 모든 채널 확인 가능합니다"))
-        new_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        # 1) 누른 사용자에게만 보이는 에페메럴 컨테이너 생성 및 전송
+        ephemeral_view = ui.LayoutView(timeout=60)  # 에페메럴 전용 뷰 (타임아웃은 선택사항)
+        e_c = ui.Container(ui.TextDisplay("**인증완료**"))
+        e_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        e_c.add_item(ui.TextDisplay("역할지급 완료되었습니다\n이제 모든 채널 확인 가능합니다"))
+        e_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        ephemeral_view.add_item(e_c)
 
-        # 뷰 내 아이템을 새 컨테이너로 교체
-        # 먼저 기존 아이템들을 모두 비우고 새 컨테이너로 대체
-        self.clear_items()
-        self.add_item(new_c)
+        # 응답: 에페메럴 메시지 전송 (이 메시지는 누른 사람만 볼 수 있음)
+        await interaction.response.send_message(view=ephemeral_view, ephemeral=True)
 
-        # 메시지 편집(원래 보낸 메시지를 업데이트) — interaction.followup.edit_message 사용
+        # 2) 원래 공개된 패널에서 버튼 비활성화(중복 클릭 방지) 및 메시지 업데이트
         try:
-            # interaction.message가 None일 수도 있으므로 안전하게 처리
+            # self는 원래 뷰 객체이므로 버튼을 비활성화하고 원래 메시지 편집
+            self.button_1.disabled = True
             if interaction.message:
                 await interaction.message.edit(view=self)
             else:
-                # 만약 interaction.message가 없다면 새로 메시지로 응답
-                await interaction.followup.send(view=self)
+                # interaction.message가 없을 경우, followup으로 공지(대개 발생하지 않음)
+                await interaction.followup.send("패널 업데이트에 실패했습니다.", ephemeral=False)
         except Exception:
-            # 편집에 실패해도 유저에게 완료 안내는 보냄
-            await interaction.followup.send("역할이 정상적으로 지급되었습니다. (메시지 업데이트에 실패함)", ephemeral=False)
+            # 편집 실패 시 관리자용 안내 (에페메럴에는 이미 완료 메시지를 보냈으므로 큰 문제는 아님)
+            try:
+                await interaction.followup.send("패널 업데이트 중 오류가 발생했습니다. (관리자에게 문의하세요)", ephemeral=True)
+            except Exception:
+                pass
 
 @bot.event
 async def on_ready():
