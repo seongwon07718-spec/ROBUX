@@ -16,7 +16,7 @@ class MyLayout(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         
         c.add_item(ui.TextDisplay("아래 인증하기 버튼을 눌려 인증해주세요\n인증하시면 모든 채널을 보실 수 있습니다"))
-        c.add_item(c)
+        # c.add_item(c)  # <-- 이 줄을 제거했습니다 (자기 자신을 추가하면 재귀 오류 발생)
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         
         custom_emoji1 = PartialEmoji(name="Right", id=1428996148542181449)
@@ -41,7 +41,7 @@ async def on_ready():
 @bot.tree.command(name="인증패널", description="인증 패널을 표시합니다")
 async def button_panel(interaction: discord.Interaction):
     layout = MyLayout()
-    await interaction.response.send_message(view=layout, ephemeral=None)
+    await interaction.response.send_message(view=layout, ephemeral=False)
 
 # --- 봇 실행 ---
 bot.run("") # 여기에 봇 토큰을 입력하세요
