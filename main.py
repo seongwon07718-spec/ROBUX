@@ -28,7 +28,6 @@ class MyLayout(ui.LayoutView):
 
 active_views = {}
 
-# 클래스 이름 중복으로 인한 덮어쓰기 문제 해결을 위해 클래스명을 변경했습니다.
 class MyLayoutVending(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -43,10 +42,10 @@ class MyLayoutVending(ui.LayoutView):
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         # 이모지 (예시 ID, 실제 사용 시 올바른 ID로 변경)
-        custom_emoji1 = PartialEmoji(name="3_", id=1426934636428394678)
-        custom_emoji2 = PartialEmoji(name="6_", id=1424003480007475281)
-        custom_emoji3 = PartialEmoji(name="5_", id=1426936503635939428)
-        custom_emoji4 = PartialEmoji(name="4_", id=1426936460149395598)
+        custom_emoji1 = PartialEmoji(name="3", id=1426934636428394678)
+        custom_emoji2 = PartialEmoji(name="6", id=1426943544928505886)
+        custom_emoji3 = PartialEmoji(name="5", id=1426936503635939428)
+        custom_emoji4 = PartialEmoji(name="4", id=1426936460149395598)
 
         # 메인 버튼들
         button_1 = ui.Button(label="충전", custom_id="button_1", emoji=custom_emoji1)
@@ -69,9 +68,6 @@ async def on_ready():
         print(f'{len(synced)}개의 명령어가 동기화되었습니다.')
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
-
-# 같은 슬래시 이름을 사용하더라도 파이썬 함수명이 중복되면 덮어쓰기나 등록 문제가 생깁니다.
-# 따라서 데코레이터는 그대로 두고 내부 함수 이름만 고유하게 변경했습니다.
 
 @bot.tree.command(name="누락패널", description="누락 보상 패널을 표시합니다")
 async def button_panel_nurak(interaction: discord.Interaction):
