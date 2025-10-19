@@ -1,3 +1,4 @@
+# main.py (튜어오오오옹님 요청 반영 최종본)
 import discord
 from discord import PartialEmoji, ui, app_commands
 from discord.ext import commands
@@ -87,8 +88,6 @@ def _init_sqlite():
     conn.close()
 
 # --- 비동기 DB 헬퍼 함수들 ---
-# (기존 함수들은 그대로 유지하고, 새로운 기능에 필요한 함수들을 추가합니다)
-
 async def run_db_query(query, params=(), fetch=None, loop=None):
     """범용 비동기 DB 쿼리 실행기"""
     if loop is None:
@@ -199,7 +198,9 @@ async def get_stock_count(product_id: int):
     return result[0] if result else 0
 
 async def get_categories(guild_id: int):
-    return await run_db_query("SELECT DISTINCT category FROM products WHERE guild_id=?", (guild_id,), fetch='all')
+    rows = await run_db_query("SELECT DISTINCT category FROM products WHERE guild_id=?", (guild_id,), fetch='all')
+    # run_db_query returns list of tuples; convert to list of single-value tuples to match original usage
+    return rows if rows else []
 
 async def get_products_by_category(guild_id: int, category: str):
     return await run_db_query("SELECT product_id, name, price, emoji_name, emoji_id FROM products WHERE guild_id=? AND category=?", (guild_id, category), fetch='all')
@@ -283,8 +284,7 @@ class PurchaseQuantityModal(ui.Modal):
         self.stock_count = stock_count
 
         self.quantity_input = ui.TextInput(
-            label="구매 수량",
-            placeholder=f"1부터 {stock_count} 사이의 숫자를 입력하세요."
+            label="구매 수량"
         )
         self.add_item(self.quantity_input)
 
@@ -306,11 +306,11 @@ class PurchaseQuantityModal(ui.Modal):
             # 성공 메시지 (채널)
             success_view = ui.LayoutView()
             c = ui.Container(ui.TextDisplay("구매 성공"))
-            c.add_item(ui.Separator())
+            c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
             c.add_item(ui.TextDisplay(f"제품 이름 = __{self.product_name}__"))
             c.add_item(ui.TextDisplay(f"구매 개수 = __{quantity}__개"))
             c.add_item(ui.TextDisplay(f"차감 금액 = __{total_cost}__원"))
-            c.add_item(ui.Separator())
+            c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
             c.add_item(ui.TextDisplay("성공적으로 구매 완료되었습니다."))
             success_view.add_item(c)
             await interaction.edit_original_response(view=success_view)
@@ -319,10 +319,10 @@ class PurchaseQuantityModal(ui.Modal):
             try:
                 dm_view = ui.LayoutView()
                 dm_c = ui.Container(ui.TextDisplay("구매 제품"))
-                dm_c.add_item(ui.Separator())
+                dm_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
                 dm_c.add_item(ui.TextDisplay("구매한 제품 목록:"))
                 dm_c.add_item(ui.TextDisplay("\n".join(purchased_items)))
-                dm_c.add_item(ui.Separator())
+                dm_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
                 dm_c.add_item(ui.TextDisplay("구매해주셔서 감사합니다."))
                 dm_view.add_item(dm_c)
                 await interaction.user.send(view=dm_view)
@@ -343,8 +343,7 @@ class ProductSelect(ui.Select):
     def __init__(self, products):
         options = []
         for p_id, name, price, e_name, e_id in products:
-            emoji = PartialEmoji(name=e_name, id=e_id) if e_id else None
-            options.append(discord.SelectOption(label=f"{name} ({price}원)", value=str(p_id), emoji=emoji))
+            options.append(discord.SelectOption(label=f"{name} ({price}원)", value=str(p_id)))
         super().__init__(placeholder="원하시는 제품을 선택해주세요", options=options, min_values=1, max_values=1)
     
     async def callback(self, interaction: discord.Interaction):
@@ -367,6 +366,7 @@ class ProductSelect(ui.Select):
 
 class CategorySelect(ui.Select):
     def __init__(self, categories):
+        # categories: list of tuples from DB; use first element of each tuple
         options = [discord.SelectOption(label=cat[0], value=cat[0]) for cat in categories]
         super().__init__(placeholder="원하시는 카테고리를 선택해주세요", options=options, min_values=1, max_values=1)
 
@@ -380,7 +380,7 @@ class CategorySelect(ui.Select):
 
         view = ui.LayoutView()
         container = ui.Container(ui.TextDisplay("제품"))
-        container.add_item(ui.Separator())
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("원하시는 제품을 선택해주세요"))
         view.add_item(container)
         view.add_item(ProductSelect(products))
@@ -395,8 +395,6 @@ class MyLayoutVending(ui.LayoutView):
         self.c = ui.Container(ui.TextDisplay("24시간 OTT 자판기\n-# 버튼을 눌러 이용해주세요 !"))
         self.c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         
-        # ... (총 판매 금액 부분은 동적 업데이트가 복잡하여 일단 제외)
-
         custom_emoji1 = PartialEmoji(name="3", id=1426934636428394678) # 충전
         custom_emoji2 = PartialEmoji(name="6", id=1426943544928505886) # 입고알림
         custom_emoji3 = PartialEmoji(name="5", id=1426936503635939428) # 내 정보
@@ -454,8 +452,6 @@ class MyLayoutVending(ui.LayoutView):
         await interaction.response.send_message(view=view, ephemeral=True)
 
     async def on_my_info_click(self, interaction: discord.Interaction):
-        # ... (기존 '내 정보' 코드와 동일, 생략)
-        # 단, interaction_check가 먼저 실행되므로 여기서는 로직만 구현
         member = interaction.user
         guild = interaction.guild
 
@@ -466,7 +462,7 @@ class MyLayoutVending(ui.LayoutView):
 
         ephemeral_view = ui.LayoutView(timeout=120)
         info_container = ui.Container(ui.TextDisplay(f"{member.display_name}님 정보"))
-        info_container.add_item(ui.Separator())
+        info_container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         info_container.add_item(ui.TextDisplay(f"보유 금액 = __{balance}__원"))
         info_container.add_item(ui.TextDisplay(f"누적 금액 = __{total}__원"))
         info_container.add_item(ui.TextDisplay(f"거래 횟수 = __{tx_count}__번"))
@@ -481,8 +477,8 @@ class MyLayoutVending(ui.LayoutView):
             return
 
         view = ui.LayoutView()
-        container = ui.Container(ui.TextDisplay("🛒 카테고리"))
-        container.add_item(ui.Separator())
+        container = ui.Container(ui.TextDisplay("EMOJI_0 카테고리"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("원하시는 카테고리를 선택해주세요"))
         view.add_item(container)
         view.add_item(CategorySelect(categories))
@@ -534,7 +530,7 @@ async def manage_balance(interaction: discord.Interaction, 유저: discord.Membe
     title = f"금액 {종류}"
     view = ui.LayoutView()
     c = ui.Container(ui.TextDisplay(title))
-    c.add_item(ui.Separator())
+    c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     c.add_item(ui.TextDisplay(f"유저 = __{유저.display_name}__님"))
     c.add_item(ui.TextDisplay(f"{종류} 금액 = __{금액}__원"))
     c.add_item(ui.TextDisplay(f"{종류} 후 금액 = __{new_balance}__원"))
@@ -557,7 +553,7 @@ async def manage_restriction(interaction: discord.Interaction, 유저: discord.M
 
     view = ui.LayoutView()
     c = ui.Container(ui.TextDisplay("**자판기 사용 여부**"))
-    c.add_item(ui.Separator())
+    c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     c.add_item(ui.TextDisplay(f"**유저** = {유저.mention}"))
     c.add_item(ui.TextDisplay(f"**사용 가능 여부** = __{status_text}__"))
     view.add_item(c)
@@ -600,7 +596,7 @@ class ProductModal(ui.Modal):
             
             view = ui.LayoutView()
             c = ui.Container(ui.TextDisplay("**제품 추가**"))
-            c.add_item(ui.Separator())
+            c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
             c.add_item(ui.TextDisplay(f"**이모지** = {emoji_str}"))
             c.add_item(ui.TextDisplay(f"**제품 이름** = __{product_name}__"))
             c.add_item(ui.TextDisplay(f"**카테고리** = __{category}__"))
@@ -621,48 +617,61 @@ class ProductManagementSelect(ui.Select):
             discord.SelectOption(label="제품 추가", value="add_product"),
             discord.SelectOption(label="제품 삭제", value="delete_product"),
         ]
-        selecao = ui.Select(placeholder="아래 드롭다운을 눌러 제품을 설정해주세요", options=options)
+        super().__init__(placeholder="아래 드롭다운을 눌러 제품을 설정해주세요", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
-        choice = self.values[0]
-        if choice == "add_product":
-            await interaction.response.send_modal(ProductModal())
-        elif choice == "delete_product":
-            products = await get_all_products(interaction.guild_id)
-            if not products:
-                await interaction.response.send_message("삭제할 제품이 없습니다.", ephemeral=True)
-                return
+        try:
+            choice = self.values[0]
+            if choice == "add_product":
+                await interaction.response.send_modal(ProductModal())
+            elif choice == "delete_product":
+                products = await get_all_products(interaction.guild_id)
+                if not products:
+                    await interaction.response.send_message("삭제할 제품이 없습니다.", ephemeral=True)
+                    return
 
-            view = ui.LayoutView()
-            view.add_item(ProductDeleteSelect(products))
-            await interaction.response.send_message("삭제할 제품을 선택해주세요.", view=view, ephemeral=True)
+                view = ui.LayoutView()
+                cont = ui.Container(ui.TextDisplay("삭제할 제품을 선택해주세요"))
+                cont.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+                view.add_item(cont)
 
-    async def resposta_selecao(self, interact:discord.Interaction):
-        escolha = interact.data['values'][0]
-
+                del_select = ProductDeleteSelect(products)
+                view.add_item(del_select)
+                await interaction.response.send_message(view=view, ephemeral=True)
+        except Exception as e:
+            try:
+                await interaction.response.send_message("작업 처리 중 오류가 발생했습니다.", ephemeral=True)
+            except:
+                pass
 
 class ProductDeleteSelect(ui.Select):
     def __init__(self, products):
         options = []
         for p_id, name, cat, price, e_name, e_id in products:
-            emoji = PartialEmoji(name=e_name, id=e_id) if e_id else None
-            options.append(discord.SelectOption(label=f"[{cat}] {name}", value=str(p_id), emoji=emoji))
-        super().__init__(placeholder="삭제할 제품 선택", options=options)
+            options.append(discord.SelectOption(label=f"[{cat}] {name}", value=str(p_id)))
+        super().__init__(placeholder="삭제할 제품 선택", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
-        product_id = int(self.values[0])
-        await delete_product(product_id)
-        await interaction.response.edit_message(content="선택한 제품이 삭제되었습니다.", view=None)
+        try:
+            product_id = int(self.values[0])
+            await delete_product(product_id)
+            await interaction.response.edit_message(content="선택한 제품이 삭제되었습니다.", view=None)
+        except Exception:
+            try:
+                await interaction.response.send_message("제품 삭제 중 오류가 발생했습니다.", ephemeral=True)
+            except:
+                pass
 
 @bot.tree.command(name="제품설정", description="자판기의 제품을 추가하거나 삭제합니다.")
 @app_commands.checks.has_permissions(administrator=True)
 async def product_settings(interaction: discord.Interaction):
     view = ui.LayoutView()
     container = ui.Container(ui.TextDisplay("**제품 설정**"))
-    container.add_item(ui.Separator())
+    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     container.add_item(ui.TextDisplay("아래 드롭다운을 눌러 제품을 설정해주세요"))
     view.add_item(container)
-    view.add_item(ProductManagementSelect())
+    # ProductManagementSelect 인스턴스를 컨테이너 안에 넣도록 변경: add_item(ui.ActionRow(...))
+    view.add_item(ui.ActionRow(ProductManagementSelect()))
     await interaction.response.send_message(view=view, ephemeral=True)
 
 # --- 재고 추가 ---
@@ -672,8 +681,7 @@ class StockAddModal(ui.Modal):
         self.product_id = product_id
         self.product_name = product_name
         self.stock_input = ui.TextInput(
-            label="추가할 재고",
-            style=discord.TextStyle.paragraph,
+            label="추가할 재고 (줄바꿈으로 여러 항목 입력)"
         )
         self.add_item(self.stock_input)
 
@@ -687,7 +695,7 @@ class StockAddModal(ui.Modal):
 
         view = ui.LayoutView()
         c = ui.Container(ui.TextDisplay("**재고 추가 완료**"))
-        c.add_item(ui.Separator())
+        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         c.add_item(ui.TextDisplay(f"**제품 이름** = __{self.product_name}__"))
         c.add_item(ui.TextDisplay(f"**추가된 재고 개수** = __{len(stock_list)}__개"))
         view.add_item(c)
@@ -698,19 +706,24 @@ class StockAddModal(ui.Modal):
         if notif_role:
             await interaction.channel.send(f"{notif_role.mention} **{self.product_name}** 제품의 재고가 추가되었습니다!")
 
-
 class StockAddSelect(ui.Select):
     def __init__(self, products):
         options = []
         for p_id, name, _, _, e_name, e_id in products:
-            emoji = PartialEmoji(name=e_name, id=e_id) if e_id else None
-            options.append(discord.SelectOption(label=name, value=str(p_id), emoji=emoji))
-        super().__init__(placeholder="재고를 추가할 제품 선택", options=options)
+            options.append(discord.SelectOption(label=name, value=str(p_id)))
+        super().__init__(placeholder="재고를 추가할 제품 선택", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
-        product_id = int(self.values[0])
-        product_name = next((p[1] for p in self.options if int(p.value) == product_id), "알 수 없는 제품")
-        await interaction.response.send_modal(StockAddModal(product_id, product_name))
+        try:
+            product_id = int(self.values[0])
+            # find name from options
+            product_name = next((o.label for o in self.options if o.value == str(product_id)), "알 수 없는 제품")
+            await interaction.response.send_modal(StockAddModal(product_id, product_name))
+        except Exception:
+            try:
+                await interaction.response.send_message("재고 추가 처리 중 오류가 발생했습니다.", ephemeral=True)
+            except:
+                pass
 
 @bot.tree.command(name="재고추가", description="제품의 재고를 추가합니다.")
 @app_commands.checks.has_permissions(administrator=True)
@@ -722,10 +735,10 @@ async def add_stock_command(interaction: discord.Interaction):
 
     view = ui.LayoutView()
     container = ui.Container(ui.TextDisplay("**재고 추가**"))
-    container.add_item(ui.Separator())
+    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     container.add_item(ui.TextDisplay("드롭다운을 눌러 재고를 추가할 제품을 선택해주세요."))
     view.add_item(container)
-    view.add_item(StockAddSelect(products))
+    view.add_item(ui.ActionRow(StockAddSelect(products)))
 
     await interaction.response.send_message(view=view, ephemeral=True)
 
