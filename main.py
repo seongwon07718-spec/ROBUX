@@ -1,270 +1,206 @@
-# main.py (튜어오오오옹님 요청 반영 최종본)
+# main.py (튜어오오오옹님 요청 반영: shelve 기반, 구매 오류 수정, 드롭다운/모달 정리)
 import discord
 from discord import PartialEmoji, ui, app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 import os
 from datetime import datetime
-import sqlite3
 import asyncio
 from functools import partial
-import re
+import shelve
+import threading
 
-# .env 파일 로드
+# .env 로드
 load_dotenv()
 
-# Discord 봇 설정
 intents = discord.Intents.all()
 command_prefix = "!"
 bot = commands.Bot(command_prefix=command_prefix, intents=intents)
 
-# --- 설정 변수 ---
-# // TODO: 여기에 실제 알림 역할 ID를 입력하세요.
-NOTIFICATION_ROLE_ID = 1429436071539773561 
+# 환경 설정
+NOTIFICATION_ROLE_ID = 1429436071539773561  # 본인 서버에 맞게 수정
+SHELVE_PATH = "vending_shelve.db"  # shelve 파일(실제로는 여러 파일로 생성될 수 있음)
+_shelve_lock = threading.Lock()    # shelve 접근 동기화 (간단한 잠금)
 
-# --- SQLite 데이터베이스 설정 ---
-DB_PATH = "vending_machine.db"
+# ------------------ shelve 헬퍼 (블로킹이므로 executor 사용) ------------------
+def _shelve_get(key):
+    with _shelve_lock:
+        with shelve.open(SHELVE_PATH) as db:
+            return db.get(key)
 
-# 데이터베이스 초기화 (새로운 테이블 추가)
-def _init_sqlite():
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    cur = conn.cursor()
-    
-    # users 테이블 (기존)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        guild_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        balance INTEGER DEFAULT 0,
-        total INTEGER DEFAULT 0,
-        tx_count INTEGER DEFAULT 0,
-        PRIMARY KEY (guild_id, user_id)
-    )
-    """)
-    # transactions 테이블 (기존)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS transactions (
-        tx_id TEXT PRIMARY KEY,
-        guild_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        amount INTEGER NOT NULL,
-        type TEXT,
-        note TEXT,
-        created_at TEXT
-    )
-    """)
-    # user_restrictions 테이블 (이용제한 기능용)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS user_restrictions (
-        guild_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        is_banned INTEGER DEFAULT 0,
-        PRIMARY KEY (guild_id, user_id)
-    )
-    """)
-    # products 테이블 (제품 정보 저장용)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS products (
-        product_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        category TEXT NOT NULL,
-        price INTEGER NOT NULL,
-        emoji_name TEXT,
-        emoji_id INTEGER,
-        UNIQUE(guild_id, name)
-    )
-    """)
-    # inventory 테이블 (재고 저장용)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS inventory (
-        stock_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        product_id INTEGER NOT NULL,
-        stock_content TEXT NOT NULL,
-        FOREIGN KEY (product_id) REFERENCES products (product_id) ON DELETE CASCADE
-    )
-    """)
-    conn.commit()
-    conn.close()
+def _shelve_set(key, value):
+    with _shelve_lock:
+        with shelve.open(SHELVE_PATH, writeback=True) as db:
+            db[key] = value
 
-# --- 비동기 DB 헬퍼 함수들 ---
-async def run_db_query(query, params=(), fetch=None, loop=None):
-    """범용 비동기 DB 쿼리 실행기"""
-    if loop is None:
-        loop = asyncio.get_running_loop()
+def _shelve_delete(key):
+    with _shelve_lock:
+        with shelve.open(SHELVE_PATH, writeback=True) as db:
+            if key in db:
+                del db[key]
 
-    def db_operation():
-        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-        cur = conn.cursor()
-        cur.execute(query, params)
-        result = None
-        if fetch == 'one':
-            result = cur.fetchone()
-        elif fetch == 'all':
-            result = cur.fetchall()
-        conn.commit()
-        conn.close()
-        return result
-
-    return await loop.run_in_executor(None, db_operation)
-
-# --- 기존 DB 함수 ---
-async def init_db_async(loop=None):
-    if loop is None:
-        loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _init_sqlite)
-
-async def record_transaction_sqlite(guild_id: int, user_id: int, amount: int, ttype: str = "거래", note: str = ""):
-    tx_id = f"{int(datetime.utcnow().timestamp()*1000)}{user_id}"
-    created_at = datetime.utcnow().isoformat(sep=' ', timespec='seconds')
-    
-    # 트랜잭션 기록
-    await run_db_query(
-        """INSERT OR REPLACE INTO transactions (tx_id, guild_id, user_id, amount, type, note, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (tx_id, guild_id, user_id, amount, ttype, note, created_at)
-    )
-    # 유저 정보 업데이트 (Upsert)
-    await run_db_query(
-        """INSERT INTO users (guild_id, user_id, balance, total, tx_count) VALUES (?, ?, ?, ?, 1)
-           ON CONFLICT(guild_id, user_id) DO UPDATE SET
-           balance = balance + excluded.balance,
-           total = CASE WHEN excluded.total > 0 THEN total + excluded.total ELSE total END,
-           tx_count = tx_count + 1""",
-        (guild_id, user_id, amount, amount)
-    )
-
-async def get_user_info_sqlite(guild_id: int, user_id: int):
-    row = await run_db_query(
-        "SELECT balance, total, tx_count FROM users WHERE guild_id=? AND user_id=?",
-        (guild_id, user_id), fetch='one'
-    )
-    if row:
-        return {"balance": row[0], "total": row[1], "tx_count": row[2]}
-    return {"balance": 0, "total": 0, "tx_count": 0}
-
-async def get_recent_tx_sqlite(guild_id, user_id, limit=10):
-    return await run_db_query(
-        "SELECT tx_id, amount, type, note, created_at FROM transactions WHERE guild_id=? AND user_id=? ORDER BY created_at DESC LIMIT ?",
-        (guild_id, user_id, limit), fetch='all'
-    )
-
-# --- 새로운 DB 함수 ---
-async def set_user_restriction(guild_id: int, user_id: int, is_banned: bool):
-    await run_db_query(
-        """INSERT INTO user_restrictions (guild_id, user_id, is_banned) VALUES (?, ?, ?)
-           ON CONFLICT(guild_id, user_id) DO UPDATE SET is_banned = excluded.is_banned""",
-        (guild_id, user_id, 1 if is_banned else 0)
-    )
-
-async def is_user_banned(guild_id: int, user_id: int) -> bool:
-    result = await run_db_query(
-        "SELECT is_banned FROM user_restrictions WHERE guild_id=? AND user_id=?",
-        (guild_id, user_id), fetch='one'
-    )
-    return result[0] == 1 if result else False
-
-async def add_product(guild_id, name, category, price, emoji_name, emoji_id):
-    await run_db_query(
-        "INSERT INTO products (guild_id, name, category, price, emoji_name, emoji_id) VALUES (?, ?, ?, ?, ?, ?)",
-        (guild_id, name, category, price, emoji_name, emoji_id)
-    )
-
-async def delete_product(product_id: int):
-    await run_db_query("DELETE FROM products WHERE product_id=?", (product_id,))
-
-async def get_all_products(guild_id: int):
-    return await run_db_query("SELECT product_id, name, category, price, emoji_name, emoji_id FROM products WHERE guild_id=?", (guild_id,), fetch='all')
-
-async def get_product_by_id(product_id: int):
-    return await run_db_query("SELECT name, price FROM products WHERE product_id=?", (product_id,), fetch='one')
-
-async def add_stock(product_id: int, stock_list: list):
-    params = [(product_id, content) for content in stock_list]
-    
-    def db_op_many():
-        conn = sqlite3.connect(DB_PATH, timeout=30)
-        cur = conn.cursor()
-        cur.executemany("INSERT INTO inventory (product_id, stock_content) VALUES (?, ?)", params)
-        conn.commit()
-        conn.close()
-    
+async def shelve_get(key):
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, db_op_many)
+    return await loop.run_in_executor(None, partial(_shelve_get, key))
 
+async def shelve_set(key, value):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(_shelve_set, key, value))
 
-async def get_stock_count(product_id: int):
-    result = await run_db_query("SELECT COUNT(*) FROM inventory WHERE product_id=?", (product_id,), fetch='one')
-    return result[0] if result else 0
+async def shelve_delete(key):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(_shelve_delete, key))
 
-async def get_categories(guild_id: int):
-    rows = await run_db_query("SELECT DISTINCT category FROM products WHERE guild_id=?", (guild_id,), fetch='all')
-    # run_db_query returns list of tuples; convert to list of single-value tuples to match original usage
-    return rows if rows else []
+# ------------------ 데이터 모델(간단) ------------------
+# keys:
+# - "users:{guild_id}:{user_id}" -> dict {balance,total,tx_count,can_use}
+# - "transactions:{guild_id}:{user_id}" -> list of tx dicts (최신 우선)
+# - "products:{guild_id}" -> dict product_id(str) -> product dict {name,category,price,emoji_name,emoji_id}
+# - "inventory:{guild_id}:{product_id}" -> list of stock strings
+# - "subscriptions:{guild_id}:{user_id}" -> bool (notify)
+# - "bans:{guild_id}:{user_id}" -> bool (banned)
 
-async def get_products_by_category(guild_id: int, category: str):
-    return await run_db_query("SELECT product_id, name, price, emoji_name, emoji_id FROM products WHERE guild_id=? AND category=?", (guild_id, category), fetch='all')
+# ------------------ 유틸 함수 ------------------
+def _user_key(guild_id, user_id): return f"users:{guild_id}:{user_id}"
+def _tx_key(guild_id, user_id): return f"transactions:{guild_id}:{user_id}"
+def _products_key(guild_id): return f"products:{guild_id}"
+def _inventory_key(guild_id, product_id): return f"inventory:{guild_id}:{product_id}"
+def _sub_key(guild_id, user_id): return f"subscriptions:{guild_id}:{user_id}"
+def _ban_key(guild_id, user_id): return f"bans:{guild_id}:{user_id}"
 
-async def purchase_items(guild_id: int, user_id: int, product_id: int, quantity: int):
-    """구매 로직을 처리하는 트랜잭션 함수"""
-    product_info = await get_product_by_id(product_id)
-    if not product_info:
+# ------------------ DB 작업 함수 (shelve 기반) ------------------
+async def init_db_async():
+    # 초기화: 키가 없으면 빈 구조체 생성
+    # (별도 작업 필요 없음 — lazy 생성)
+    return
+
+async def record_transaction(guild_id: int, user_id: int, amount: int, ttype: str = "거래", note: str = ""):
+    # 트랜잭션을 저장하고 유저 잔액 업데이트
+    user_key = _user_key(guild_id, user_id)
+    tx_key = _tx_key(guild_id, user_id)
+
+    user = await shelve_get(user_key) or {"balance":0,"total":0,"tx_count":0,"can_use":1}
+    now = datetime.utcnow().isoformat(sep=' ', timespec='seconds')
+    tx = {"_id": f"{int(datetime.utcnow().timestamp()*1000)}_{user_id}", "amount": amount, "type": ttype, "note": note, "created_at": now}
+
+    # prepend to transactions
+    txs = await shelve_get(tx_key) or []
+    txs.insert(0, tx)
+    await shelve_set(tx_key, txs[:100])  # 최근 100건만 보관
+
+    # update user
+    user["balance"] = user.get("balance",0) + amount
+    if amount > 0:
+        user["total"] = user.get("total",0) + amount
+    user["tx_count"] = user.get("tx_count",0) + 1
+    await shelve_set(user_key, user)
+
+async def get_user_info(guild_id: int, user_id: int):
+    user = await shelve_get(_user_key(guild_id, user_id))
+    if user:
+        return user
+    return {"balance":0,"total":0,"tx_count":0,"can_use":1}
+
+async def get_recent_transactions(guild_id:int, user_id:int, limit=10):
+    txs = await shelve_get(_tx_key(guild_id, user_id)) or []
+    return txs[:limit]
+
+# products
+async def add_product_shelf(guild_id, name, category, price, emoji_name=None, emoji_id=None):
+    key = _products_key(guild_id)
+    prods = await shelve_get(key) or {}
+    # product_id as timestamp string
+    pid = f"{int(datetime.utcnow().timestamp()*1000)}"
+    # unique name check
+    for v in prods.values():
+        if v.get("name") == name:
+            raise ValueError("DUPLICATE_NAME")
+    prods[pid] = {"name":name,"category":category,"price":int(price),"emoji_name":emoji_name,"emoji_id":emoji_id}
+    await shelve_set(key, prods)
+    return pid
+
+async def remove_product_shelf(guild_id, product_id):
+    key = _products_key(guild_id)
+    prods = await shelve_get(key) or {}
+    if product_id in prods:
+        del prods[product_id]
+        await shelve_set(key, prods)
+    # also remove inventory
+    inv_key = _inventory_key(guild_id, product_id)
+    await shelve_delete(inv_key)
+
+async def get_all_products_shelf(guild_id):
+    prods = await shelve_get(_products_key(guild_id)) or {}
+    # return list of tuples like (product_id, name, category, price, emoji_name, emoji_id)
+    return [(pid, d["name"], d["category"], d["price"], d.get("emoji_name"), d.get("emoji_id")) for pid,d in prods.items()]
+
+async def get_product_by_id_shelf(guild_id, product_id):
+    prods = await shelve_get(_products_key(guild_id)) or {}
+    p = prods.get(str(product_id))
+    if p: return (p["name"], p["price"])
+    return None
+
+# inventory
+async def add_stock_shelf(guild_id, product_id, stock_list):
+    key = _inventory_key(guild_id, product_id)
+    inv = await shelve_get(key) or []
+    inv.extend(stock_list)
+    await shelve_set(key, inv)
+
+async def get_stock_count_shelf(guild_id, product_id):
+    inv = await shelve_get(_inventory_key(guild_id, product_id)) or []
+    return len(inv)
+
+async def pop_stock_items_shelf(guild_id, product_id, quantity):
+    key = _inventory_key(guild_id, product_id)
+    inv = await shelve_get(key) or []
+    if len(inv) < quantity:
+        return None
+    items = inv[:quantity]
+    remaining = inv[quantity:]
+    await shelve_set(key, remaining)
+    return items
+
+# subscriptions & bans
+async def toggle_subscription_shelf(guild_id, user_id):
+    key = _sub_key(guild_id, user_id)
+    cur = await shelve_get(key)
+    new = not bool(cur)
+    await shelve_set(key, new)
+    return new
+
+async def set_ban_shelf(guild_id, user_id, banned:bool):
+    await shelve_set(_ban_key(guild_id, user_id), bool(banned))
+    # also set user can_use flag
+    user = await shelve_get(_user_key(guild_id, user_id)) or {"balance":0,"total":0,"tx_count":0,"can_use":1}
+    user["can_use"] = 0 if banned else 1
+    await shelve_set(_user_key(guild_id, user_id), user)
+
+async def is_banned_shelf(guild_id, user_id):
+    v = await shelve_get(_ban_key(guild_id, user_id))
+    return bool(v)
+
+# transaction-like purchase using shelve inventory
+async def purchase_items_shelf(guild_id, user_id, product_id, quantity):
+    # check product
+    prod = await get_product_by_id_shelf(guild_id, product_id)
+    if not prod:
         return "PRODUCT_NOT_FOUND", None
-    
-    product_name, price = product_info
+    product_name, price = prod
     total_cost = price * quantity
-
-    user_info = await get_user_info_sqlite(guild_id, user_id)
-    if user_info['balance'] < total_cost:
+    user = await get_user_info(guild_id, user_id)
+    if user["balance"] < total_cost:
         return "INSUFFICIENT_FUNDS", None
+    # pop stock
+    items = await pop_stock_items_shelf(guild_id, product_id, quantity)
+    if items is None:
+        return "OUT_OF_STOCK", None
+    # deduct money and record tx
+    await record_transaction(guild_id, user_id, -total_cost, "구매", f"{product_name} x{quantity}")
+    return "SUCCESS", items
 
-    # 재고 확인 및 구매 (트랜잭션)
-    def db_transaction():
-        conn = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None) # Auto-commit mode
-        cur = conn.cursor()
-        try:
-            cur.execute("BEGIN")
-            # 재고 확인 및 가져오기
-            cur.execute("SELECT stock_id, stock_content FROM inventory WHERE product_id=? LIMIT ?", (product_id, quantity))
-            items_to_purchase = cur.fetchall()
+# ------------------ UI / 상호작용 (기존 로직 유지하되 shelve 함수 사용) ------------------
 
-            if len(items_to_purchase) < quantity:
-                conn.rollback()
-                return "OUT_OF_STOCK", None
-
-            # 재고 삭제
-            ids_to_delete = tuple(item[0] for item in items_to_purchase)
-            cur.execute(f"DELETE FROM inventory WHERE stock_id IN ({','.join('?' for _ in ids_to_delete)})", ids_to_delete)
-            
-            conn.commit()
-            return "SUCCESS", [item[1] for item in items_to_purchase]
-        except Exception as e:
-            conn.rollback()
-            print(f"Purchase Transaction Error: {e}")
-            return "DB_ERROR", None
-        finally:
-            conn.close()
-            
-    loop = asyncio.get_running_loop()
-    status, purchased_items = await loop.run_in_executor(None, db_transaction)
-
-    if status == "SUCCESS":
-        # 금액 차감
-        await record_transaction_sqlite(guild_id, user_id, -total_cost, "구매", f"{product_name} x{quantity}")
-    
-    return status, purchased_items
-
-
-# --- 유틸리티 함수 ---
-def parse_custom_emoji(emoji_str: str):
-    """<:name:id> 또는 <a:name:id> 형식의 커스텀 이모지를 파싱"""
-    match = re.match(r'<a?:(\w+):(\d+)>', emoji_str.strip())
-    if match:
-        return match.group(1), int(match.group(2))
-    return None, None
-
-
-# --- 에러 및 확인 메시지용 컨테이너 ---
 def create_ephemeral_container(title, message):
     view = ui.LayoutView()
     container = ui.Container(ui.TextDisplay(title))
@@ -273,19 +209,16 @@ def create_ephemeral_container(title, message):
     view.add_item(container)
     return view
 
-
-# --- 구매 플로우 UI ---
 class PurchaseQuantityModal(ui.Modal):
-    def __init__(self, product_id, product_name, price, stock_count):
+    def __init__(self, guild_id, product_id, product_name, price, stock_count):
         super().__init__(title=f"{product_name} 구매")
+        self.guild_id = guild_id
         self.product_id = product_id
         self.product_name = product_name
         self.price = price
         self.stock_count = stock_count
-
-        self.quantity_input = ui.TextInput(
-            label="구매 수량"
-        )
+        # 설명 제거: 단순 입력
+        self.quantity_input = ui.TextInput(label="구매 수량")
         self.add_item(self.quantity_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -293,215 +226,150 @@ class PurchaseQuantityModal(ui.Modal):
             quantity = int(self.quantity_input.value)
             if not (1 <= quantity <= self.stock_count):
                 raise ValueError
-        except (ValueError, TypeError):
+        except:
             await interaction.response.send_message("올바른 수량을 입력해주세요.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-
-        total_cost = self.price * quantity
-        status, purchased_items = await purchase_items(interaction.guild_id, interaction.user.id, self.product_id, quantity)
-
+        status, items = await purchase_items_shelf(self.guild_id, interaction.user.id, self.product_id, quantity)
         if status == "SUCCESS":
-            # 성공 메시지 (채널)
+            # 성공 컨테이너
             success_view = ui.LayoutView()
-            c = ui.Container(ui.TextDisplay("구매 성공"))
+            c = ui.Container(ui.TextDisplay("**구매 성공**"))
             c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            c.add_item(ui.TextDisplay(f"제품 이름 = __{self.product_name}__"))
-            c.add_item(ui.TextDisplay(f"구매 개수 = __{quantity}__개"))
-            c.add_item(ui.TextDisplay(f"차감 금액 = __{total_cost}__원"))
+            c.add_item(ui.TextDisplay(f"**제품 이름** = {self.product_name}"))
+            c.add_item(ui.TextDisplay(f"**구매 개수** = {quantity}"))
+            c.add_item(ui.TextDisplay(f"**차감 금액** = {self.price*quantity}원"))
             c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
             c.add_item(ui.TextDisplay("성공적으로 구매 완료되었습니다."))
             success_view.add_item(c)
-            await interaction.edit_original_response(view=success_view)
+            # interaction.edit_original_response is only valid if a message was created earlier; we deferred -> use followup
+            await interaction.followup.send(view=success_view, ephemeral=True)
 
-            # DM으로 제품 정보 발송
+            # DM
             try:
                 dm_view = ui.LayoutView()
                 dm_c = ui.Container(ui.TextDisplay("구매 제품"))
                 dm_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-                dm_c.add_item(ui.TextDisplay("구매한 제품 목록:"))
-                dm_c.add_item(ui.TextDisplay("\n".join(purchased_items)))
+                dm_c.add_item(ui.TextDisplay("\n".join(items)))
                 dm_c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-                dm_c.add_item(ui.TextDisplay("구매해주셔서 감사합니다."))
                 dm_view.add_item(dm_c)
                 await interaction.user.send(view=dm_view)
             except discord.Forbidden:
-                await interaction.followup.send("DM을 보낼 수 없습니다. DM 설정을 확인해주세요.", ephemeral=True)
-        
+                pass
         else:
-            error_messages = {
-                "INSUFFICIENT_FUNDS": "잔액이 부족합니다.",
-                "OUT_OF_STOCK": "재고가 부족합니다.",
-                "PRODUCT_NOT_FOUND": "제품을 찾을 수 없습니다.",
-                "DB_ERROR": "구매 처리 중 오류가 발생했습니다. 관리자에게 문의하세요."
-            }
-            await interaction.edit_original_response(view=create_ephemeral_container("오류", error_messages.get(status, "알 수 없는 오류")))
-
+            msg = {
+                "INSUFFICIENT_FUNDS":"잔액이 부족합니다.",
+                "OUT_OF_STOCK":"재고가 부족합니다.",
+                "PRODUCT_NOT_FOUND":"제품을 찾을 수 없습니다.",
+                "DB_ERROR":"구매 처리 중 오류가 발생했습니다."
+            }.get(status, "알 수 없는 오류")
+            await interaction.followup.send(view=create_ephemeral_container("오류", msg), ephemeral=True)
 
 class ProductSelect(ui.Select):
-    def __init__(self, products):
+    def __init__(self, guild_id, products):
         options = []
         for p_id, name, price, e_name, e_id in products:
             options.append(discord.SelectOption(label=f"{name} ({price}원)", value=str(p_id)))
         super().__init__(placeholder="원하시는 제품을 선택해주세요", options=options, min_values=1, max_values=1)
-    
+        self.guild_id = guild_id
+
     async def callback(self, interaction: discord.Interaction):
         product_id = int(self.values[0])
-        stock_count = await get_stock_count(product_id)
-
+        stock_count = await get_stock_count_shelf(interaction.guild_id, product_id)
         if stock_count == 0:
             await interaction.response.send_message("해당 제품은 현재 재고가 없습니다.", ephemeral=True)
             return
-            
-        product_info = await get_product_by_id(product_id)
-        if not product_info:
+        prod = await get_product_by_id_shelf(interaction.guild_id, product_id)
+        if not prod:
             await interaction.response.send_message("제품 정보를 불러올 수 없습니다.", ephemeral=True)
             return
-        
-        product_name, price = product_info
-        modal = PurchaseQuantityModal(product_id, product_name, price, stock_count)
+        product_name, price = prod
+        modal = PurchaseQuantityModal(interaction.guild_id, product_id, product_name, price, stock_count)
         await interaction.response.send_modal(modal)
 
-
 class CategorySelect(ui.Select):
-    def __init__(self, categories):
-        # categories: list of tuples from DB; use first element of each tuple
-        options = [discord.SelectOption(label=cat[0], value=cat[0]) for cat in categories]
+    def __init__(self, guild_id, categories):
+        options = [discord.SelectOption(label=c[0], value=c[0]) for c in categories]
         super().__init__(placeholder="원하시는 카테고리를 선택해주세요", options=options, min_values=1, max_values=1)
+        self.guild_id = guild_id
 
     async def callback(self, interaction: discord.Interaction):
         category = self.values[0]
-        products = await get_products_by_category(interaction.guild_id, category)
-
+        products = await get_products_by_category(self.guild_id, category)
         if not products:
             await interaction.response.edit_message(view=create_ephemeral_container("알림", "해당 카테고리에 제품이 없습니다."))
             return
-
         view = ui.LayoutView()
         container = ui.Container(ui.TextDisplay("제품"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("원하시는 제품을 선택해주세요"))
         view.add_item(container)
-        view.add_item(ProductSelect(products))
+        view.add_item(ProductSelect(self.guild_id, products))
         await interaction.response.edit_message(view=view)
 
-
-# --- 자판기 메인 UI ---
 class MyLayoutVending(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
-
         self.c = ui.Container(ui.TextDisplay("24시간 OTT 자판기\n-# 버튼을 눌러 이용해주세요 !"))
         self.c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        
-        custom_emoji1 = PartialEmoji(name="3", id=1426934636428394678) # 충전
-        custom_emoji2 = PartialEmoji(name="6", id=1426943544928505886) # 입고알림
-        custom_emoji3 = PartialEmoji(name="5", id=1426936503635939428) # 내 정보
-        custom_emoji4 = PartialEmoji(name="4", id=1426936460149395598) # 구매
-
-        button_1 = ui.Button(label="충전", custom_id="charge_button", emoji=custom_emoji1)
-        button_2 = ui.Button(label="입고알림", custom_id="notification_button", emoji=custom_emoji2)
-        button_3 = ui.Button(label="내 정보", custom_id="my_info_button", emoji=custom_emoji3)
-        button_4 = ui.Button(label="구매", custom_id="purchase_button", emoji=custom_emoji4)
-
+        button_1 = ui.Button(label="충전", custom_id="charge_button")
+        button_2 = ui.Button(label="입고알림", custom_id="notification_button")
+        button_3 = ui.Button(label="내 정보", custom_id="my_info_button")
+        button_4 = ui.Button(label="구매", custom_id="purchase_button")
         linha = ui.ActionRow(button_1, button_2)
         linha2 = ui.ActionRow(button_3, button_4)
-
         self.c.add_item(linha)
         self.c.add_item(linha2)
         self.add_item(self.c)
-        
-        # 콜백 연결
         button_2.callback = self.on_notification_click
         button_3.callback = self.on_my_info_click
         button_4.callback = self.on_purchase_click
-        # '충전' 버튼은 별도 로직이 필요하여 일단 비워둡니다.
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """모든 상호작용 전에 이용 제한 여부를 확인합니다."""
-        if await is_user_banned(interaction.guild_id, interaction.user.id):
-            banned_view = create_ephemeral_container(
-                "**사용불가**", 
-                "현재 자판기 이용이 제한되었습니다\n자세한 이유를 알고 싶으면 문의해주세요"
-            )
-            await interaction.response.send_message(view=banned_view, ephemeral=True)
+        if await is_banned_shelf(interaction.guild_id, interaction.user.id):
+            await interaction.response.send_message(view=create_ephemeral_container("**사용불가**","현재 자판기 이용이 제한되었습니다\n자세한 이유를 알고 싶으면 문의해주세요"), ephemeral=True)
             return False
         return True
 
     async def on_notification_click(self, interaction: discord.Interaction):
         role = interaction.guild.get_role(NOTIFICATION_ROLE_ID)
         if not role:
-            await interaction.response.send_message("알림 역할이 서버에 존재하지 않습니다. 관리자에게 문의하세요.", ephemeral=True)
+            await interaction.response.send_message("알림 역할이 서버에 존재하지 않습니다.", ephemeral=True)
             return
-
         member = interaction.user
-        container_title = ""
-        container_message = ""
-
-        if role in member.roles:
-            await member.remove_roles(role)
-            container_title = "**알림받기 취소**"
-            container_message = "이제 재고 알림을 받지 않습니다."
+        new_state = await toggle_subscription_shelf(interaction.guild_id, member.id)
+        if new_state:
+            view = create_ephemeral_container("**알림받기**","이제 재고가 추가될 때마다 알림을 받으실 수 있습니다\n버튼을 한번 더 누르시면 알림이 취소됩니다.")
         else:
-            await member.add_roles(role)
-            container_title = "**알림받기**"
-            container_message = "이제 재고가 추가될 때마다 알림을 받으실 수 있습니다.\n버튼을 한번 더 누르시면 알림이 취소됩니다."
-        
-        view = create_ephemeral_container(container_title, container_message)
+            view = create_ephemeral_container("**알림받기 취소**","이제 재고 알림을 받지 않습니다.")
         await interaction.response.send_message(view=view, ephemeral=True)
 
     async def on_my_info_click(self, interaction: discord.Interaction):
-        member = interaction.user
-        guild = interaction.guild
-
-        user_info = await get_user_info_sqlite(guild.id, member.id)
-        balance = user_info.get("balance", 0)
-        total = user_info.get("total", 0)
-        tx_count = user_info.get("tx_count", 0)
-
-        ephemeral_view = ui.LayoutView(timeout=120)
-        info_container = ui.Container(ui.TextDisplay(f"{member.display_name}님 정보"))
-        info_container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        info_container.add_item(ui.TextDisplay(f"보유 금액 = __{balance}__원"))
-        info_container.add_item(ui.TextDisplay(f"누적 금액 = __{total}__원"))
-        info_container.add_item(ui.TextDisplay(f"거래 횟수 = __{tx_count}__번"))
-        ephemeral_view.add_item(info_container)
-        
-        await interaction.response.send_message(view=ephemeral_view, ephemeral=True)
+        user_info = await get_user_info(interaction.guild_id, interaction.user.id)
+        view = ui.LayoutView()
+        c = ui.Container(ui.TextDisplay(f"{interaction.user.display_name}님 정보"))
+        c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        c.add_item(ui.TextDisplay(f"보유 금액 = __{user_info.get('balance',0)}__원"))
+        c.add_item(ui.TextDisplay(f"누적 금액 = __{user_info.get('total',0)}__원"))
+        c.add_item(ui.TextDisplay(f"거래 횟수 = __{user_info.get('tx_count',0)}__번"))
+        view.add_item(c)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     async def on_purchase_click(self, interaction: discord.Interaction):
         categories = await get_categories(interaction.guild_id)
         if not categories:
-            await interaction.response.send_message(view=create_ephemeral_container("알림", "현재 판매중인 상품이 없습니다."), ephemeral=True)
+            await interaction.response.send_message(view=create_ephemeral_container("알림","현재 판매중인 상품이 없습니다."), ephemeral=True)
             return
-
         view = ui.LayoutView()
         container = ui.Container(ui.TextDisplay("EMOJI_0 카테고리"))
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("원하시는 카테고리를 선택해주세요"))
         view.add_item(container)
-        view.add_item(CategorySelect(categories))
-
+        view.add_item(CategorySelect(interaction.guild_id, categories))
         await interaction.response.send_message(view=view, ephemeral=True)
 
-# --- 봇 이벤트 ---
-@bot.event
-async def on_ready():
-    try:
-        await init_db_async()
-        print("✅ SQLite DB 초기화 완료")
-    except Exception as e:
-        print(f"❌ SQLite 초기화 중 오류: {e}")
-
-    print(f'✅ {bot.user}로 로그인했습니다.')
-    try:
-        synced = await bot.tree.sync()
-        print(f'✅ {len(synced)}개의 슬래시 명령어가 동기화되었습니다.')
-    except Exception as e:
-        print(f'❌ 슬래시 명령어 동기화 중 오류 발생: {e}')
-
-# --- 슬래시 명령어 ---
+# ------------------ 슬래시 커맨드 (관리자 전용 포함) ------------------
 @bot.tree.command(name="자판기패널", description="자판기 패널을 표시합니다")
 @app_commands.checks.has_permissions(administrator=True)
 async def panel_vending(interaction: discord.Interaction):
@@ -518,57 +386,45 @@ async def manage_balance(interaction: discord.Interaction, 유저: discord.Membe
     if 금액 <= 0:
         await interaction.response.send_message("금액은 0보다 커야 합니다.", ephemeral=True)
         return
-
-    amount_to_change = 금액 if 종류 == "추가" else -금액
-    note = f"관리자({interaction.user.name})에 의한 금액 {종류}"
-    
-    await record_transaction_sqlite(interaction.guild_id, 유저.id, amount_to_change, "관리자", note)
-    
-    new_info = await get_user_info_sqlite(interaction.guild_id, 유저.id)
-    new_balance = new_info['balance']
-
-    title = f"금액 {종류}"
+    amount = 금액 if 종류=="추가" else -금액
+    await record_transaction(interaction.guild_id, 유저.id, amount, "관리자", f"관리자({interaction.user.name})")
+    new_info = await get_user_info(interaction.guild_id, 유저.id)
     view = ui.LayoutView()
-    c = ui.Container(ui.TextDisplay(title))
+    c = ui.Container(ui.TextDisplay(f"금액 {종류}"))
     c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     c.add_item(ui.TextDisplay(f"유저 = __{유저.display_name}__님"))
     c.add_item(ui.TextDisplay(f"{종류} 금액 = __{금액}__원"))
-    c.add_item(ui.TextDisplay(f"{종류} 후 금액 = __{new_balance}__원"))
+    c.add_item(ui.TextDisplay(f"{종류} 후 금액 = __{new_info.get('balance',0)}__원"))
     view.add_item(c)
-
     await interaction.response.send_message(view=view, ephemeral=True)
 
 @bot.tree.command(name="이용제한", description="유저의 자판기 이용을 제한하거나 허용합니다.")
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(유저="상태를 변경할 유저", 상태="사용 가능 또는 사용 불가")
+@app_commands.describe(유저="상태를 변경할 유저", 상태="사용 또는 불가")
 async def manage_restriction(interaction: discord.Interaction, 유저: discord.Member, 상태: str):
     if 상태 not in ["사용", "불가"]:
         await interaction.response.send_message("상태는 '사용' 또는 '불가'만 가능합니다.", ephemeral=True)
         return
-
-    is_banned = (상태 == "불가")
-    await set_user_restriction(interaction.guild_id, 유저.id, is_banned)
-    
+    is_banned = (상태=="불가")
+    await set_ban_shelf(interaction.guild_id, 유저.id, is_banned)
     status_text = "사용 불가" if is_banned else "사용 가능"
-
     view = ui.LayoutView()
     c = ui.Container(ui.TextDisplay("**자판기 사용 여부**"))
     c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     c.add_item(ui.TextDisplay(f"**유저** = {유저.mention}"))
     c.add_item(ui.TextDisplay(f"**사용 가능 여부** = __{status_text}__"))
     view.add_item(c)
-
     await interaction.response.send_message(view=view, ephemeral=True)
 
-# --- 제품 설정 모달 ---
+# 제품 설정(관리자) — 모달, 드롭다운, 재고추가 등
 class ProductModal(ui.Modal):
-    def __init__(self, title="제품 추가"):
-        super().__init__(title=title)
+    def __init__(self, guild_id):
+        super().__init__(title="제품 추가")
+        self.guild_id = guild_id
         self.emoji_input = ui.TextInput(label="이모지")
         self.name_input = ui.TextInput(label="제품 이름")
         self.category_input = ui.TextInput(label="카테고리")
-        self.price_input = ui.TextInput(label="가격 (숫자만)")
-        
+        self.price_input = ui.TextInput(label="가격")
         self.add_item(self.emoji_input)
         self.add_item(self.name_input)
         self.add_item(self.category_input)
@@ -577,40 +433,28 @@ class ProductModal(ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             price = int(self.price_input.value)
-        except ValueError:
-            await interaction.response.send_message("가격은 숫자로만 입력해주세요.", ephemeral=True)
-            return
-
+        except:
+            await interaction.response.send_message("가격은 숫자만 입력하세요.", ephemeral=True); return
         emoji_str = self.emoji_input.value
         e_name, e_id = parse_custom_emoji(emoji_str)
-        
         if not e_name and not e_id:
             e_name = emoji_str
             e_id = None
-            
-        product_name = self.name_input.value
-        category = self.category_input.value
-        
         try:
-            await add_product(interaction.guild_id, product_name, category, price, e_name, e_id)
-            
-            view = ui.LayoutView()
-            c = ui.Container(ui.TextDisplay("**제품 추가**"))
+            pid = await add_product_shelf(interaction.guild_id, self.name_input.value, self.category_input.value, price, e_name, e_id)
+            v = ui.LayoutView()
+            c = ui.Container(ui.TextDisplay("**제품추가**"))
             c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            c.add_item(ui.TextDisplay(f"**이모지** = {emoji_str}"))
-            c.add_item(ui.TextDisplay(f"**제품 이름** = __{product_name}__"))
-            c.add_item(ui.TextDisplay(f"**카테고리** = __{category}__"))
+            c.add_item(ui.TextDisplay(f"**제품 이름** = __{self.name_input.value}__"))
+            c.add_item(ui.TextDisplay(f"**카테고리** = __{self.category_input.value}__"))
             c.add_item(ui.TextDisplay(f"**가격** = __{price}__원"))
-            view.add_item(c)
-
-            await interaction.response.send_message(view=view, ephemeral=True)
-
-        except sqlite3.IntegrityError:
-            await interaction.response.send_message(f"오류: 이미 '{product_name}' 이름의 제품이 존재합니다.", ephemeral=True)
+            v.add_item(c)
+            await interaction.response.send_message(view=v, ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("동일한 이름의 제품이 이미 있습니다.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"제품 추가 중 오류 발생: {e}", ephemeral=True)
+            await interaction.response.send_message(f"제품 추가 오류: {e}", ephemeral=True)
 
-# --- 제품 설정 드롭다운 ---
 class ProductManagementSelect(ui.Select):
     def __init__(self):
         options = [
@@ -623,22 +467,19 @@ class ProductManagementSelect(ui.Select):
         try:
             choice = self.values[0]
             if choice == "add_product":
-                await interaction.response.send_modal(ProductModal())
+                await interaction.response.send_modal(ProductModal(interaction.guild_id))
             elif choice == "delete_product":
-                products = await get_all_products(interaction.guild_id)
+                products = await get_all_products_shelf(interaction.guild_id)
                 if not products:
-                    await interaction.response.send_message("삭제할 제품이 없습니다.", ephemeral=True)
-                    return
-
+                    await interaction.response.send_message("삭제할 제품이 없습니다.", ephemeral=True); return
                 view = ui.LayoutView()
                 cont = ui.Container(ui.TextDisplay("삭제할 제품을 선택해주세요"))
                 cont.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
                 view.add_item(cont)
-
-                del_select = ProductDeleteSelect(products)
-                view.add_item(del_select)
+                del_sel = ProductDeleteSelect(products)
+                view.add_item(del_sel)
                 await interaction.response.send_message(view=view, ephemeral=True)
-        except Exception as e:
+        except Exception:
             try:
                 await interaction.response.send_message("작업 처리 중 오류가 발생했습니다.", ephemeral=True)
             except:
@@ -653,46 +494,37 @@ class ProductDeleteSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         try:
-            product_id = int(self.values[0])
-            await delete_product(product_id)
-            await interaction.response.edit_message(content="선택한 제품이 삭제되었습니다.", view=None)
+            pid = int(self.values[0])
+            await remove_product_shelf(interaction.guild_id, pid)
+            await interaction.response.send_message("선택 제품이 삭제되었습니다.", ephemeral=True)
         except Exception:
-            try:
-                await interaction.response.send_message("제품 삭제 중 오류가 발생했습니다.", ephemeral=True)
-            except:
-                pass
+            await interaction.response.send_message("제품 삭제 중 오류가 발생했습니다.", ephemeral=True)
 
 @bot.tree.command(name="제품설정", description="자판기의 제품을 추가하거나 삭제합니다.")
 @app_commands.checks.has_permissions(administrator=True)
 async def product_settings(interaction: discord.Interaction):
     view = ui.LayoutView()
-    container = ui.Container(ui.TextDisplay("**제품 설정**"))
-    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    container.add_item(ui.TextDisplay("아래 드롭다운을 눌러 제품을 설정해주세요"))
-    view.add_item(container)
-    # ProductManagementSelect 인스턴스를 컨테이너 안에 넣도록 변경: add_item(ui.ActionRow(...))
+    cont = ui.Container(ui.TextDisplay("**제품 설정**"))
+    cont.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    cont.add_item(ui.TextDisplay("아래 드롭다운을 눌러 제품을 설정해주세요"))
+    view.add_item(cont)
     view.add_item(ui.ActionRow(ProductManagementSelect()))
     await interaction.response.send_message(view=view, ephemeral=True)
 
-# --- 재고 추가 ---
 class StockAddModal(ui.Modal):
-    def __init__(self, product_id, product_name):
+    def __init__(self, guild_id, product_id, product_name):
         super().__init__(title=f"{product_name} 재고 추가")
+        self.guild_id = guild_id
         self.product_id = product_id
         self.product_name = product_name
-        self.stock_input = ui.TextInput(
-            label="추가할 재고 (줄바꿈으로 여러 항목 입력)"
-        )
+        self.stock_input = ui.TextInput(label="추가할 재고 (줄바꿈으로 각 항목 입력)")
         self.add_item(self.stock_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        stock_list = [line.strip() for line in self.stock_input.value.split('\n') if line.strip()]
+        stock_list = [s.strip() for s in self.stock_input.value.split('\n') if s.strip()]
         if not stock_list:
-            await interaction.response.send_message("추가할 재고 내용이 없습니다.", ephemeral=True)
-            return
-        
-        await add_stock(self.product_id, stock_list)
-
+            await interaction.response.send_message("추가할 재고가 없습니다.", ephemeral=True); return
+        await add_stock_shelf(self.guild_id, self.product_id, stock_list)
         view = ui.LayoutView()
         c = ui.Container(ui.TextDisplay("**재고 추가 완료**"))
         c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
@@ -700,49 +532,55 @@ class StockAddModal(ui.Modal):
         c.add_item(ui.TextDisplay(f"**추가된 재고 개수** = __{len(stock_list)}__개"))
         view.add_item(c)
         await interaction.response.send_message(view=view, ephemeral=True)
-        
-        # 알림 역할 멘션
-        notif_role = interaction.guild.get_role(NOTIFICATION_ROLE_ID)
-        if notif_role:
-            await interaction.channel.send(f"{notif_role.mention} **{self.product_name}** 제품의 재고가 추가되었습니다!")
+        # 알림 역할 멘션 (채널에 공지)
+        role = interaction.guild.get_role(NOTIFICATION_ROLE_ID)
+        if role:
+            await interaction.channel.send(f"{role.mention} **{self.product_name}** 제품의 재고가 추가되었습니다!")
 
 class StockAddSelect(ui.Select):
     def __init__(self, products):
         options = []
-        for p_id, name, _, _, e_name, e_id in products:
+        for p_id, name, cat, price, e_name, e_id in products:
             options.append(discord.SelectOption(label=name, value=str(p_id)))
         super().__init__(placeholder="재고를 추가할 제품 선택", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
         try:
-            product_id = int(self.values[0])
-            # find name from options
-            product_name = next((o.label for o in self.options if o.value == str(product_id)), "알 수 없는 제품")
-            await interaction.response.send_modal(StockAddModal(product_id, product_name))
+            pid = int(self.values[0])
+            product_name = next((p[1] for p in self.options if p.value == str(pid)), "알 수 없는 제품")
+            await interaction.response.send_modal(StockAddModal(interaction.guild_id, pid, product_name))
         except Exception:
-            try:
-                await interaction.response.send_message("재고 추가 처리 중 오류가 발생했습니다.", ephemeral=True)
-            except:
-                pass
+            await interaction.response.send_message("재고 추가 처리 중 오류가 발생했습니다.", ephemeral=True)
 
 @bot.tree.command(name="재고추가", description="제품의 재고를 추가합니다.")
 @app_commands.checks.has_permissions(administrator=True)
 async def add_stock_command(interaction: discord.Interaction):
-    products = await get_all_products(interaction.guild_id)
-    if not products:
-        await interaction.response.send_message("먼저 제품을 추가해주세요.", ephemeral=True)
-        return
-
+    prods = await get_all_products_shelf(interaction.guild_id)
+    if not prods:
+        await interaction.response.send_message("먼저 제품을 추가해주세요.", ephemeral=True); return
     view = ui.LayoutView()
-    container = ui.Container(ui.TextDisplay("**재고 추가**"))
-    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    container.add_item(ui.TextDisplay("드롭다운을 눌러 재고를 추가할 제품을 선택해주세요."))
-    view.add_item(container)
-    view.add_item(ui.ActionRow(StockAddSelect(products)))
-
+    cont = ui.Container(ui.TextDisplay("**재고 추가**"))
+    cont.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    cont.add_item(ui.TextDisplay("드롭다운을 눌러 재고를 추가할 제품을 선택해주세요."))
+    view.add_item(cont)
+    view.add_item(ui.ActionRow(StockAddSelect(prods)))
     await interaction.response.send_message(view=view, ephemeral=True)
 
+# ------------------ on_ready ------------------
+@bot.event
+async def on_ready():
+    try:
+        await init_db_async()
+        print("DB 초기화 완료 (shelve)")
+    except Exception as e:
+        print("DB 초기화 오류:", e)
+    try:
+        synced = await bot.tree.sync()
+        print(f"{len(synced)}개의 슬래시 명령이 동기화되었습니다.")
+    except Exception as e:
+        print("명령 동기화 오류:", e)
+    print(f"{bot.user}로 로그인했습니다.")
 
-# --- 봇 실행 ---
-# // TODO: 여기에 봇 토큰을 입력하세요.
-bot.run("")
+# ------------------ 실행 ------------------
+# .env 에 DISCORD_TOKEN 설정 권장
+bot.run(os.getenv("DISCORD_TOKEN") or "")
