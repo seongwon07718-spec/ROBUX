@@ -28,7 +28,8 @@ class MyLayout(ui.LayoutView):
 
 active_views = {}
 
-class MyLayout(ui.LayoutView):
+# 클래스 이름 중복으로 인한 덮어쓰기 문제 해결을 위해 클래스명을 변경했습니다.
+class MyLayoutVending(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
         
@@ -69,14 +70,17 @@ async def on_ready():
     except Exception as e:
         print(f'슬래시 명령어 동기화 중 오류 발생.: {e}')
 
+# 같은 슬래시 이름을 사용하더라도 파이썬 함수명이 중복되면 덮어쓰기나 등록 문제가 생깁니다.
+# 따라서 데코레이터는 그대로 두고 내부 함수 이름만 고유하게 변경했습니다.
+
 @bot.tree.command(name="누락패널", description="누락 보상 패널을 표시합니다")
-async def button_panel(interaction: discord.Interaction):
+async def button_panel_nurak(interaction: discord.Interaction):
     layout = MyLayout()
     await interaction.response.send_message(view=layout, ephemeral=False)
 
 @bot.tree.command(name="자판기패널", description="자판기 패널을 표시합니다")
-async def button_panel(interaction: discord.Interaction):
-    layout = MyLayout()
+async def button_panel_vending(interaction: discord.Interaction):
+    layout = MyLayoutVending()
     await interaction.response.send_message(view=layout, ephemeral=False)
 
 bot.run("")
