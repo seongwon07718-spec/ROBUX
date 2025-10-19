@@ -176,23 +176,29 @@ async def on_ready():
         if not MONGO_URI:
             print("MONGO_URI가 설정되어 있지 않습니다. .env 파일을 확인하세요.")
         else:
-            bot.mongo_client = AsyncIOMotorClient(MONGO_URI)
-            # 기본 DB명을 URI에서 가져오거나 명시적으로 지정 가능
             try:
+                # 타임아웃 설정 추가해서 연결 시도
+                bot.mongo_client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+                # 서버 정보로 연결 확인 (동기 호출이므로 예외 발생 시 잡아냄)
+                try:
+                    bot.mongo_client.server_info()
+                except Exception as e:
+                    print("Mongo 서버 응답 확인 실패:", e)
+                    # 연결 실패 시 안내만 함(다시 시도 가능)
+                # 기본 DB명을 URI에서 가져오거나 명시적으로 지정 가능
                 bot.mongo_db = bot.mongo_client.get_default_database()
                 if bot.mongo_db is None:
-                    # 예: 명시적 DB명 사용 (원하시면 바꿔 쓰세요)
                     bot.mongo_db = bot.mongo_client["my_database"]
-            except Exception:
-                bot.mongo_db = bot.mongo_client["my_database"]
 
-            # 컬렉션 인덱스 설정(선택적)
-            try:
-                # users 컬렉션에 user_id+guild_id 인덱스 생성(중복 방지/빠른 조회)
-                bot.mongo_db["users"].create_index([("user_id", 1), ("guild_id", 1)], unique=True)
-                bot.mongo_db["transactions"].create_index([("user_id", 1), ("guild_id", 1), ("created_at", -1)])
-            except Exception:
-                pass
+                # 컬렉션 인덱스 설정(비동기이므로 await 필요)
+                try:
+                    await bot.mongo_db["users"].create_index([("user_id", 1), ("guild_id", 1)], unique=True)
+                    await bot.mongo_db["transactions"].create_index([("user_id", 1), ("guild_id", 1), ("created_at", -1)])
+                except Exception as ie:
+                    print("인덱스 생성 중 오류:", ie)
+
+            except Exception as e:
+                print("Mongo 연결 중 예외 발생:", e)
 
     print(f"로벅스 자판기 봇이 {bot.user}로 로그인했습니다.")
     try:
