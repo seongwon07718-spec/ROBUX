@@ -4,19 +4,49 @@ from discord.ext import commands
 import os
 import asyncio
 
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 class MyLayoutVending(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
+        
+        # 메인 컨테이너 생성
         self.c = ui.Container(ui.TextDisplay("24시간 OTT 자판기\n-# 버튼을 눌러 이용해주세요 !"))
+        
+        # 첫 번째 구분선
         self.c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        button_1 = ui.Button(label="충전", custom_id="charge_button")
-        button_2 = ui.Button(label="알림", custom_id="notification_button")
-        button_3 = ui.Button(label="정보", custom_id="my_info_button")
-        button_4 = ui.Button(label="구매", custom_id="purchase_button")
+        
+        # 이미지 표시
+        image_display = ui.TextDisplay()
+        image_display.set_content("https://cdn.discordapp.com/attachments/1428820825594658817/1430874303091708086/6ED97B45-4298-4CDC-BA25-C0F4FD3C9AAA.jpg?ex=68fb5d0a&is=68fa0b8a&hm=4f53dd33389a5a146e5d572d5fdda05dc5bbe79ae1c731123702f6786f6971b6&")
+        self.c.add_item(image_display)
+        
+        # 두 번째 구분선
+        self.c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        
+        # 이모지 생성
+        charge_emoji = PartialEmoji.from_str("<:3_:1426934636428394678>")
+        notification_emoji = PartialEmoji.from_str("<:6_:1426943544928505886>")
+        info_emoji = PartialEmoji.from_str("<:5_:1426936503635939428>")
+        purchase_emoji = PartialEmoji.from_str("<:4_:1426936460149395598>")
+        
+        # 버튼 생성 및 이모지 추가
+        button_1 = ui.Button(label="충전", custom_id="charge_button", emoji=charge_emoji)
+        button_2 = ui.Button(label="알림", custom_id="notification_button", emoji=notification_emoji)
+        button_3 = ui.Button(label="정보", custom_id="my_info_button", emoji=info_emoji)
+        button_4 = ui.Button(label="구매", custom_id="purchase_button", emoji=purchase_emoji)
+        
+        # 버튼 행 생성
         linha = ui.ActionRow(button_1, button_2)
         linha2 = ui.ActionRow(button_3, button_4)
+        
+        # 컨테이너에 버튼 행 추가
         self.c.add_item(linha)
         self.c.add_item(linha2)
+        
+        # 뷰에 컨테이너 추가
         self.add_item(self.c)
 
 @bot.tree.command(name="자판기패널", description="자판기 패널을 표시합니다")
