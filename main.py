@@ -12,8 +12,13 @@ class MyLayoutVending(ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
 
-        self.c = ui.Container(ui.TextDisplay("24시간 OTT 자판기\n-# 버튼을 눌러 이용해주세요 !"))
+        self.c = ui.Container(ui.TextDisplay("**24시간 OTT 자판기**\n-# 버튼을 눌러 이용해주세요 !"))
         self.c.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        help_container = ui.Container(ui.TextDisplay("**자동충전** 오류시 [바로가기](https://discord.com/channels/1419200424636055592/1428821675142811729)\n**제품설명** 확인은? [바로가기](https://discord.com/channels/1419200424636055592/1430852730720878695)"))
+        help_container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        self.c.add_item(help_container)
+        
 
         custom_emoji1 = PartialEmoji(name="3_", id=1426934636428394678)
         custom_emoji2 = PartialEmoji(name="6_", id=1426943544928505886)
