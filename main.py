@@ -41,6 +41,8 @@ class MyLayoutVending(ui.LayoutView):
 @app_commands.checks.has_permissions(administrator=True)
 async def panel_vending(interaction: discord.Interaction):
     layout = MyLayoutVending()
+    # 반드시 interaction에 응답을 보내야 합니다 (없으면 상호작용 오류 발생)
+    await interaction.response.send_message(view=layout, ephemeral=False)
 
 # ---------------- on_ready ----------------
 @bot.event
