@@ -3,7 +3,6 @@ from discord import PartialEmoji, ui, app_commands
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
-import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
 
 # .env 파일 로드
@@ -19,8 +18,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # MongoDB 비동기 클라이언트 설정
 mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client["boost_vending"]  # 데이터베이스 이름
-users_collection = db["users"]  # 사용자 정보 컬렉션
+db = mongo_client["boost_vending"]
+users_collection = db["users"]
 
 class MyLayoutVending(ui.LayoutView):
     def __init__(self):
@@ -63,20 +62,19 @@ class MyLayoutVending(ui.LayoutView):
             new_user = {
                 "user_name": user_name,
                 "user_id": user_id,
-                "balance": 0,  # 남은 금액
-                "total_spent": 0,  # 누적 금액
-                "transaction_count": 0  # 거래 횟수
+                "balance": 0,
+                "total_spent": 0,
+                "transaction_count": 0
             }
             await users_collection.insert_one(new_user)
         
-        # 버튼 상호작용에 따른 추가 로직은 여기에 구현
         return True
 
 @bot.tree.command(name="부스트_자판기", description="부스트 자판기를 표시합니다")
 @app_commands.checks.has_permissions(administrator=True)
 async def panel_vending(interaction: discord.Interaction):
     view = MyLayoutVending()
-    await interaction.response.send_message(view=view, ephemeral=False)
+    await interaction.response.send_message(view=view)
 
 @bot.tree.command(name="디비_상태", description="MongoDB 연결 상태를 확인합니다")
 @app_commands.checks.has_permissions(administrator=True)
@@ -88,24 +86,34 @@ async def check_db_status(interaction: discord.Interaction):
         # 사용자 수 확인
         user_count = await users_collection.count_documents({})
         
-        embed = discord.Embed(
-            title="데이터베이스 상태",
-            description="MongoDB 연결 상태 및 정보",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="연결 상태", value="✅ 정상", inline=False)
-        embed.add_field(name="등록된 사용자 수", value=f"{user_count}명", inline=True)
-        embed.add_field(name="데이터베이스", value="boost_vending", inline=True)
-        embed.add_field(name="컬렉션", value="users", inline=True)
+        # 컨테이너로 응답 생성
+        view = ui.LayoutView(timeout=None)
+        container = ui.Container()
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # 헤더 추가
+        container.add_item(ui.TextDisplay("## 데이터베이스 상태"))
+        container.add_item(ui.Separator())
+        
+        # 상태 정보 추가
+        container.add_item(ui.TextDisplay("✅ **연결 상태**: 정상"))
+        container.add_item(ui.TextDisplay(f"EMOJI_0 **등록된 사용자 수**: {user_count}명"))
+        container.add_item(ui.TextDisplay("EMOJI_1 **데이터베이스**: boost_vending"))
+        container.add_item(ui.TextDisplay("EMOJI_2 **컬렉션**: users"))
+        
+        view.add_item(container)
+        await interaction.response.send_message(view=view)
+        
     except Exception as e:
-        embed = discord.Embed(
-            title="데이터베이스 상태",
-            description=f"❌ 연결 오류: {str(e)}",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # 오류 발생 시 컨테이너로 응답
+        view = ui.LayoutView(timeout=None)
+        container = ui.Container()
+        
+        container.add_item(ui.TextDisplay("## ❌ 데이터베이스 연결 오류"))
+        container.add_item(ui.Separator())
+        container.add_item(ui.TextDisplay(f"**오류 내용**: {str(e)}"))
+        
+        view.add_item(container)
+        await interaction.response.send_message(view=view)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -117,27 +125,27 @@ async def 디비상태(ctx):
         # 사용자 수 확인
         user_count = await users_collection.count_documents({})
         
-        embed = discord.Embed(
-            title="데이터베이스 상태",
-            description="MongoDB 연결 상태 및 정보",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="연결 상태", value="✅ 정상", inline=False)
-        embed.add_field(name="등록된 사용자 수", value=f"{user_count}명", inline=True)
-        embed.add_field(name="데이터베이스", value="boost_vending", inline=True)
-        embed.add_field(name="컬렉션", value="users", inline=True)
+        # 컨테이너로 응답 생성
+        view = ui.LayoutView(timeout=None)
+        container = ui.Container()
         
-        await ctx.send(embed=embed)
+        # 헤더 추가
+        container.add_item(ui.TextDisplay("## 데이터베이스 상태"))
+        container.add_item(ui.Separator())
+        
+        # 상태 정보 추가
+        container.add_item(ui.TextDisplay("✅ **연결 상태**: 정상"))
+        container.add_item(ui.TextDisplay(f"EMOJI_3 **등록된 사용자 수**: {user_count}명"))
+        container.add_item(ui.TextDisplay("EMOJI_4 **데이터베이스**: boost_vending"))
+        container.add_item(ui.TextDisplay("EMOJI_5 **컬렉션**: users"))
+        
+        view.add_item(container)
+        await ctx.send(view=view)
+        
     except Exception as e:
-        embed = discord.Embed(
-            title="데이터베이스 상태",
-            description=f"❌ 연결 오류: {str(e)}",
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-
-@bot.event
-async def on_ready():
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅{len(synced)}개의 슬래시 명령이 동기화 완료")
+        # 오류 발생 시 컨테이너로 응답
+        view = ui.LayoutView(timeout=None)
+        container = ui.Container()
+        
+        container.add_item(ui.TextDisplay("## ❌ 데이터베이스 연결 오류"))
+        container.add_item(ui.
