@@ -4,8 +4,11 @@ from discord.ext import commands
 from motor.motor_asyncio import AsyncIOMotorClient
 
 # 토큰과 MongoDB 연결 문자열 직접 지정 (보안상 주의하세요)
-TOKEN = "여기에_디스코드_봇_토큰_입력"
-MONGO_URI = "mongodb+:비밀번호@cluster0.9yjczao.mongodb.net/?appName=Cluster0"
+TOKEN = ""
+MONGO_URI = ""
+
+client = AsyncIOMotorClient(MONGO_URI)
+db = client["boost_db"]
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -36,10 +39,10 @@ class MyLayoutVending(ui.LayoutView):
         custom_emoji3 = PartialEmoji(name="d4", id=1431500582295965776)
         custom_emoji4 = PartialEmoji(name="d19", id=1431500579162554511)
 
-        button_1 = ui.Button(label="충전", custom_id="button_1", emoji=custom_emoji1, style=discord.ButtonStyle.secondary)
-        button_2 = ui.Button(label="후기", custom_id="button_2", emoji=custom_emoji2, style=discord.ButtonStyle.secondary)
-        button_3 = ui.Button(label="정보", custom_id="button_3", emoji=custom_emoji3, style=discord.ButtonStyle.secondary)
-        button_4 = ui.Button(label="구매", custom_id="button_4", emoji=custom_emoji4, style=discord.ButtonStyle.primary)
+        button_1 = ui.Button(label="충전", custom_id="button_1", emoji=custom_emoji1)
+        button_2 = ui.Button(label="후기", custom_id="button_2", emoji=custom_emoji2)
+        button_3 = ui.Button(label="정보", custom_id="button_3", emoji=custom_emoji3)
+        button_4 = ui.Button(label="구매", custom_id="button_4", emoji=custom_emoji4)
 
         row1 = ui.ActionRow(button_1, button_2)
         row2 = ui.ActionRow(button_3, button_4)
@@ -72,21 +75,20 @@ async def panel_vending(interaction: discord.Interaction):
     view = MyLayoutVending()
     await interaction.response.send_message(view=view)
 
-@bot.tree.command(name="디비_상태", description="MongoDB 연결 상태를 확인합니다.")
+@bot.tree.command(name="디비_상태", description="디비 상태를 확인합니다.")
 @app_commands.checks.has_permissions(administrator=True)
 async def check_db_status_slash(interaction: discord.Interaction):
     status_view = ui.LayoutView(timeout=60)
     container = ui.Container()
-    container.add_item(ui.TextDisplay("## 데이터베이스 상태 확인 결과"))
+    container.add_item(ui.TextDisplay("### 데이터베이스 상태 확인 결과"))
     container.add_item(ui.Separator())
 
     try:
         await mongo_client.admin.command('ping')
         user_count = await users_collection.count_documents({})
         container.add_item(ui.TextDisplay("✅ 연결 상태: 정상"))
-        container.add_item(ui.TextDisplay(f"EMOJI_0 등록된 사용자 수: {user_count}명"))
-        container.add_item(ui.TextDisplay("EMOJI_1 데이터베이스 이름: boost_vending"))
-        container.add_item(ui.TextDisplay("EMOJI_2 사용자 컬렉션 이름: users"))
+        container.add_item(ui.TextDisplay(f"등록된 사용자 수: {user_count}명"))
+
     except Exception as e:
         container.add_item(ui.TextDisplay("❌ 연결 오류"))
         container.add_item(ui.TextDisplay(f"오류 내용: {e}"))
@@ -108,8 +110,7 @@ async def check_db_status_prefix(ctx: commands.Context):
         user_count = await users_collection.count_documents({})
         container.add_item(ui.TextDisplay("✅ 연결 상태: 정상"))
         container.add_item(ui.TextDisplay(f"EMOJI_3 등록된 사용자 수: {user_count}명"))
-        container.add_item(ui.TextDisplay("EMOJI_4 데이터베이스 이름: boost_vending"))
-        container.add_item(ui.TextDisplay("EMOJI_5 사용자 컬렉션 이름: users"))
+        
     except Exception as e:
         container.add_item(ui.TextDisplay("❌ 연결 오류"))
         container.add_item(ui.TextDisplay(f"오류 내용: {e}"))
