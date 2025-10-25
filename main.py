@@ -3,22 +3,19 @@ from discord import PartialEmoji, ui, app_commands
 from discord.ext import commands
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# 토큰과 MongoDB 연결 문자열 직접 지정 (보안상 주의하세요)
+# 직접 입력: 디스코드 봇 토큰과 몽고DB URI (보안주의)
 TOKEN = ""
 MONGO_URI = ""
 
-client = AsyncIOMotorClient(MONGO_URI)
-db = client["boost_db"]
+# 몽고DB 클라이언트 설정
+mongo_client = AsyncIOMotorClient(MONGO_URI)
+db = mongo_client["boost_db"]  # 데이터베이스 이름
+users_collection = db["users"]
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # display_name 등 사용자 정보 접근용
+intents.members = True  # display_name 접근용
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# MongoDB 비동기 클라이언트 설정
-mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client["boost_vending"]
-users_collection = db["users"]
 
 class MyLayoutVending(ui.LayoutView):
     def __init__(self):
@@ -56,6 +53,20 @@ class MyLayoutVending(ui.LayoutView):
         user_id = interaction.user.id
         user_name = interaction.user.display_name
 
+        # 이용 제한 유저인지 확인
+        blocked = await db["blocked_users"].find_one({"user_id": user_id})
+        if blocked:
+            # 이용 제한 컨테이너 답장
+            view = ui.LayoutView(timeout=None)
+            c = ui.Container()
+            c.add_item(ui.TextDisplay(f"### 이용 제한\n---"))
+            c.add_item(ui.TextDisplay(f"현재 {user_name}님은 __자판기 이용 제한__ 되었습니다"))
+            c.add_item(ui.TextDisplay("이용 제한을 풀고 싶다면 문의해주세요"))
+            view.add_item(c)
+            await interaction.response.send_message(view=view, ephemeral=True)
+            return False
+
+        # 유저 최초 이용 시 DB 등록
         user_data = await users_collection.find_one({"user_id": user_id})
         if not user_data:
             new_user = {
@@ -68,6 +79,25 @@ class MyLayoutVending(ui.LayoutView):
             await users_collection.insert_one(new_user)
             print(f"새 사용자 {user_name} ({user_id}) DB 등록 완료")
         return True
+
+    # 버튼 상호작용 콜백 예시 (버튼 id에 따른 처리)
+    @ui.button(label="정보", custom_id="button_3", style=discord.ButtonStyle.secondary)
+    async def info_button(self, interaction: discord.Interaction, button: ui.Button):
+        user_id = interaction.user.id
+        user_data = await users_collection.find_one({"user_id": user_id})
+        if not user_data:
+            # 혹시 DB 없을 경우 기본 메시지
+            await interaction.response.send_message("등록된 정보가 없습니다.", ephemeral=True)
+            return
+
+        view = ui.LayoutView(timeout=None)
+        c = ui.Container()
+        c.add_item(ui.TextDisplay(f"### {interaction.user.display_name}님 정보\n---"))
+        c.add_item(ui.TextDisplay(f"**남은 금액** = {user_data.get('balance', 0)}원"))
+        c.add_item(ui.TextDisplay(f"**누적 금액** = {user_data.get('total_spent', 0)}원"))
+        c.add_item(ui.TextDisplay("**역할 등급** = 아직 미정"))
+        view.add_item(c)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 @bot.tree.command(name="부스트_자판기", description="부스트 자판기 패널을 표시합니다.")
 @app_commands.checks.has_permissions(administrator=True)
@@ -109,8 +139,8 @@ async def check_db_status_prefix(ctx: commands.Context):
         await mongo_client.admin.command('ping')
         user_count = await users_collection.count_documents({})
         container.add_item(ui.TextDisplay("✅ 연결 상태: 정상"))
-        container.add_item(ui.TextDisplay(f"EMOJI_3 등록된 사용자 수: {user_count}명"))
-        
+        container.add_item(ui.TextDisplay(f"등록된 사용자 수: {user_count}명"))
+
     except Exception as e:
         container.add_item(ui.TextDisplay("❌ 연결 오류"))
         container.add_item(ui.TextDisplay(f"오류 내용: {e}"))
@@ -118,6 +148,57 @@ async def check_db_status_prefix(ctx: commands.Context):
 
     status_view.add_item(container)
     await ctx.send(view=status_view)
+
+@bot.tree.command(
+    name="이용_제한",
+    description="특정 유저 자판기 이용 제한/해제",
+)
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(
+    user="제한/해제 대상 유저를 선택하세요.",
+    제한="자판기 이용 제한 여부를 선택하세요."
+)
+@app_commands.choices(
+    제한=[
+        app_commands.Choice(name="차단", value="block"),
+        app_commands.Choice(name="풀기", value="unblock")
+    ]
+)
+async def restriction_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    제한: app_commands.Choice[str]
+):
+    if 제한.value == "block":
+        # DB에 차단 기록 저장 (중복 저장 방지)
+        existing = await db["blocked_users"].find_one({"user_id": user.id})
+        if existing:
+            msg_container = ui.Container()
+            msg_container.add_item(ui.TextDisplay(f"이미 {user.display_name}님은 차단 상태입니다."))
+        else:
+            await db["blocked_users"].update_one(
+                {"user_id": user.id},
+                {"$set": {"user_name": user.display_name, "blocked": True}},
+                upsert=True
+            )
+            msg_container = ui.Container()
+            msg_container.add_item(ui.TextDisplay("자판기 차단 완료되었습니다"))
+        view = ui.LayoutView(timeout=None)
+        view.add_item(msg_container)
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+    elif 제한.value == "unblock":
+        existing = await db["blocked_users"].find_one({"user_id": user.id})
+        if existing:
+            await db["blocked_users"].delete_one({"user_id": user.id})
+            msg_container = ui.Container()
+            msg_container.add_item(ui.TextDisplay("자판기 차단 풀기 완료되었습니다"))
+        else:
+            msg_container = ui.Container()
+            msg_container.add_item(ui.TextDisplay(f"{user.display_name}님은 차단 상태가 아닙니다."))
+        view = ui.LayoutView(timeout=None)
+        view.add_item(msg_container)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 @bot.event
 async def on_ready():
