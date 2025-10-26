@@ -1,218 +1,166 @@
+# bot_main.py
+import os
+import asyncio
 import discord
-from discord import PartialEmoji, ui, app_commands
+from discord import app_commands
 from discord.ext import commands
-from motor.motor_asyncio import AsyncIOMotorClient
+import aiohttp
+import tempfile
 
-# 직접 입력: 디스코드 봇 토큰과 몽고DB URI (보안주의)
-TOKEN = ""
-MONGO_URI = ""
+# 관리자 역할 ID를 실제 서버 관리자 역할 ID로 변경하세요.
+ADMIN_ROLE_ID = 123456789012345678  # <-- 여기 바꿔주세요
 
-# 몽고DB 클라이언트 설정
-mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client["boost_db"]  # 데이터베이스 이름
-users_collection = db["users"]
+# boost_module.py가 같은 폴더에 있어야 합니다.
+import boost_module
 
 intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True  # display_name 접근용
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-class MyLayoutVending(ui.LayoutView):
-    def __init__(self):
-        super().__init__(timeout=None)
+def is_admin_member(user: discord.Member):
+    return any(r.id == ADMIN_ROLE_ID for r in user.roles)
 
-        container = ui.Container(ui.TextDisplay("**최저가 부스트**\n-# 버튼을 눌러 이용해주세요"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+@bot.tree.command(name="부스트_진행", description="서버 초대코드로 부스트를 진행합니다. (관리자 전용)")
+@app_commands.describe(invite="초대 코드 또는 초대 링크", months="기간: 1 또는 3 (월)", amount="총 부스트 수(짝수)", nickname="서버 닉네임(선택)", validate="시작 전에 토큰 검증 여부")
+async def slash_boost(interaction: discord.Interaction, invite: str, months: int, amount: int, nickname: str = "", validate: bool = False):
+    # 권한확인
+    if not is_admin_member(interaction.user):
+        await interaction.response.send_message("권한이 없습니다. 관리자 역할이 필요합니다.", ephemeral=True)
+        return
 
-        boost_section = ui.Section(
-            ui.TextDisplay("**부스트 재고\n-# 60초마다 갱신됩니다**"),
-            accessory=ui.Button(label="1000 부스트", disabled=True, style=discord.ButtonStyle.primary)
-        )
-        container.add_item(boost_section)
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    if months not in (1, 3):
+        await interaction.response.send_message("months는 1 또는 3만 가능합니다.", ephemeral=True)
+        return
+    try:
+        amount = int(amount)
+    except:
+        await interaction.response.send_message("amount는 숫자여야 합니다.", ephemeral=True)
+        return
+    if amount % 2 != 0:
+        await interaction.response.send_message("amount는 짝수여야 합니다.", ephemeral=True)
+        return
 
-        custom_emoji1 = PartialEmoji(name="d3", id=1431500583415713812)
-        custom_emoji2 = PartialEmoji(name="d8", id=1431500580198682676)
-        custom_emoji3 = PartialEmoji(name="d4", id=1431500582295965776)
-        custom_emoji4 = PartialEmoji(name="d19", id=1431500579162554511)
+    await interaction.response.send_message("부스트 작업을 시작합니다. 완료 시 DM으로 결과를 전송합니다.", ephemeral=True)
 
-        button_1 = ui.Button(label="충전", custom_id="button_1", emoji=custom_emoji1)
-        button_2 = ui.Button(label="후기", custom_id="button_2", emoji=custom_emoji2)
-        button_3 = ui.Button(label="정보", custom_id="button_3", emoji=custom_emoji3)
-        button_4 = ui.Button(label="구매", custom_id="button_4", emoji=custom_emoji4)
+    async def _run_boost():
+        if validate:
+            filename = "input/1m_tokens.txt" if months == 1 else "input/3m_tokens.txt"
+            valid, total = await asyncio.to_thread(boost_module.validate_tokens_file, filename)
+            if valid == 0:
+                return {"status": "failed", "reason": "유효한 토큰이 없습니다.", "valid": valid, "total": total}
+            if valid * 2 < amount:
+                return {"status": "failed", "reason": "유효한 토큰 부족", "valid": valid, "total": total}
 
-        row1 = ui.ActionRow(button_1, button_2)
-        row2 = ui.ActionRow(button_3, button_4)
+        # 실제 부스트 실행 (블로킹이므로 to_thread 사용)
+        result = await asyncio.to_thread(boost_module.thread_boost, invite, amount, months, nickname)
+        return {"status": "done", "result": result, "successful": len(boost_module.variables.success_tokens)*2, "failed": len(boost_module.variables.failed_tokens)*2}
 
-        container.add_item(row1)
-        container.add_item(row2)
+    res = await _run_boost()
 
-        self.add_item(container)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        user_id = interaction.user.id
-        user_name = interaction.user.display_name
-
-        # 이용 제한 유저인지 확인
-        blocked = await db["blocked_users"].find_one({"user_id": user_id})
-        if blocked:
-            # 이용 제한 컨테이너 답장
-            view = ui.LayoutView(timeout=None)
-            c = ui.Container()
-            c.add_item(ui.TextDisplay(f"### 이용 제한\n---"))
-            c.add_item(ui.TextDisplay(f"현재 {user_name}님은 __자판기 이용 제한__ 되었습니다"))
-            c.add_item(ui.TextDisplay("이용 제한을 풀고 싶다면 문의해주세요"))
-            view.add_item(c)
-            await interaction.response.send_message(view=view, ephemeral=True)
-            return False
-
-        # 유저 최초 이용 시 DB 등록
-        user_data = await users_collection.find_one({"user_id": user_id})
-        if not user_data:
-            new_user = {
-                "user_name": user_name,
-                "user_id": user_id,
-                "balance": 0,
-                "total_spent": 0,
-                "transaction_count": 0
-            }
-            await users_collection.insert_one(new_user)
-            print(f"새 사용자 {user_name} ({user_id}) DB 등록 완료")
-        return True
-
-    # 버튼 상호작용 콜백 예시 (버튼 id에 따른 처리)
-    @ui.button(label="정보", custom_id="button_3", style=discord.ButtonStyle.secondary)
-    async def info_button(self, interaction: discord.Interaction, button: ui.Button):
-        user_id = interaction.user.id
-        user_data = await users_collection.find_one({"user_id": user_id})
-        if not user_data:
-            # 혹시 DB 없을 경우 기본 메시지
-            await interaction.response.send_message("등록된 정보가 없습니다.", ephemeral=True)
-            return
-
-        view = ui.LayoutView(timeout=None)
-        c = ui.Container()
-        c.add_item(ui.TextDisplay(f"### {interaction.user.display_name}님 정보\n---"))
-        c.add_item(ui.TextDisplay(f"**남은 금액** = {user_data.get('balance', 0)}원"))
-        c.add_item(ui.TextDisplay(f"**누적 금액** = {user_data.get('total_spent', 0)}원"))
-        c.add_item(ui.TextDisplay("**역할 등급** = 아직 미정"))
-        view.add_item(c)
-        await interaction.response.send_message(view=view, ephemeral=True)
-
-@bot.tree.command(name="부스트_자판기", description="부스트 자판기 패널을 표시합니다.")
-@app_commands.checks.has_permissions(administrator=True)
-async def panel_vending(interaction: discord.Interaction):
-    view = MyLayoutVending()
-    await interaction.response.send_message(view=view)
-
-@bot.tree.command(name="디비_상태", description="디비 상태를 확인합니다.")
-@app_commands.checks.has_permissions(administrator=True)
-async def check_db_status_slash(interaction: discord.Interaction):
-    status_view = ui.LayoutView(timeout=60)
-    container = ui.Container()
-    container.add_item(ui.TextDisplay("### 데이터베이스 상태 확인 결과"))
-    container.add_item(ui.Separator())
+    # 결과 전송 및 SQLite 로그 기록
+    if res.get("status") == "done":
+        msg = f"부스트 작업이 완료되었습니다.\n성공: {res.get('successful')} / 실패: {res.get('failed')}"
+    else:
+        msg = f"부스트 작업 실패: {res.get('reason')} (유효: {res.get('valid')}/{res.get('total')})"
 
     try:
-        await mongo_client.admin.command('ping')
-        user_count = await users_collection.count_documents({})
-        container.add_item(ui.TextDisplay("✅ 연결 상태: 정상"))
-        container.add_item(ui.TextDisplay(f"등록된 사용자 수: {user_count}명"))
+        await interaction.user.send(msg)
+    except Exception:
+        await interaction.channel.send(msg)
 
-    except Exception as e:
-        container.add_item(ui.TextDisplay("❌ 연결 오류"))
-        container.add_item(ui.TextDisplay(f"오류 내용: {e}"))
-        container.add_item(ui.TextDisplay("**MONGO_URI 및 네트워크 설정을 확인하세요.**"))
+@bot.tree.command(name="재고_추가하기", description="토큰을 재고에 추가합니다. (관리자 전용)")
+@app_commands.describe(months="기간: 1 또는 3 (월)", tokens_text="토큰 목록(멀티라인, 선택)", tokens_file="토큰 파일 첨부(선택)")
+async def slash_add_stock(interaction: discord.Interaction, months: int, tokens_text: str = None, tokens_file: discord.Attachment = None):
+    if not is_admin_member(interaction.user):
+        await interaction.response.send_message("권한이 없습니다. 관리자 역할이 필요합니다.", ephemeral=True)
+        return
 
-    status_view.add_item(container)
-    await interaction.response.send_message(view=status_view, ephemeral=True)
+    if months not in (1, 3):
+        await interaction.response.send_message("months는 1 또는 3만 가능합니다.", ephemeral=True)
+        return
 
-@bot.command(name="디비상태")
-@commands.has_permissions(administrator=True)
-async def check_db_status_prefix(ctx: commands.Context):
-    status_view = ui.LayoutView(timeout=60)
-    container = ui.Container()
-    container.add_item(ui.TextDisplay("## 데이터베이스 상태 확인 결과"))
-    container.add_item(ui.Separator())
+    if not tokens_text and not tokens_file:
+        await interaction.response.send_message("토큰을 텍스트로 붙여넣거나 파일을 첨부해 주세요.", ephemeral=True)
+        return
+
+    await interaction.response.send_message("토큰을 접수했습니다. 검사 및 추가를 진행합니다. 완료 시 DM으로 결과를 알려드립니다.", ephemeral=True)
+
+    # 토큰 수집
+    tokens = []
+    if tokens_text:
+        for line in tokens_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                parts = line.split(":")
+                token = parts[-1].strip()
+            else:
+                token = line
+            tokens.append(token)
+
+    if tokens_file:
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(tokens_file.url) as resp:
+                    content = await resp.read()
+                    tmp.write(content)
+                    tmp.flush()
+            with open(tmp.name, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f.read().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if ":" in line:
+                        parts = line.split(":")
+                        token = parts[-1].strip()
+                    else:
+                        token = line
+                    tokens.append(token)
+        finally:
+            try:
+                tmp.close()
+                os.unlink(tmp.name)
+            except:
+                pass
+
+    async def _check_and_add(tokens_list):
+        filename = "input/1m_tokens.txt" if months == 1 else "input/3m_tokens.txt"
+        valid_tokens = []
+        invalid_count = 0
+        for idx, tok in enumerate(tokens_list, start=1):
+            ok = await asyncio.to_thread(boost_module.check_discord_token, tok, True, idx)
+            if ok:
+                valid_tokens.append(tok)
+            else:
+                invalid_count += 1
+                open("invalid_tokens.txt", "a", encoding="utf-8").write(f"{tok}\n")
+        if valid_tokens:
+            with open(filename, "a", encoding="utf-8") as f:
+                for t in valid_tokens:
+                    f.write(f"{t}\n")
+        # SQLite 로깅
+        boost_module.log_stock("add", months, len(valid_tokens), invalid_count, detail=f"source:discord_command")
+        return {"added": len(valid_tokens), "invalid": invalid_count, "total": len(tokens_list)}
+
+    summary = await _check_and_add(tokens)
 
     try:
-        await mongo_client.admin.command('ping')
-        user_count = await users_collection.count_documents({})
-        container.add_item(ui.TextDisplay("✅ 연결 상태: 정상"))
-        container.add_item(ui.TextDisplay(f"등록된 사용자 수: {user_count}명"))
-
-    except Exception as e:
-        container.add_item(ui.TextDisplay("❌ 연결 오류"))
-        container.add_item(ui.TextDisplay(f"오류 내용: {e}"))
-        container.add_item(ui.TextDisplay("**MONGO_URI 및 네트워크 설정을 확인하세요.**"))
-
-    status_view.add_item(container)
-    await ctx.send(view=status_view)
-
-@bot.tree.command(
-    name="이용_제한",
-    description="특정 유저 자판기 이용 제한/해제",
-)
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(
-    user="제한/해제 대상 유저를 선택하세요.",
-    제한="자판기 이용 제한 여부를 선택하세요."
-)
-@app_commands.choices(
-    제한=[
-        app_commands.Choice(name="차단", value="block"),
-        app_commands.Choice(name="풀기", value="unblock")
-    ]
-)
-async def restriction_cmd(
-    interaction: discord.Interaction,
-    user: discord.Member,
-    제한: app_commands.Choice[str]
-):
-    if 제한.value == "block":
-        # DB에 차단 기록 저장 (중복 저장 방지)
-        existing = await db["blocked_users"].find_one({"user_id": user.id})
-        if existing:
-            msg_container = ui.Container()
-            msg_container.add_item(ui.TextDisplay(f"이미 {user.display_name}님은 차단 상태입니다."))
-        else:
-            await db["blocked_users"].update_one(
-                {"user_id": user.id},
-                {"$set": {"user_name": user.display_name, "blocked": True}},
-                upsert=True
-            )
-            msg_container = ui.Container()
-            msg_container.add_item(ui.TextDisplay("자판기 차단 완료되었습니다"))
-        view = ui.LayoutView(timeout=None)
-        view.add_item(msg_container)
-        await interaction.response.send_message(view=view, ephemeral=True)
-
-    elif 제한.value == "unblock":
-        existing = await db["blocked_users"].find_one({"user_id": user.id})
-        if existing:
-            await db["blocked_users"].delete_one({"user_id": user.id})
-            msg_container = ui.Container()
-            msg_container.add_item(ui.TextDisplay("자판기 차단 풀기 완료되었습니다"))
-        else:
-            msg_container = ui.Container()
-            msg_container.add_item(ui.TextDisplay(f"{user.display_name}님은 차단 상태가 아닙니다."))
-        view = ui.LayoutView(timeout=None)
-        view.add_item(msg_container)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.user.send(f"재고 추가 완료: 총 {summary['total']}개 중 추가된 유효 토큰 {summary['added']}개, 무효 {summary['invalid']}개")
+    except Exception:
+        await interaction.channel.send(f"재고 추가 완료: 총 {summary['total']}개 중 추가된 유효 토큰 {summary['added']}개, 무효 {summary['invalid']}개")
 
 @bot.event
 async def on_ready():
-    print(f"✅ {bot.user} 로그인 성공")
+    print(f"Logged in as {bot.user} ({bot.user.id})")
     try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)}개 슬래시 명령어 동기화 완료")
+        await bot.tree.sync()
     except Exception as e:
-        print(f"❌ 슬래시 명령어 동기화 오류: {e}")
+        print("tree sync error:", e)
 
-    try:
-        await mongo_client.admin.command('ping')
-        print("✅ MongoDB 연결 성공")
-    except Exception as e:
-        print(f"❌ MongoDB 연결 실패: {e}")
-
-bot.run(TOKEN)
+if __name__ == "__main__":
+    DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+    if not DISCORD_BOT_TOKEN:
+        print("환경변수 DISCORD_BOT_TOKEN 설정 필요")
+        exit(1)
+    bot.run(DISCORD_BOT_TOKEN)
