@@ -1,1 +1,444 @@
-discord.py==2.3.2
+# boost_module.py
+from colorama import Style
+import datetime, time, json, threading, os, random, httpx, sys, sqlite3
+import tls_client
+from pathlib import Path
+
+# 설정 파일 로드
+config = json.load(open("config.json", encoding="utf-8"))
+
+# SQLite 로깅 DB 경로
+DB_PATH = "boost_logs.db"
+
+# ---------- 간단한 로깅 DB 유틸 ----------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS boost_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        action TEXT,
+        invite TEXT,
+        months INTEGER,
+        token TEXT,
+        result TEXT,
+        detail TEXT
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS stock_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        action TEXT,
+        months INTEGER,
+        added INTEGER,
+        invalid INTEGER,
+        detail TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+def log_boost(action, invite="", months=None, token="", result="", detail=""):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO boost_logs (timestamp, action, invite, months, token, result, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (datetime.datetime.utcnow().isoformat(), action, invite, months, token, result, detail))
+    conn.commit()
+    conn.close()
+
+def log_stock(action, months, added, invalid, detail=""):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO stock_logs (timestamp, action, months, added, invalid, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                (datetime.datetime.utcnow().isoformat(), action, months, added, invalid, detail))
+    conn.commit()
+    conn.close()
+
+# 초기화
+init_db()
+
+# ---------- 기존 코드 (모듈화된 부스트 로직) ----------
+class Fore:
+    BLACK  = '\033[30m'
+    RED    = '\033[31m'
+    GREEN  = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE   = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN   = '\033[36m'
+    WHITE  = '\033[37m'
+    UNDERLINE = '\033[4m'
+    RESET  = '\033[0m'
+
+fingerprints = json.load(open("fingerprints.json", encoding="utf-8"))
+
+client_identifiers = ['safari_ios_16_0','safari_ios_15_6','safari_ios_15_5','safari_16_0','safari_15_6_1','safari_15_3','opera_90','opera_89','firefox_104','firefox_102']
+
+class variables:
+    joins = 0
+    boosts_done = 0
+    success_tokens = []
+    failed_tokens = []
+
+def sprint(message, ttype):
+    if ttype == True:
+        print(f"{Style.BRIGHT}{Fore.MAGENTA}[+]{Style.BRIGHT} {message}{Fore.RESET}{Style.RESET_ALL}")
+    elif ttype == False:
+        print(f"{Style.BRIGHT}{Fore.MAGENTA}[-]{Style.BRIGHT} {message}{Fore.RESET}{Style.RESET_ALL}")
+    elif ttype == "blue":
+        print(f"{Style.BRIGHT}{Fore.MAGENTA}{message}{Fore.RESET}{Style.RESET_ALL}")
+
+def get_all_tokens(filename: str):
+    all_tokens = []
+    if not os.path.exists(filename):
+        return []
+    for j in open(filename, "r", encoding="utf-8", errors="ignore").read().splitlines():
+        if not j:
+            continue
+        if ":" in j:
+            j = j.split(":")[-1]
+            all_tokens.append(j.strip())
+        else:
+            all_tokens.append(j.strip())
+    return all_tokens
+
+def remove(token: str, filename: str):
+    tokens = get_all_tokens(filename)
+    if token in tokens:
+        tokens.pop(tokens.index(token))
+        with open(filename, "w", encoding="utf-8") as f:
+            for l in tokens:
+                f.write(f"{l}\n")
+
+def getproxy():
+    try:
+        proxy = random.choice(open("input/proxies.txt", "r", encoding="utf-8").read().splitlines())
+        return {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
+    except Exception:
+        return None
+
+def get_fingerprint(thread):
+    try:
+        if config.get('proxyless') != True:
+            proxies = {'http://': f'http://{random.choice(open("input/proxies.txt", "r").read().splitlines())}', 'https://': f'http://{random.choice(open("input/proxies.txt", "r").read().splitlines())}'}
+        else:
+            proxies = None
+        fingerprint = httpx.get("https://discord.com/api/v10/experiments", proxies=proxies, timeout=10)
+        return fingerprint.json().get('fingerprint', '')
+    except Exception:
+        return get_fingerprint(thread)
+
+def get_cookies(x, useragent, thread):
+    try:
+        proxies = None
+        if config.get('proxyless') != True:
+            try:
+                p = random.choice(open("input/proxies.txt", "r").read().splitlines())
+                proxies = {'http://': f'http://{p}', 'https://': f'http://{p}'}
+            except Exception:
+                proxies = None
+        response = httpx.get('https://discord.com/api/v10/experiments',
+                             headers={
+                                 'accept': '*/*',
+                                 'accept-encoding': 'gzip, deflate, br',
+                                 'accept-language': 'en-US,en;q=0.9',
+                                 'content-type': 'application/json',
+                                 'origin': 'https://discord.com',
+                                 'referer': 'https://discord.com',
+                                 'sec-ch-ua': f'"Google Chrome";v="108", "Chromium";v="108", "Not=A?Brand";v="8"',
+                                 'sec-ch-ua-mobile': '?0',
+                                 'sec-ch-ua-platform': '"Windows"',
+                                 'user-agent': useragent,
+                                 'x-debug-options': 'bugReporterEnabled',
+                                 'x-discord-locale': 'en-US',
+                                 'x-super-properties': x
+                             }, proxies=proxies, timeout=10)
+        cookie = f"locale=en; __dcfduid={response.cookies.get('__dcfduid')}; __sdcfduid={response.cookies.get('__sdcfduid')}; __cfruid={response.cookies.get('__cfruid')}"
+        return cookie
+    except Exception:
+        return get_cookies(x, useragent, thread)
+
+def get_headers(token, thread):
+    x = fingerprints[random.randint(0, (len(fingerprints)-1))]['x-super-properties']
+    useragent = fingerprints[random.randint(0, (len(fingerprints)-1))]['useragent']
+    headers = {
+        'accept': '*/*',
+        'accept-encoding': 'gzip, deflate, br',
+        'accept-language': 'en-US,en;q=0.9',
+        'authorization': token,
+        'content-type': 'application/json',
+        'origin': 'https://discord.com',
+        'referer': 'https://discord.com',
+        'sec-ch-ua': f'"Google Chrome";v="108", "Chromium";v="108", "Not=A?Brand";v="8"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'cookie': get_cookies(x, useragent, thread),
+        'sec-fetch-site': 'same-origin',
+        'user-agent': useragent,
+        'x-context-properties': 'eyJsb2NhdGlvbiI6IkpvaW4gR3VpbGQiLCJsb2NhdGlvbl9ndWlsZF9pZCI6IjY3OTg3NTk0NjU5NzA1NjY4MyIsImxvY2F0aW9uX2NoYW5uZWxfaWQiOiIxMDM1ODkyMzI4ODg5NTk0MDM2IiwibG9jYXRpb25fY2hhbm5lbF90eXBlIjowfQ==',
+        'x-debug-options': 'bugReporterEnabled',
+        'x-discord-locale': 'en-US',
+        'x-super-properties': x,
+        'fingerprint': get_fingerprint(thread)
+    }
+    return headers, useragent
+
+def get_captcha_key(rqdata: str, site_key: str, websiteURL: str, useragent: str):
+    task_payload = {
+        'clientKey': config.get('capmonster_key'),
+        'task': {
+            "type": "HCaptchaTaskProxyless",
+            "isInvisible": True,
+            "data": rqdata,
+            "websiteURL": websiteURL,
+            "websiteKey": site_key,
+            "userAgent": useragent
+        }
+    }
+    key = None
+    with httpx.Client(headers={'content-type': 'application/json', 'accept': 'application/json'}, timeout=30) as client:
+        task_id = client.post('https://api.capmonster.cloud/createTask', json=task_payload).json().get('taskId')
+        get_task_payload = {'clientKey': config.get('capmonster_key'), 'taskId': task_id}
+        while key is None:
+            response = client.post("https://api.capmonster.cloud/getTaskResult", json=get_task_payload).json()
+            if response.get('status') == "ready":
+                key = response.get("solution", {}).get("gRecaptchaResponse")
+            else:
+                time.sleep(1)
+    return key
+
+def join_server(session, headers, useragent, invite, token, thread):
+    join_outcome = False
+    guild_id = 0
+    try:
+        for i in range(10):
+            response = session.post(f'https://discord.com/api/v9/invites/{invite}', json={}, headers=headers)
+            if response.status_code == 429:
+                sprint(f"[{thread}] You are being rate limited. Sleeping for 5 seconds.", False)
+                time.sleep(5)
+                continue
+            elif response.status_code in [200, 204]:
+                join_outcome = True
+                try:
+                    guild_id = response.json()["guild"]["id"]
+                except Exception:
+                    guild_id = 0
+                break
+            elif "captcha_rqdata" in response.text:
+                sprint(f"[{thread}] Captcha Detected: {token}", False)
+                r = response.json()
+                # 자동 캡챠 처리(설정에 따라)
+                if config.get('capmonster_key'):
+                    solution = get_captcha_key(rqdata=r['captcha_rqdata'], site_key=r['captcha_sitekey'], websiteURL="https://discord.com", useragent=useragent)
+                    response = session.post(f'https://discord.com/api/v9/invites/{invite}', json={'captcha_key': solution, 'captcha_rqtoken': r['captcha_rqtoken']}, headers=headers)
+                    if response.status_code in [200, 204]:
+                        join_outcome = True
+                        try:
+                            guild_id = response.json()["guild"]["id"]
+                        except Exception:
+                            guild_id = 0
+                        break
+                # 자동 처리 실패 시 캡챠 발생 로그
+                return False, 0
+        return join_outcome, guild_id
+    except Exception as e:
+        sprint(f"[{thread}] Exception in join_server: {str(e)}", False)
+        return False, 0
+
+def put_boost(session, headers, guild_id, boost_id):
+    try:
+        payload = {"user_premium_guild_subscription_slot_ids": [boost_id]}
+        boosted = session.put(f"https://discord.com/api/v9/guilds/{guild_id}/premium/subscriptions", json=payload, headers=headers)
+        if boosted.status_code == 201:
+            return True
+        elif 'Must wait for premium server subscription cooldown to expire' in boosted.text:
+            return False
+    except Exception:
+        return False
+
+def change_guild_name(session, headers, server_id, nick):
+    try:
+        jsonPayload = {"nick": nick}
+        r = session.patch(f"https://discord.com/api/v9/guilds/{server_id}/members/@me", headers=headers, json=jsonPayload)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+def boost_server(invite: str, months: int, token: str, thread: int, nick: str):
+    filename = "input/1m_tokens.txt" if months == 1 else "input/3m_tokens.txt"
+    try:
+        session = tls_client.Session(ja3_string=fingerprints[random.randint(0, (len(fingerprints)-1))]['ja3'],
+                                     client_identifier=random.choice(client_identifiers))
+        if config.get('proxyless') == False and os.path.exists("input/proxies.txt") and os.path.getsize("input/proxies.txt") > 0:
+            proxy = getproxy()
+            if proxy:
+                session.proxies.update(proxy)
+
+        headers, useragent = get_headers(token, thread)
+        boost_data = session.get(f"https://discord.com/api/v9/users/@me/guilds/premium/subscription-slots", headers=headers)
+
+        if "401: Unauthorized" in boost_data.text or boost_data.status_code == 401:
+            sprint(f"[{thread}] INVALID: {token}", False)
+            variables.failed_tokens.append(token)
+            remove(token, filename)
+            log_boost("invalid", invite="", months=months, token=token, result="invalid", detail="401")
+            return
+
+        if "You need to verify your account in order to perform this action." in boost_data.text:
+            sprint(f"[{thread}] LOCKED: {token}", False)
+            variables.failed_tokens.append(token)
+            remove(token, filename)
+            log_boost("locked", invite="", months=months, token=token, result="locked", detail="verification_required")
+            return
+
+        if boost_data.status_code == 200:
+            slots = boost_data.json() if isinstance(boost_data.json(), list) else []
+            if len(slots) != 0:
+                join_outcome, guild_id = join_server(session, headers, useragent, invite, token, thread)
+                if join_outcome:
+                    sprint(f"[{thread}] JOINED: {token}", True)
+                    for boost in slots:
+                        boost_id = boost.get("id")
+                        boosted = put_boost(session, headers, guild_id, boost_id)
+                        if boosted:
+                            sprint(f"[{thread}] BOOSTED: {token}", True)
+                            variables.boosts_done += 1
+                            if token not in variables.success_tokens:
+                                variables.success_tokens.append(token)
+                            log_boost("boosted", invite=invite, months=months, token=token, result="success", detail=f"boost_id:{boost_id}")
+                        else:
+                            sprint(f"[{thread}] ERROR BOOSTING: {token}", False)
+                            if token not in variables.failed_tokens:
+                                open("error_boosting.txt", "a", encoding="utf-8").write(f"\n{token}")
+                                variables.failed_tokens.append(token)
+                                log_boost("boost_error", invite=invite, months=months, token=token, result="error", detail="put_boost_failed")
+                    remove(token, filename)
+
+                    if config.get("change_server_nick"):
+                        changed = change_guild_name(session, headers, guild_id, nick)
+                        if changed:
+                            sprint(f"[{thread}] RENAMED: {token}", True)
+                        else:
+                            sprint(f"[{thread}] ERROR RENAMING: {token}", False)
+                else:
+                    sprint(f"[{thread}] ERROR JOINING: {token}", False)
+                    open("error_joining.txt", "a", encoding="utf-8").write(f"\n{token}")
+                    remove(token, filename)
+                    variables.failed_tokens.append(token)
+                    log_boost("join_error", invite=invite, months=months, token=token, result="error", detail="join_failed_or_captcha")
+            else:
+                remove(token, filename)
+                sprint(f"[{thread}] NO NITRO: {token}", False)
+                variables.failed_tokens.append(token)
+                log_boost("no_nitro", invite=invite, months=months, token=token, result="no_nitro", detail="no_slots")
+    except Exception as e:
+        sprint(f"[{thread}] Exception in boost_server: {str(e)}", False)
+        variables.failed_tokens.append(token)
+        try:
+            remove(token, filename)
+        except Exception:
+            pass
+        log_boost("exception", invite=invite, months=months, token=token, result="exception", detail=str(e))
+
+def thread_boost(invite, amount, months, nick):
+    variables.boosts_done = 0
+    variables.success_tokens = []
+    variables.failed_tokens = []
+
+    filename = "input/1m_tokens.txt" if months == 1 else "input/3m_tokens.txt"
+
+    if validateInvite(invite) == False:
+        sprint(f"The invite received is invalid.", False)
+        return False
+
+    while variables.boosts_done != amount:
+        tokens = get_all_tokens(filename)
+
+        if variables.boosts_done % 2 != 0:
+            variables.boosts_done -= 1
+
+        numTokens = int((amount - variables.boosts_done) / 2)
+        if len(tokens) == 0 or len(tokens) < numTokens:
+            sprint(f"Not enough {months} month tokens in stock to complete the request", False)
+            return False
+
+        threads = []
+        for i in range(numTokens):
+            token = tokens[i]
+            thread_idx = i + 1
+            t = threading.Thread(target=boost_server, args=(invite, months, token, thread_idx, nick))
+            t.daemon = True
+            threads.append(t)
+
+        for i in range(numTokens):
+            sprint(f"Processing....\n", True)
+            threads[i].start()
+
+        for i in range(numTokens):
+            threads[i].join()
+
+    return True
+
+def validateInvite(invite: str):
+    try:
+        client = httpx.Client(timeout=10)
+        r = client.get(f'https://discord.com/api/v10/invites/{invite}?inputValue={invite}&with_counts=true&with_expiration=true')
+        return 'type' in r.text
+    except Exception:
+        return False
+
+def check_discord_token(token: str, use_proxy=True, thread=0) -> bool:
+    try:
+        with httpx.Client(timeout=10) as client:
+            if config.get('proxyless') == False and use_proxy:
+                try:
+                    proxy_choice = random.choice(open("input/proxies.txt", "r").read().splitlines())
+                    client.proxies.update({'http://': f'http://{proxy_choice}', 'https://': f'http://{proxy_choice}'})
+                except Exception:
+                    pass
+
+            headers = {
+                "Authorization": token,
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            }
+
+            r = client.get("https://discord.com/api/v9/users/@me", headers=headers)
+            if r.status_code == 200:
+                try:
+                    ud = r.json()
+                    sprint(f"[{thread}] VALID TOKEN: {ud.get('username','unknown')}#{ud.get('discriminator','????')}", True)
+                except Exception:
+                    sprint(f"[{thread}] VALID TOKEN (couldn't parse user data)", True)
+                return True
+            elif r.status_code == 401:
+                sprint(f"[{thread}] INVALID TOKEN (401)", False)
+                return False
+            else:
+                sprint(f"[{thread}] Token check error: {r.status_code}", False)
+                return False
+    except Exception as e:
+        sprint(f"[{thread}] Network error while checking token: {str(e)}", False)
+        return False
+
+def validate_tokens_file(filename="input/3m_tokens.txt"):
+    tokens = get_all_tokens(filename)
+    valid_tokens = []
+    total = len(tokens)
+    for i, tok in enumerate(tokens, start=1):
+        sprint(f"Checking token {i}/{total}...", "blue")
+        if check_discord_token(tok, use_proxy=True, thread=i):
+            valid_tokens.append(tok)
+        else:
+            open("invalid_tokens.txt", "a", encoding="utf-8").write(f"{tok}\n")
+
+    with open(filename, "w", encoding="utf-8") as f:
+        for t in valid_tokens:
+            f.write(f"{t}\n")
+
+    sprint(f"Token validation complete. Valid: {len(valid_tokens)} / {total}", True)
+    return len(valid_tokens), total
