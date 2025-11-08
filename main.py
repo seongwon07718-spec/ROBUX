@@ -1,312 +1,196 @@
-# bot_main.py (Pycord / 컴포넌트 v2 Container + TextDisplay 사용 최종본)
-import os
-import asyncio
-import aiohttp
-from datetime import datetime
-
-# Pycord(또는 컴포넌트 v2 지원 라이브러리)에서 제공하는 ui 모듈 사용
-# py-cord의 경우: from discord import ui, Colour, Interaction, Client 등
 import discord
-from discord import ui, Colour
 from discord.ext import commands
+from discord import app_commands
+import os
+import requests
+import json
+from dotenv import load_dotenv
 
-# 관리자 역할 ID를 실제 값으로 바꿔주세요
-ADMIN_ROLE_ID = int(os.environ.get("ADMIN_ROLE_ID", "123456789012345678"))
+# .env 파일에서 환경 변수 로드
+load_dotenv()
 
-# 기존 부스트 로직 모듈
-import boost_module
+# Discord 봇 토큰 및 API 엔드포인트 로드
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+TOPUP_API_ENDPOINT = os.getenv("TOPUP_API_ENDPOINT") # ⚠️ 이 값은 iCloud 단축어 분석 후 실제 API URL로 설정해야 합니다!
+YOUR_CUSTOM_API_KEY = os.getenv("YOUR_CUSTOM_API_KEY") # ⚠️ 필요한 경우 iCloud 단축어에서 찾은 API Key (없으면 삭제)
 
+# 봇 권한 설정 (Intents)
 intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+intents.message_content = True # 메시지 콘텐츠를 읽기 위함
+intents.members = True # 멤버 정보 접근 위함 (역할 부여 등에 필요)
 
-# 재고 갱신 태스크 보관: message.id -> asyncio.Task
-_inventory_refresh_tasks = {}
+# 봇 인스턴스 생성
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-def is_admin_member(member: discord.Member) -> bool:
-    try:
-        if isinstance(member, discord.Member):
-            return any(r.id == ADMIN_ROLE_ID for r in member.roles)
-        return False
-    except Exception:
-        return False
+# -----------------------------------------------------------
+# 1. 충전 정보 입력 모달 (Modal) 클래스
+# -----------------------------------------------------------
+class TopUpModal(discord.ui.Modal, title="충전 정보 입력"):
+    def __init__(self, modal_id: str):
+        super().__init__(custom_id=modal_id)
 
-# ------------------ Component v2 스타일: Container / TextDisplay 레이아웃 ------------------
-# 이 코드는 py-cord(컴포넌트 v2)를 기준으로 작성되었습니다.
-class StockLayout(ui.Layout):
-    """
-    Container + TextDisplay 기반 레이아웃 (컴포넌트 v2)
-    - 구성: Container(텍스트 블록)로 제목/막대/수치/안내를 보여줍니다.
-    """
-    def __init__(self, valid_count: int, invalid_count: int):
-        super().__init__()
-        self.valid = int(valid_count)
-        self.invalid = int(invalid_count)
-        self._build()
+    # 입금자명 입력 필드
+    depositor_name = discord.ui.TextInput(
+        label="입금자명",
+        placeholder="예: 홍길동",
+        max_length=50,
+        required=True
+    )
 
-    def _make_bar(self, value, total, length=24):
-        if total <= 0:
-            total = 1
-        filled = int((value / total) * length)
-        filled = max(0, min(length, filled))
-        return "█" * filled + "─" * (length - filled)
+    # 충전 금액 입력 필드
+    amount = discord.ui.TextInput(
+        label="충전 금액 (원)",
+        placeholder="예: 10000",
+        max_length=10,
+        required=True,
+        style=discord.TextStyle.short
+    )
 
-    def _build(self):
-        total = self.valid + self.invalid if (self.valid + self.invalid) > 0 else 1
-        # Container(Primary) - 제목
-        c_title = ui.Container(ui.TextDisplay("EMOJI_0 재고 추가 결과"))
-        c_title.accent_color = Colour.blurple()
-        self.add_item(c_title)
+    # 모달 제출 시 호출되는 함수
+    async def on_submit(self, interaction: discord.Interaction):
+        입금자명 = self.depositor_name.value
+        충전금액_str = self.amount.value
 
-        # Container - progress bar (valid)
-        bar_v = self._make_bar(self.valid, total)
-        c_bar_v = ui.Container(ui.TextDisplay(f"`{bar_v}`"))
-        c_bar_v.accent_color = Colour.green()
-        self.add_item(c_bar_v)
+        # 금액이 숫자인지 먼저 검증
+        if not 충전금액_str.isdigit():
+            await interaction.response.send_message("❌ 충전 금액은 숫자로만 입력해주세요.", ephemeral=True)
+            return
+        
+        충전금액 = int(충전금액_str)
 
-        # Container - valid count
-        c_valid = ui.Container(ui.TextDisplay(f"**유효 토큰** = __{self.valid}개__"))
-        self.add_item(c_valid)
+        # 사용자에게 API 호출 처리 중임을 알리는 임시 메시지 전송
+        await interaction.response.send_message(
+            f"✅ 입금자명: `{입금자명}`, 충전 금액: `{충전금액}원` 정보 확인 및 처리 중...", 
+            ephemeral=True
+        )
 
-        # Container - progress bar (invalid)
-        bar_i = self._make_bar(self.invalid, total)
-        c_bar_i = ui.Container(ui.TextDisplay(f"`{bar_i}`"))
-        c_bar_i.accent_color = Colour.red()
-        self.add_item(c_bar_i)
-
-        # Container - invalid count
-        c_invalid = ui.Container(ui.TextDisplay(f"**무효 토큰** = __{self.invalid}개__"))
-        self.add_item(c_invalid)
-
-        # Container - 안내문
-        c_info = ui.Container(ui.TextDisplay("무효 토큰은 **File**(invalid_tokens.txt)로 확인 가능합니다"))
-        self.add_item(c_info)
-
-    def update(self, valid_count: int, invalid_count: int):
-        # 레이아웃을 재생성해서 교체(간단한 방법)
-        self.valid = int(valid_count)
-        self.invalid = int(invalid_count)
-        # clear existing and rebuild
-        self.clear_items()
-        self._build()
-
-# helper: 게시 시간 표시 용(선택)
-def now_str():
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-
-# ------------------ 슬래시 명령: /부스트_진행 ------------------
-@bot.tree.command(name="부스트_진행", description="서버 초대코드로 부스트를 진행합니다. (관리자 전용)")
-@discord.app_commands.describe(invite="초대 코드 또는 초대 링크", months="기간: 1 또는 3 (월)", amount="총 부스트 수(짝수)", nickname="서버 닉네임(선택)", validate="시작 전에 토큰 검증 여부 (True/False)")
-async def slash_boost(interaction: discord.Interaction, invite: str, months: int, amount: int, nickname: str = "", validate: bool = False):
-    # 멤버 확보 및 권한 확인
-    member = interaction.user
-    if not isinstance(member, discord.Member) and interaction.guild:
         try:
-            member = await interaction.guild.fetch_member(interaction.user.id)
-        except Exception:
-            member = interaction.user
+            # ⚠️ 여기부터 iCloud 단축어 분석을 통해 얻은 API 정보를 바탕으로 수정해야 합니다.
+            # ----------------------------------------------------------------------------------------------------------------------
+            # 예시: 단축어가 POST 요청으로 JSON 데이터를 보내는 경우
+            # iCloud 단축어의 'URL 콘텐츠 가져오기' 액션에서 다음 정보들을 확인하여 수정하세요.
+            # - URL (-> TOPUP_API_ENDPOINT 변수)
+            # - 메서드 (GET/POST 등)
+            # - 요청 본문 (JSON / Form Data)의 키(Key)와 값(Value) 구조
+            # - 헤더 (Authorization, Content-Type 등)
+            # ----------------------------------------------------------------------------------------------------------------------
 
-    if not is_admin_member(member):
-        await interaction.response.send_message("권한이 없습니다. 관리자 역할이 필요합니다.", ephemeral=True)
-        return
+            headers = {
+                "Content-Type": "application/json", # 일반적으로 JSON 데이터 전송 시 사용
+                # "Authorization": f"Bearer {YOUR_CUSTOM_API_KEY}" # ⚠️ API 키가 필요한 경우 주석 해제 후 YOUR_CUSTOM_API_KEY 사용
+            }
+            
+            payload = {
+                "depositor_name": 입금자명, # ⚠️ 단축어가 사용하는 실제 Key 이름으로 변경 (예: "name", "payer")
+                "amount": 충전금액,       # ⚠️ 단축어가 사용하는 실제 Key 이름으로 변경 (예: "charge_amount", "money")
+                "discord_user_id": str(interaction.user.id), # 충전 요청한 디스코드 사용자 ID (필요 시)
+                "discord_username": interaction.user.name, # 충전 요청한 디스코드 사용자 이름 (필요 시)
+                # ⚠️ 단축어가 요구하는 추가 데이터가 있다면 여기에 추가 (예: "product_id": "ABC123")
+            }
 
-    if months not in (1, 3):
-        await interaction.response.send_message("months는 1 또는 3만 가능합니다.", ephemeral=True)
-        return
-    try:
-        amount = int(amount)
-    except:
-        await interaction.response.send_message("amount는 숫자여야 합니다.", ephemeral=True)
-        return
-    if amount % 2 != 0:
-        await interaction.response.send_message("amount는 짝수여야 합니다.", ephemeral=True)
-        return
+            # 실제 API 호출
+            response = requests.post(
+                TOPUP_API_ENDPOINT, # .env 파일에서 로드된 엔드포인트 사용
+                headers=headers, 
+                data=json.dumps(payload), # payload를 JSON 문자열로 변환
+                timeout=10 # 요청 타임아웃 설정 (10초)
+            )
+            response.raise_for_status() # HTTP 오류 발생 시 예외 발생 (4xx, 5xx)
 
-    await interaction.response.send_message("부스트 작업을 시작합니다. 완료 시 결과를 알려드리겠습니다.", ephemeral=True)
+            response_data = response.json() # API 응답이 JSON 형식이라고 가정
 
-    async def _run():
-        if validate:
-            filename = "input/1m_tokens.txt" if months == 1 else "input/3m_tokens.txt"
-            valid, total = await asyncio.to_thread(boost_module.validate_tokens_file, filename)
-            if valid == 0:
-                return {"status": "failed", "reason": "유효한 토큰이 없습니다.", "valid": valid, "total": total}
-            if valid * 2 < amount:
-                return {"status": "failed", "reason": "유효한 토큰 부족", "valid": valid, "total": total}
-        res = await asyncio.to_thread(boost_module.thread_boost, invite, amount, months, nickname)
-        return {"status": "done", "successful": len(boost_module.variables.success_tokens)*2, "failed": len(boost_module.variables.failed_tokens)*2}
-
-    res = await _run()
-    if res.get("status") == "done":
-        msg = f"부스트 완료: 성공 {res.get('successful')} / 실패 {res.get('failed')}"
-    else:
-        msg = f"부스트 실패: {res.get('reason')} (유효: {res.get('valid')}/{res.get('total')})"
-
-    try:
-        await interaction.followup.send(msg)
-    except Exception:
-        await interaction.response.send_message(msg, ephemeral=True)
-
-# ------------------ 슬래시 명령: /재고_추가하기 (Container UI로 결과 표시) ------------------
-@bot.tree.command(name="재고_추가하기", description="토큰을 재고에 추가합니다. (관리자 전용)")
-@discord.app_commands.describe(months="기간: 1 또는 3 (월)", tokens_text="토큰 목록(멀티라인, 선택)", tokens_file="토큰 파일 첨부(선택)")
-async def slash_add_stock(interaction: discord.Interaction, months: int, tokens_text: str = None, tokens_file: discord.Attachment = None):
-    # 권한 체크
-    member = interaction.user
-    if not isinstance(member, discord.Member) and interaction.guild:
-        try:
-            member = await interaction.guild.fetch_member(interaction.user.id)
-        except Exception:
-            member = interaction.user
-
-    if not is_admin_member(member):
-        await interaction.response.send_message("권한이 없습니다. 관리자 역할이 필요합니다.", ephemeral=True)
-        return
-
-    if months not in (1, 3):
-        await interaction.response.send_message("months는 1 또는 3만 가능합니다.", ephemeral=True)
-        return
-
-    if not tokens_text and not tokens_file:
-        await interaction.response.send_message("토큰을 텍스트로 붙여넣거나 파일을 첨부해 주세요.", ephemeral=True)
-        return
-
-    await interaction.response.send_message("토큰 접수 완료. 검사 중입니다...", ephemeral=True)
-
-    # 토큰 수집
-    tokens = []
-    if tokens_text:
-        for line in tokens_text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            tokens.append(line.split(":")[-1].strip() if ":" in line else line)
-    if tokens_file:
-        try:
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(tokens_file.url) as resp:
-                    content = await resp.text()
-            for line in content.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                tokens.append(line.split(":")[-1].strip() if ":" in line else line)
-        except Exception:
-            pass
-
-    # 검사 및 파일 추가(병렬화 없이 순차, 안정성 우선)
-    def check_and_add_sync(tokens_list):
-        filename = "input/1m_tokens.txt" if months == 1 else "input/3m_tokens.txt"
-        valid_tokens = []
-        invalid_count = 0
-        for idx, tok in enumerate(tokens_list, start=1):
-            ok = boost_module.check_discord_token(tok, use_proxy=True, thread=idx)
-            if ok:
-                valid_tokens.append(tok)
+            # ⚠️ API 응답에 따라 성공/실패 여부를 판단하는 로직을 수정해야 합니다.
+            # ----------------------------------------------------------------------------------------------------------------------
+            # 예시: 응답 데이터에 'status' 키가 'success'일 경우 성공으로 간주
+            if response_data.get("status") == "success":
+                await interaction.followup.send( # followup.send: 이전 메시지 이후 추가 메시지 전송
+                    f"🎉 `{interaction.user.display_name}`님, **{충전금액}원** 충전이 성공적으로 처리되었습니다! ",
+                    ephemeral=False # 채널의 모든 사용자가 볼 수 있도록
+                )
             else:
-                invalid_count += 1
-                try:
-                    open("invalid_tokens.txt", "a", encoding="utf-8").write(f"{tok}\n")
-                except Exception:
-                    pass
-        if valid_tokens:
-            try:
-                with open(filename, "a", encoding="utf-8") as f:
-                    for t in valid_tokens:
-                        f.write(f"{t}\n")
-            except Exception:
-                pass
-        try:
-            boost_module.log_stock("add", months, len(valid_tokens), invalid_count, detail="source:slash")
-        except Exception:
-            pass
-        return len(valid_tokens), invalid_count
+                error_message_from_api = response_data.get("message", "API로부터 알 수 없는 오류가 발생했습니다.")
+                await interaction.followup.send(
+                    f"❌ 충전 처리 중 오류가 발생했습니다: {error_message_from_api}",
+                    ephemeral=True
+                )
+            # ----------------------------------------------------------------------------------------------------------------------
 
-    valid_cnt, invalid_cnt = await asyncio.to_thread(check_and_add_sync, tokens)
+        except requests.exceptions.Timeout:
+            await interaction.followup.send(
+                "⚠️ API 응답 시간이 너무 오래 걸립니다. 다시 시도해주세요.", 
+                ephemeral=True
+            )
+        except requests.exceptions.RequestException as e:
+            # 네트워크 오류, HTTP 오류 (4xx, 5xx) 등을 포함
+            print(f"API 호출 중 오류 발생: {e}")
+            await interaction.followup.send(
+                f"⚠️ 서버 통신 중 문제가 발생했습니다: `{e}`. 잠시 후 다시 시도해주세요.", 
+                ephemeral=True
+            )
+        except json.JSONDecodeError:
+            print("API 응답이 유효한 JSON 형식이 아닙니다.")
+            await interaction.followup.send(
+                "⚠️ API 응답 형식이 올바르지 않습니다. 관리자에게 문의해주세요.", 
+                ephemeral=True
+            )
+        except Exception as e:
+            # 기타 예상치 못한 오류 처리
+            print(f"충전 처리 중 예상치 못한 오류: {e}")
+            await interaction.followup.send(
+                f"❌ 충전 처리 중 심각한 오류가 발생했습니다. 관리자에게 문의해주세요. 오류코드: `{e}`", 
+                ephemeral=True
+            )
 
-    # Container 레이아웃 생성 및 전송
-    layout = StockLayout(valid_cnt, invalid_cnt)
-    try:
-        # interaction.followup.send를 사용하여 공개 메시지로 전송
-        await interaction.followup.send(view=layout)
-    except Exception:
-        try:
-            await interaction.channel.send(view=layout)
-        except Exception:
-            # 최후 대응: 간단 텍스트 전송
-            await interaction.followup.send(f"유효: {valid_cnt}개 / 무효: {invalid_cnt}개")
+# -----------------------------------------------------------
+# 2. '충전' 버튼이 포함된 View 클래스
+# -----------------------------------------------------------
+class TopUpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180) # 3분 동안 유효
 
-# ------------------ 슬래시 명령: /재고_표시하기 (60초 갱신) ------------------
-@bot.tree.command(name="재고_표시하기", description="현재 재고를 Container UI로 표시하고 60초마다 갱신합니다. (관리자 전용)")
-async def slash_show_stock(interaction: discord.Interaction):
-    member = interaction.user
-    if not isinstance(member, discord.Member) and interaction.guild:
-        try:
-            member = await interaction.guild.fetch_member(interaction.user.id)
-        except Exception:
-            member = interaction.user
+    @discord.ui.button(label="충전하기", style=discord.ButtonStyle.primary, emoji="💰")
+    async def topup_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 버튼이 눌리면 TopUpModal을 사용자에게 표시합니다.
+        await interaction.response.send_modal(TopUpModal(modal_id=f"topup_modal_{interaction.user.id}"))
 
-    if not is_admin_member(member):
-        await interaction.response.send_message("권한이 없습니다. 관리자 역할이 필요합니다.", ephemeral=True)
-        return
-
-    await interaction.response.send_message("재고 표시 생성 중...", ephemeral=True)
-
-    def get_counts():
-        c1 = len(boost_module.get_all_tokens("input/1m_tokens.txt")) if os.path.exists("input/1m_tokens.txt") else 0
-        c3 = len(boost_module.get_all_tokens("input/3m_tokens.txt")) if os.path.exists("input/3m_tokens.txt") else 0
-        return c1, c3
-
-    c1, c3 = get_counts()
-    # 1개월/3개월을 각각 유효/무효 칸에 배치(레이아웃 제약으로)
-    layout = StockLayout(c1, c3)
-
-    try:
-        sent = await interaction.channel.send(view=layout)
-    except Exception:
-        sent = await interaction.followup.send(view=layout)
-
-    async def refresh_loop(message, layout_obj):
-        try:
-            while True:
-                await asyncio.sleep(60)
-                nc1, nc3 = get_counts()
-                layout_obj.update(nc1, nc3)
-                try:
-                    await message.edit(view=layout_obj)
-                except Exception:
-                    break
-        finally:
-            _inventory_refresh_tasks.pop(message.id, None)
-
-    # 기존 태스크가 있으면 취소 후 교체
-    old = _inventory_refresh_tasks.get(sent.id)
-    if old and not old.done():
-        old.cancel()
-    task = asyncio.create_task(refresh_loop(sent, layout))
-    _inventory_refresh_tasks[sent.id] = task
-
-    # 결과 링크 알림
-    try:
-        await interaction.user.send(f"재고 표시가 생성되었습니다: {sent.jump_url}")
-    except Exception:
-        try:
-            await interaction.channel.send(f"재고 표시가 생성되었습니다: {sent.jump_url}")
-        except Exception:
-            pass
-
-# 봇 시작/동기화
+# -----------------------------------------------------------
+# 3. 봇 이벤트 핸들러
+# -----------------------------------------------------------
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} ({bot.user.id})")
+    print(f'로그인되었습니다! 봇 이름: {bot.user.name}, ID: {bot.user.id}')
     try:
-        await bot.tree.sync()
+        # 슬래시 명령어 동기화
+        synced = await bot.tree.sync()
+        print(f"동기화된 슬래시 명령어 수: {len(synced)}개")
     except Exception as e:
-        print("tree sync error:", e)
+        print(f"슬래시 명령어 동기화 실패: {e}")
 
-if __name__ == "__main__":
-    TOK = os.environ.get("DISCORD_BOT_TOKEN")
-    if not TOK:
-        print("환경변수 DISCORD_BOT_TOKEN 설정 필요")
-        exit(1)
-    bot.run(TOK)
+# -----------------------------------------------------------
+# 4. 슬래시 명령어: /충전
+# -----------------------------------------------------------
+@bot.tree.command(name="충전", description="자동 충전 안내 메시지와 버튼을 표시합니다.")
+async def show_topup_interface(interaction: discord.Interaction):
+    # 충전 안내 임베드 생성
+    embed = discord.Embed(
+        title="✨ 디스코드 계정 자동 충전 시스템 ✨",
+        description=(
+            "아래 '충전하기' 버튼을 눌러 계정을 충전할 수 있습니다.\n"
+            "정확한 입금자명과 충전 금액을 입력해주세요."
+        ),
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="🚨 중요 안내", value="입력하신 정보가 정확해야만 충전이 정상적으로 처리됩니다.", inline=False)
+    
+    # 봇의 아바타를 썸네일로 설정 (선택 사항)
+    if bot.user.avatar:
+        embed.set_thumbnail(url=bot.user.avatar.url)
+    
+    # 임베드와 View(버튼 포함)를 함께 전송
+    await interaction.response.send_message(embed=embed, view=TopUpView(), ephemeral=False)
+
+# 봇 실행
+if DISCORD_BOT_TOKEN:
+    bot.run(DISCORD_BOT_TOKEN)
+else:
+    print("오류: DISCORD_BOT_TOKEN 환경 변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
