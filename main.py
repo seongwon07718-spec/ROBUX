@@ -1,196 +1,337 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
+from discord import app_commands, ui
+import asyncio
+import datetime
+import sqlite3
 import os
-import requests
-import json
 from dotenv import load_dotenv
+import requests
 
-# .env 파일에서 환경 변수 로드
 load_dotenv()
 
-# Discord 봇 토큰 및 API 엔드포인트 로드
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-TOPUP_API_ENDPOINT = os.getenv("TOPUP_API_ENDPOINT") # ⚠️ 이 값은 iCloud 단축어 분석 후 실제 API URL로 설정해야 합니다!
-YOUR_CUSTOM_API_KEY = os.getenv("YOUR_CUSTOM_API_KEY") # ⚠️ 필요한 경우 iCloud 단축어에서 찾은 API Key (없으면 삭제)
+# --- 환경 변수 로드 ---
+BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5000") # 웹 서버 기본 주소
+WEB_VERIFY_ENDPOINT = f"{WEB_BASE_URL}/verify" # /인증버튼을 통한 일반 인증 URL
 
-# 봇 권한 설정 (Intents)
+# --- 명령어 사용 허용 유저 ID (여기서 변경) ---
+ALLOWED_USER_ID = 1402654236570812467 # 튜어오오오옹님의 Discord 유저 ID로 변경해주세요!
+
+# --- 봇 설정 ---
 intents = discord.Intents.default()
-intents.message_content = True # 메시지 콘텐츠를 읽기 위함
-intents.members = True # 멤버 정보 접근 위함 (역할 부여 등에 필요)
+intents.members = True
+intents.invites = True
+intents.message_content = True
+intents.guilds = True
 
-# 봇 인스턴스 생성
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# -----------------------------------------------------------
-# 1. 충전 정보 입력 모달 (Modal) 클래스
-# -----------------------------------------------------------
-class TopUpModal(discord.ui.Modal, title="충전 정보 입력"):
-    def __init__(self, modal_id: str):
-        super().__init__(custom_id=modal_id)
+# --- SQLite 유틸리티 함수 ---
+def get_db_connection():
+    conn = sqlite3.connect('bot_data.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    # 입금자명 입력 필드
-    depositor_name = discord.ui.TextInput(
-        label="입금자명",
-        placeholder="예: 홍길동",
-        max_length=50,
-        required=True
-    )
-
-    # 충전 금액 입력 필드
-    amount = discord.ui.TextInput(
-        label="충전 금액 (원)",
-        placeholder="예: 10000",
-        max_length=10,
-        required=True,
-        style=discord.TextStyle.short
-    )
-
-    # 모달 제출 시 호출되는 함수
-    async def on_submit(self, interaction: discord.Interaction):
-        입금자명 = self.depositor_name.value
-        충전금액_str = self.amount.value
-
-        # 금액이 숫자인지 먼저 검증
-        if not 충전금액_str.isdigit():
-            await interaction.response.send_message("❌ 충전 금액은 숫자로만 입력해주세요.", ephemeral=True)
-            return
-        
-        충전금액 = int(충전금액_str)
-
-        # 사용자에게 API 호출 처리 중임을 알리는 임시 메시지 전송
-        await interaction.response.send_message(
-            f"✅ 입금자명: `{입금자명}`, 충전 금액: `{충전금액}원` 정보 확인 및 처리 중...", 
-            ephemeral=True
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS joined_users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            joined_at TEXT,
+            invite_code TEXT,
+            invite_uses INTEGER,
+            guild_id INTEGER
         )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS guild_settings (
+            guild_id INTEGER PRIMARY KEY,
+            log_channel_id INTEGER,
+            verified_role_id INTEGER,
+            allow_alt_accounts BOOLEAN DEFAULT 0,
+            allow_vpn BOOLEAN DEFAULT 0,
+            embed_title TEXT DEFAULT '서버 인증 안내',
+            embed_description TEXT DEFAULT '서버의 모든 기능을 사용하려면 아래 버튼을 눌러 인증을 완료해주세요.'
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS verified_users (
+            user_id INTEGER PRIMARY KEY,
+            guild_id INTEGER,
+            verified_at TEXT,
+            is_alt_account BOOLEAN DEFAULT 0,
+            is_vpn_user BOOLEAN DEFAULT 0,
+            access_token TEXT,
+            refresh_token TEXT,
+            token_expires_at TEXT,
+            FOREIGN KEY (guild_id) REFERENCES guild_settings(guild_id)
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-        try:
-            # ⚠️ 여기부터 iCloud 단축어 분석을 통해 얻은 API 정보를 바탕으로 수정해야 합니다.
-            # ----------------------------------------------------------------------------------------------------------------------
-            # 예시: 단축어가 POST 요청으로 JSON 데이터를 보내는 경우
-            # iCloud 단축어의 'URL 콘텐츠 가져오기' 액션에서 다음 정보들을 확인하여 수정하세요.
-            # - URL (-> TOPUP_API_ENDPOINT 변수)
-            # - 메서드 (GET/POST 등)
-            # - 요청 본문 (JSON / Form Data)의 키(Key)와 값(Value) 구조
-            # - 헤더 (Authorization, Content-Type 등)
-            # ----------------------------------------------------------------------------------------------------------------------
+def get_guild_settings(guild_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM guild_settings WHERE guild_id = ?", (guild_id,))
+    settings = cursor.fetchone()
+    conn.close()
+    return settings
 
-            headers = {
-                "Content-Type": "application/json", # 일반적으로 JSON 데이터 전송 시 사용
-                # "Authorization": f"Bearer {YOUR_CUSTOM_API_KEY}" # ⚠️ API 키가 필요한 경우 주석 해제 후 YOUR_CUSTOM_API_KEY 사용
-            }
-            
-            payload = {
-                "depositor_name": 입금자명, # ⚠️ 단축어가 사용하는 실제 Key 이름으로 변경 (예: "name", "payer")
-                "amount": 충전금액,       # ⚠️ 단축어가 사용하는 실제 Key 이름으로 변경 (예: "charge_amount", "money")
-                "discord_user_id": str(interaction.user.id), # 충전 요청한 디스코드 사용자 ID (필요 시)
-                "discord_username": interaction.user.name, # 충전 요청한 디스코드 사용자 이름 (필요 시)
-                # ⚠️ 단축어가 요구하는 추가 데이터가 있다면 여기에 추가 (예: "product_id": "ABC123")
-            }
+def update_guild_setting(guild_id, key, value):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        INSERT INTO guild_settings (guild_id, {key}) VALUES (?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET {key} = EXCLUDED.{key}
+    """, (guild_id, value))
+    conn.commit()
+    conn.close()
 
-            # 실제 API 호출
-            response = requests.post(
-                TOPUP_API_ENDPOINT, # .env 파일에서 로드된 엔드포인트 사용
-                headers=headers, 
-                data=json.dumps(payload), # payload를 JSON 문자열로 변환
-                timeout=10 # 요청 타임아웃 설정 (10초)
-            )
-            response.raise_for_status() # HTTP 오류 발생 시 예외 발생 (4xx, 5xx)
+def get_recoverable_users_count(guild_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(DISTINCT user_id) FROM verified_users WHERE guild_id = ?", (guild_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
-            response_data = response.json() # API 응답이 JSON 형식이라고 가정
+# --- 명령어 사용 권한 확인 (체크 데코레이터) ---
+def is_allowed_user():
+    async def predicate(interaction: discord.Interaction):
+        if interaction.user.id == ALLOWED_USER_ID:
+            return True
+        else:
+            await interaction.response.send_message("이 명령어는 지정된 사용자만 사용할 수 있습니다.", ephemeral=True)
+            return False
+    return app_commands.check(predicate)
 
-            # ⚠️ API 응답에 따라 성공/실패 여부를 판단하는 로직을 수정해야 합니다.
-            # ----------------------------------------------------------------------------------------------------------------------
-            # 예시: 응답 데이터에 'status' 키가 'success'일 경우 성공으로 간주
-            if response_data.get("status") == "success":
-                await interaction.followup.send( # followup.send: 이전 메시지 이후 추가 메시지 전송
-                    f"🎉 `{interaction.user.display_name}`님, **{충전금액}원** 충전이 성공적으로 처리되었습니다! ",
-                    ephemeral=False # 채널의 모든 사용자가 볼 수 있도록
-                )
-            else:
-                error_message_from_api = response_data.get("message", "API로부터 알 수 없는 오류가 발생했습니다.")
-                await interaction.followup.send(
-                    f"❌ 충전 처리 중 오류가 발생했습니다: {error_message_from_api}",
-                    ephemeral=True
-                )
-            # ----------------------------------------------------------------------------------------------------------------------
-
-        except requests.exceptions.Timeout:
-            await interaction.followup.send(
-                "⚠️ API 응답 시간이 너무 오래 걸립니다. 다시 시도해주세요.", 
-                ephemeral=True
-            )
-        except requests.exceptions.RequestException as e:
-            # 네트워크 오류, HTTP 오류 (4xx, 5xx) 등을 포함
-            print(f"API 호출 중 오류 발생: {e}")
-            await interaction.followup.send(
-                f"⚠️ 서버 통신 중 문제가 발생했습니다: `{e}`. 잠시 후 다시 시도해주세요.", 
-                ephemeral=True
-            )
-        except json.JSONDecodeError:
-            print("API 응답이 유효한 JSON 형식이 아닙니다.")
-            await interaction.followup.send(
-                "⚠️ API 응답 형식이 올바르지 않습니다. 관리자에게 문의해주세요.", 
-                ephemeral=True
-            )
-        except Exception as e:
-            # 기타 예상치 못한 오류 처리
-            print(f"충전 처리 중 예상치 못한 오류: {e}")
-            await interaction.followup.send(
-                f"❌ 충전 처리 중 심각한 오류가 발생했습니다. 관리자에게 문의해주세요. 오류코드: `{e}`", 
-                ephemeral=True
-            )
-
-# -----------------------------------------------------------
-# 2. '충전' 버튼이 포함된 View 클래스
-# -----------------------------------------------------------
-class TopUpView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=180) # 3분 동안 유효
-
-    @discord.ui.button(label="충전하기", style=discord.ButtonStyle.primary, emoji="💰")
-    async def topup_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 버튼이 눌리면 TopUpModal을 사용자에게 표시합니다.
-        await interaction.response.send_modal(TopUpModal(modal_id=f"topup_modal_{interaction.user.id}"))
-
-# -----------------------------------------------------------
-# 3. 봇 이벤트 핸들러
-# -----------------------------------------------------------
+# --- 봇 이벤트 핸들러 ---
 @bot.event
 async def on_ready():
-    print(f'로그인되었습니다! 봇 이름: {bot.user.name}, ID: {bot.user.id}')
+    print(f'{bot.user.name} 봇이 온라인 상태입니다.')
+    init_db()
+
     try:
-        # 슬래시 명령어 동기화
-        synced = await bot.tree.sync()
-        print(f"동기화된 슬래시 명령어 수: {len(synced)}개")
+        # 봇 재시작 시 Persistent View 등록 (인증 버튼이 계속 작동하도록)
+        # 봇이 참여한 모든 길드의 설정을 불러와 View를 등록
+        if bot.guilds:
+            for guild in bot.guilds:
+                settings = get_guild_settings(guild.id)
+                embed_title = settings["embed_title"] if settings else "서버 인증 안내"
+                embed_description = settings["embed_description"] if settings else "서버의 모든 기능을 사용하려면 아래 버튼을 눌러 인증을 완료해주세요."
+                # URL 버튼이므로 View를 직접 add_view해도 콜백은 작동하지 않음.
+                # 하지만 메시지 ID를 유지하고 Discord에 해당 뷰가 등록되었음을 알리는 용도로 필요함.
+                bot.add_view(VerificationView(guild.id, embed_title, embed_description))
+        
+        await bot.tree.sync()
+        print("슬래시 명령어가 성공적으로 동기화되었습니다.")
     except Exception as e:
         print(f"슬래시 명령어 동기화 실패: {e}")
+    
+@bot.event
+async def on_member_join(member):
+    guild = member.guild
+    settings = get_guild_settings(guild.id)
+    if settings and settings["log_channel_id"]:
+        log_channel = guild.get_channel(settings["log_channel_id"])
+        if log_channel:
+            # 웹 인증 로그와 겹치지 않게 간단한 텍스트로 남김
+            await log_channel.send(f"{member.name}({member.id})이(가) 서버에 입장했습니다.")
 
-# -----------------------------------------------------------
-# 4. 슬래시 명령어: /충전
-# -----------------------------------------------------------
-@bot.tree.command(name="충전", description="자동 충전 안내 메시지와 버튼을 표시합니다.")
-async def show_topup_interface(interaction: discord.Interaction):
-    # 충전 안내 임베드 생성
+# --- `/복구 (유저 강제 초대)` 명령어 ---
+@bot.tree.command(name="복구", description="이전에 웹 인증한 모든 유저를 현재 서버에 강제 참여시킵니다.")
+@is_allowed_user() # 특정 유저만 사용 가능
+async def recover_all_users_force_join(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    if not interaction.guild:
+        await interaction.followup.send("이 명령어는 서버 내에서만 사용할 수 없습니다.", ephemeral=True)
+        return
+    
+    try:
+        # 웹 서버의 /force_join_all 엔드포인트를 호출하여 모든 유저를 서버에 추가 요청
+        response = requests.post(f"{WEB_BASE_URL}/force_join_all", json={
+            "guild_id": str(interaction.guild.id)
+        })
+        
+        response_data = response.json()
+        
+        results_message = "### 유저 복구 결과:\n"
+        for result in response_data.get("results", []):
+            status_char = "O" if result["success"] else "X"
+            results_message += f"- {status_char} **{result['username']}**: {result['message']}\n"
+        
+        if not response_data.get("results"):
+            results_message = "복구 요청을 처리할 수 있는 유저가 없거나 처리 중 오류가 발생했습니다."
+
+        await interaction.followup.send(results_message, ephemeral=True)
+        
+        # 로그 기록
+        settings = get_guild_settings(interaction.guild.id)
+        if settings and settings["log_channel_id"]:
+            log_channel = interaction.guild.get_channel(settings["log_channel_id"])
+            if log_channel:
+                log_message = f"관리자 {interaction.user.name}({interaction.user.id})이(가) 이전에 웹 인증한 모든 유저를 서버에 강제 참여시도했습니다:\n{results_message}"
+                await log_channel.send(log_message)
+
+    except requests.exceptions.RequestException as req_err:
+        await interaction.followup.send(f"웹 서버와 통신 중 오류가 발생했습니다: {req_err}", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"유저 강제 참여 중 알 수 없는 오류가 발생했습니다: {e}", ephemeral=True)
+
+# --- `/로그채널 (인증한 로그 표시)` 명령어 ---
+@bot.tree.command(name="로그채널", description="봇 활동 로그를 기록할 채널을 설정합니다.")
+@is_allowed_user() # 특정 유저만 사용 가능
+@app_commands.describe(channel="로그를 보낼 채널")
+async def set_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    update_guild_setting(interaction.guild_id, "log_channel_id", channel.id)
+    await interaction.followup.send(f"로그 채널이 {channel.mention}으로 설정되었습니다.", ephemeral=True)
+    await channel.send(f"봇 활동 로그 채널이 {interaction.user.name}에 의해 설정되었습니다.")
+
+# --- `/역할 (인증 완료시 지급될 역할)` 명령어 ---
+@bot.tree.command(name="역할", description="인증 완료 시 지급될 역할을 설정합니다.")
+@is_allowed_user() # 특정 유저만 사용 가능
+@app_commands.describe(role="지급될 역할")
+async def set_verified_role(interaction: discord.Interaction, role: discord.Role):
+    await interaction.response.defer(ephemeral=True)
+    if role >= interaction.guild.me.top_role:
+        await interaction.followup.send("봇보다 높은 역할은 설정할 수 없습니다. 봇 역할 순서를 조정해주세요.", ephemeral=True)
+        return
+    update_guild_setting(interaction.guild_id, "verified_role_id", role.id)
+    await interaction.followup.send(f"인증 완료 시 지급될 역할이 {role.mention}으로 설정되었습니다.", ephemeral=True)
+
+# --- `/정보 (서버 정보)` 명령어 ---
+@bot.tree.command(name="정보", description="현재 서버의 정보를 표시합니다.")
+@is_allowed_user() # 특정 유저만 사용 가능
+async def server_info(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    settings = get_guild_settings(guild.id)
+
+    # 복구 가능한 인원수 조회
+    recoverable_count = get_recoverable_users_count(guild.id)
+
     embed = discord.Embed(
-        title="✨ 디스코드 계정 자동 충전 시스템 ✨",
-        description=(
-            "아래 '충전하기' 버튼을 눌러 계정을 충전할 수 있습니다.\n"
-            "정확한 입금자명과 충전 금액을 입력해주세요."
-        ),
-        color=discord.Color.blue()
+        title=f"{guild.name} 서버 정보",
+        description=f"서버 ID: {guild.id}",
+        color=discord.Color.black() # 검정색 임베드
     )
-    embed.add_field(name="🚨 중요 안내", value="입력하신 정보가 정확해야만 충전이 정상적으로 처리됩니다.", inline=False)
+    if guild.icon: embed.set_thumbnail(url=guild.icon.url)
+    embed.add_field(name="서버 생성일", value=discord.utils.format_dt(guild.created_at, "R"), inline=True)
+    embed.add_field(name="멤버 수", value=f"{guild.member_count}명", inline=True)
+    embed.add_field(name="복구 가능한 인원", value=f"{recoverable_count}명", inline=True) # 복구 가능한 인원 추가
     
-    # 봇의 아바타를 썸네일로 설정 (선택 사항)
-    if bot.user.avatar:
-        embed.set_thumbnail(url=bot.user.avatar.url)
+    owner = guild.owner if guild.owner else await bot.fetch_user(guild.owner_id)
+    embed.add_field(name="서버 소유자", value=owner.name if owner else "정보 없음", inline=True)
+
+    if settings:
+        log_channel = guild.get_channel(settings["log_channel_id"]) if settings["log_channel_id"] else None
+        verified_role = guild.get_role(settings["verified_role_id"]) if settings["verified_role_id"] else None
+        
+        embed.add_field(name="로그 채널", value=log_channel.mention if log_channel else "설정 안됨", inline=True)
+        embed.add_field(name="인증 역할", value=verified_role.mention if verified_role else "설정 안됨", inline=True)
+        embed.add_field(name="부계정 허용", value="허용" if settings["allow_alt_accounts"] else "불가능", inline=True)
+        embed.add_field(name="VPN 허용", value="허용" if settings["allow_vpn"] else "불가능", inline=True)
+        embed.add_field(name="임베드 제목", value=f"```\n{settings['embed_title']}\n```", inline=False)
+        embed.add_field(name="임베드 설명", value=f"```\n{settings['embed_description']}\n```", inline=False)
+    else:
+        embed.add_field(name="봇 설정", value="아직 설정된 정보가 없습니다. 관리 명령어로 설정해주세요.", inline=False)
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# --- `/필터링설정 (부계정, VPN 인증 가능 또는 불가능)` 명령어 ---
+@bot.tree.command(name="필터링설정", description="인증 시 부계정 및 VPN 허용 여부를 설정합니다.")
+@is_allowed_user() # 특정 유저만 사용 가능
+@app_commands.describe(
+    alt_accounts="부계정 사용을 허용할까요?",
+    vpn="VPN 사용을 허용할까요?"
+)
+async def set_filter_settings(interaction: discord.Interaction, alt_accounts: bool, vpn: bool):
+    await interaction.response.defer(ephemeral=True)
+    update_guild_setting(interaction.guild_id, "allow_alt_accounts", alt_accounts)
+    update_guild_setting(interaction.guild_id, "allow_vpn", vpn)
+
+    alt_status = "허용" if alt_accounts else "불가능"
+    vpn_status = "허용" if vpn else "불가능"
+    await interaction.followup.send(
+        f"필터링 설정이 업데이트되었습니다:\n"
+        f"- 부계정 사용: {alt_status}\n"
+        f"- VPN 사용: {vpn_status}",
+        ephemeral=True
+    )
+
+# --- `/내용 (임베드 내용 설정)` 명령어 ---
+@bot.tree.command(name="내용", description="인증 임베드 메시지의 제목과 설명을 설정합니다.")
+@is_allowed_user() # 특정 유저만 사용 가능
+@app_commands.describe(
+    title="임베드 제목 (최대 256자)",
+    description="임베드 설명 (최대 4096자)"
+)
+async def set_embed_content(interaction: discord.Interaction, title: str, description: str):
+    await interaction.response.defer(ephemeral=True)
+
+    if len(title) > 256:
+        await interaction.followup.send("임베드 제목은 256자를 초과할 수 없습니다.", ephemeral=True)
+        return
+    if len(description) > 4096:
+        await interaction.followup.send("임베드 설명은 4096자를 초과할 수 없습니다.", ephemeral=True)
+        return
     
-    # 임베드와 View(버튼 포함)를 함께 전송
-    await interaction.response.send_message(embed=embed, view=TopUpView(), ephemeral=False)
+    update_guild_setting(interaction.guild_id, "embed_title", title)
+    update_guild_setting(interaction.guild_id, "embed_description", description)
+    
+    await interaction.followup.send("인증 임베드 제목과 설명이 설정되었습니다.", ephemeral=True)
+
+# --- `VerificationButton` View 클래스 정의 ---
+class VerificationView(ui.View):
+    def __init__(self, guild_id, embed_title, embed_description):
+        super().__init__(timeout=None)
+        # 버튼을 URL 타입으로 변경하여 클릭 시 바로 웹페이지로 이동
+        verify_url = f"{WEB_VERIFY_ENDPOINT}?guild_id={guild_id}"
+        self.add_item(ui.Button(label="인증하기", style=discord.ButtonStyle.link, url=verify_url))
+        
+        self.guild_id = guild_id # 로깅 등을 위해 저장
+
+    # 이 버튼은 style=discord.ButtonStyle.link 이므로 callback 함수가 실행되지 않습니다.
+    # 클릭 시 로깅은 웹 서버의 start_verify_auth 엔드포인트에서 처리됩니다.
+
+# --- `/인증버튼 (임베드 표시되고 버튼은 인증하기)` 명령어 ---
+@bot.tree.command(name="인증버튼", description="인증 버튼이 포함된 임베드 메시지를 현재 채널에 보냅니다.")
+@is_allowed_user() # 특정 유저만 사용 가능
+async def send_verification_button(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    if not interaction.guild:
+        await interaction.followup.send("이 명령어는 서버 내에서만 사용할 수 없습니다.", ephemeral=True)
+        return
+
+    settings = get_guild_settings(interaction.guild.id)
+    if not settings or not settings["log_channel_id"] or not settings["verified_role_id"]:
+        await interaction.followup.send("서버 설정이 완료되지 않았습니다. /로그채널, /역할 명령어로 먼저 설정을 완료해주세요.", ephemeral=True)
+        return
+    
+    embed_title = settings["embed_title"]
+    embed_description = settings["embed_description"]
+
+    embed = discord.Embed(
+        title=embed_title,
+        description=embed_description,
+        color=discord.Color.black() # 검정색 임베드
+    )
+    embed.add_field(name="진행 방법", value="아래 '인증하기' 버튼을 클릭하여 웹페이지에서 Discord 계정으로 인증을 완료해주세요.", inline=False)
+    embed.set_footer(text="인증 시 관리자가 설정한 부계정 및 VPN 필터링이 적용될 수 있습니다.")
+
+    view = VerificationView(interaction.guild.id, embed_title, embed_description)
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.followup.send("인증 버튼 메시지를 성공적으로 보냈습니다!", ephemeral=True)
 
 # 봇 실행
-if DISCORD_BOT_TOKEN:
-    bot.run(DISCORD_BOT_TOKEN)
+if BOT_TOKEN:
+    bot.run(BOT_TOKEN)
 else:
-    print("오류: DISCORD_BOT_TOKEN 환경 변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
+    print("DISCORD_BOT_TOKEN 환경 변수를 설정해주세요.")
