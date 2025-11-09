@@ -1,4 +1,5 @@
-discord.py==2.3.2 # 또는 사용하는 버전
-Flask==2.3.2 # 또는 사용하는 버전
-python-dotenv==1.1.0 # 또는 사용하는 버전
-requests==2.31.0 # 또는 사용하는 버전
+DISCORD_BOT_TOKEN="YOUR_BOT_TOKEN_HERE"
+DISCORD_CLIENT_ID="YOUR_OAUTH2_CLIENT_ID_HERE"
+DISCORD_CLIENT_SECRET="YOUR_OAUTH2_CLIENT_SECRET_HERE"
+FLASK_SECRET_KEY="ANY_LONG_RANDOM_STRING_FOR_FLASK_SESSION_SECURITY" # 매우 중요!
+WEB_BASE_URL="http://localhost:5000" # 개발 시. 실제 배포 시에는 'https://yourdomain.com'
