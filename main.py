@@ -15,8 +15,8 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5000") # 웹 서버 기본 주소
 WEB_VERIFY_ENDPOINT = f"{WEB_BASE_URL}/verify" # /인증버튼을 통한 일반 인증 URL
 
-# --- 명령어 사용 허용 유저 ID (여기서 변경) ---
-ALLOWED_USER_ID = 1402654236570812467 # 튜어오오오옹님의 Discord 유저 ID로 변경해주세요!
+# --- 명령어 사용 허용 유저 ID (여기서 변경!!! 실제 Discord 유저 ID로 변경하세요) ---
+ALLOWED_USER_ID = 1402654236570812467 
 
 # --- 봇 설정 ---
 intents = discord.Intents.default()
@@ -33,6 +33,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+# DB 테이블 초기화 (필요한 테이블이 없으면 생성)
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -61,6 +62,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS verified_users (
             user_id INTEGER PRIMARY KEY,
             guild_id INTEGER,
+            username TEXT,
             verified_at TEXT,
             is_alt_account BOOLEAN DEFAULT 0,
             is_vpn_user BOOLEAN DEFAULT 0,
@@ -73,6 +75,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# 길드 설정 조회
 def get_guild_settings(guild_id):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -81,9 +84,12 @@ def get_guild_settings(guild_id):
     conn.close()
     return settings
 
+# 길드 설정 업데이트/생성
 def update_guild_setting(guild_id, key, value):
     conn = get_db_connection()
     cursor = conn.cursor()
+    # ON CONFLICT 절은 SQLite 3.24.0 이상에서만 사용 가능합니다.
+    # 이전 버전에서는 먼저 SELECT 후 INSERT/UPDATE를 수동으로 처리해야 합니다.
     cursor.execute(f"""
         INSERT INTO guild_settings (guild_id, {key}) VALUES (?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET {key} = EXCLUDED.{key}
@@ -91,6 +97,7 @@ def update_guild_setting(guild_id, key, value):
     conn.commit()
     conn.close()
 
+# 복구 가능한 유저 수 조회
 def get_recoverable_users_count(guild_id):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -113,25 +120,29 @@ def is_allowed_user():
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} 봇이 온라인 상태입니다.')
-    init_db()
+    init_db() # 봇 시작 시 DB 초기화
 
     try:
-        # 봇 재시작 시 Persistent View 등록 (인증 버튼이 계속 작동하도록)
         # 봇이 참여한 모든 길드의 설정을 불러와 View를 등록
+        # 이렇게 등록해야 봇 재시작 후에도 이전 메시지의 버튼이 동작할 수 있습니다.
         if bot.guilds:
             for guild in bot.guilds:
                 settings = get_guild_settings(guild.id)
+                # 설정이 없을 경우 기본값 사용
                 embed_title = settings["embed_title"] if settings else "서버 인증 안내"
                 embed_description = settings["embed_description"] if settings else "서버의 모든 기능을 사용하려면 아래 버튼을 눌러 인증을 완료해주세요."
-                # URL 버튼이므로 View를 직접 add_view해도 콜백은 작동하지 않음.
-                # 하지만 메시지 ID를 유지하고 Discord에 해당 뷰가 등록되었음을 알리는 용도로 필요함.
+                # VerificationView는 버튼 style이 URL이므로 콜백 함수는 없습니다.
+                # 그러나 add_view를 통해 메시지의 컴포넌트 상태를 유지합니다.
                 bot.add_view(VerificationView(guild.id, embed_title, embed_description))
+        else:
+            print("봇이 참여하고 있는 길드가 없습니다. View를 등록할 수 없습니다.")
         
-        await bot.tree.sync()
+        await bot.tree.sync() # 슬래시 명령어 전역 동기화
         print("슬래시 명령어가 성공적으로 동기화되었습니다.")
     except Exception as e:
         print(f"슬래시 명령어 동기화 실패: {e}")
     
+# 새 멤버가 서버에 참여했을 때 (웹 인증 로깅과 겹치지 않게 처리)
 @bot.event
 async def on_member_join(member):
     guild = member.guild
@@ -139,10 +150,9 @@ async def on_member_join(member):
     if settings and settings["log_channel_id"]:
         log_channel = guild.get_channel(settings["log_channel_id"])
         if log_channel:
-            # 웹 인증 로그와 겹치지 않게 간단한 텍스트로 남김
             await log_channel.send(f"{member.name}({member.id})이(가) 서버에 입장했습니다.")
 
-# --- `/복구 (유저 강제 초대)` 명령어 ---
+# --- `/복구` 명령어 (이전에 웹 인증한 모든 유저를 강제 참여) ---
 @bot.tree.command(name="복구", description="이전에 웹 인증한 모든 유저를 현재 서버에 강제 참여시킵니다.")
 @is_allowed_user() # 특정 유저만 사용 가능
 async def recover_all_users_force_join(interaction: discord.Interaction):
@@ -161,9 +171,10 @@ async def recover_all_users_force_join(interaction: discord.Interaction):
         response_data = response.json()
         
         results_message = "### 유저 복구 결과:\n"
+        # 복구 결과를 임베드로 만들 수도 있지만, 여기서는 간결한 텍스트로.
         for result in response_data.get("results", []):
-            status_char = "O" if result["success"] else "X"
-            results_message += f"- {status_char} **{result['username']}**: {result['message']}\n"
+            status_char = "성공" if result["success"] else "실패"
+            results_message += f"- {status_char}: **{result['username']}** - {result['message']}\n"
         
         if not response_data.get("results"):
             results_message = "복구 요청을 처리할 수 있는 유저가 없거나 처리 중 오류가 발생했습니다."
@@ -183,7 +194,7 @@ async def recover_all_users_force_join(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"유저 강제 참여 중 알 수 없는 오류가 발생했습니다: {e}", ephemeral=True)
 
-# --- `/로그채널 (인증한 로그 표시)` 명령어 ---
+# --- `/로그채널` 명령어 (봇 활동 로그 채널 설정) ---
 @bot.tree.command(name="로그채널", description="봇 활동 로그를 기록할 채널을 설정합니다.")
 @is_allowed_user() # 특정 유저만 사용 가능
 @app_commands.describe(channel="로그를 보낼 채널")
@@ -193,7 +204,7 @@ async def set_log_channel(interaction: discord.Interaction, channel: discord.Tex
     await interaction.followup.send(f"로그 채널이 {channel.mention}으로 설정되었습니다.", ephemeral=True)
     await channel.send(f"봇 활동 로그 채널이 {interaction.user.name}에 의해 설정되었습니다.")
 
-# --- `/역할 (인증 완료시 지급될 역할)` 명령어 ---
+# --- `/역할` 명령어 (인증 완료 시 지급될 역할 설정) ---
 @bot.tree.command(name="역할", description="인증 완료 시 지급될 역할을 설정합니다.")
 @is_allowed_user() # 특정 유저만 사용 가능
 @app_commands.describe(role="지급될 역할")
@@ -205,7 +216,7 @@ async def set_verified_role(interaction: discord.Interaction, role: discord.Role
     update_guild_setting(interaction.guild_id, "verified_role_id", role.id)
     await interaction.followup.send(f"인증 완료 시 지급될 역할이 {role.mention}으로 설정되었습니다.", ephemeral=True)
 
-# --- `/정보 (서버 정보)` 명령어 ---
+# --- `/정보` 명령어 (서버 정보 표시) ---
 @bot.tree.command(name="정보", description="현재 서버의 정보를 표시합니다.")
 @is_allowed_user() # 특정 유저만 사용 가능
 async def server_info(interaction: discord.Interaction):
@@ -244,7 +255,7 @@ async def server_info(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# --- `/필터링설정 (부계정, VPN 인증 가능 또는 불가능)` 명령어 ---
+# --- `/필터링설정` 명령어 (부계정, VPN 인증 가능 여부 설정) ---
 @bot.tree.command(name="필터링설정", description="인증 시 부계정 및 VPN 허용 여부를 설정합니다.")
 @is_allowed_user() # 특정 유저만 사용 가능
 @app_commands.describe(
@@ -265,7 +276,7 @@ async def set_filter_settings(interaction: discord.Interaction, alt_accounts: bo
         ephemeral=True
     )
 
-# --- `/내용 (임베드 내용 설정)` 명령어 ---
+# --- `/내용` 명령어 (인증 임베드 내용 설정) ---
 @bot.tree.command(name="내용", description="인증 임베드 메시지의 제목과 설명을 설정합니다.")
 @is_allowed_user() # 특정 유저만 사용 가능
 @app_commands.describe(
@@ -287,7 +298,7 @@ async def set_embed_content(interaction: discord.Interaction, title: str, descri
     
     await interaction.followup.send("인증 임베드 제목과 설명이 설정되었습니다.", ephemeral=True)
 
-# --- `VerificationButton` View 클래스 정의 ---
+# --- `VerificationView` 클래스 (인증 버튼을 포함하는 View) ---
 class VerificationView(ui.View):
     def __init__(self, guild_id, embed_title, embed_description):
         super().__init__(timeout=None)
@@ -295,12 +306,11 @@ class VerificationView(ui.View):
         verify_url = f"{WEB_VERIFY_ENDPOINT}?guild_id={guild_id}"
         self.add_item(ui.Button(label="인증하기", style=discord.ButtonStyle.link, url=verify_url))
         
-        self.guild_id = guild_id # 로깅 등을 위해 저장
+        self.guild_id = guild_id # 로깅 등을 위해 guild_id 저장
 
-    # 이 버튼은 style=discord.ButtonStyle.link 이므로 callback 함수가 실행되지 않습니다.
-    # 클릭 시 로깅은 웹 서버의 start_verify_auth 엔드포인트에서 처리됩니다.
+    # style=discord.ButtonStyle.link 인 버튼은 콜백 함수가 실행되지 않습니다.
 
-# --- `/인증버튼 (임베드 표시되고 버튼은 인증하기)` 명령어 ---
+# --- `/인증버튼` 명령어 (인증 버튼이 포함된 임베드 메시지 전송) ---
 @bot.tree.command(name="인증버튼", description="인증 버튼이 포함된 임베드 메시지를 현재 채널에 보냅니다.")
 @is_allowed_user() # 특정 유저만 사용 가능
 async def send_verification_button(interaction: discord.Interaction):
@@ -311,6 +321,7 @@ async def send_verification_button(interaction: discord.Interaction):
         return
 
     settings = get_guild_settings(interaction.guild.id)
+    # 로그 채널과 역할이 설정되어 있는지 확인
     if not settings or not settings["log_channel_id"] or not settings["verified_role_id"]:
         await interaction.followup.send("서버 설정이 완료되지 않았습니다. /로그채널, /역할 명령어로 먼저 설정을 완료해주세요.", ephemeral=True)
         return
