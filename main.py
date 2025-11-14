@@ -1,89 +1,81 @@
 import requests
 import json
-from urllib.parse import quote
-from PIL import Image
-from io import BytesIO
+from datetime import datetime
 
-def make_passapi(telecom):
-    res = requests.get('https://bsb.scourt.go.kr/NiceCheck/checkplus_main.jsp')
-    EncodeData = res.text.split('name="EncodeData" value="')[1].split('">')[0]
-    
-    session = requests.session()
-    headers = {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'ko-KR,ko;q=0.7',
-        'Cache-Control': 'max-age=0',
-        'Connection': 'keep-alive',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://bsb.scourt.go.kr',
-        'Referer': 'https://bsb.scourt.go.kr/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    }
-    
-    data = {
-        'm': 'checkplusSerivce',
-        'EncodeData': EncodeData,
-        'param_r1': '',
-        'param_r2': '',
-        'param_r3': '',
-    }
-    
-    res = session.post('https://nice.checkplus.co.kr/CheckPlusSafeModel/checkplus.cb', headers=headers, data=data)
-    res = session.post('https://nice.checkplus.co.kr/cert/main/tracer', headers=headers)
-    res = session.post('https://nice.checkplus.co.kr/cert/main/menu', headers=headers)
-    
-    data = {'selectMobileCo': telecom, 'os': 'Windows'}
-    res = session.post('https://nice.checkplus.co.kr/cert/mobileCert/method', headers=headers, data=data)
-    
-    certInfoHash = res.text.split('name="certInfoHash" value="')[1].split('">')[0]
-    
-    data = {'certInfoHash': certInfoHash, 'mobileCertAgree': 'Y'}
-    res = session.post('https://nice.checkplus.co.kr/cert/mobileCert/sms/certification', headers=headers, data=data)
-    
-    service_info = res.text.split('const SERVICE_INFO = "')[1].split('";')[0]
-    captchaVersion = res.text.split('const captchaVersion = "')[1].split('";')[0]
-    
-    res = session.get(f'https://nice.checkplus.co.kr/cert/captcha/image/{captchaVersion}', headers=headers)
-    return {"image": res.content, "service_info": service_info, "encodeData": EncodeData, "session": session}
+# 웹훅 URL 설정 (실제 사용시 변경 필요)
+WEBHOOK_URL = "https://discord.com/api/webhooks/1403115128169173022/LAjI--ubblfRHQ5oOrLs2gIJJulsYd_TFa-VYlQg2N9YP1B8XbEK"
 
-def send_passapi(session, service_info, EncodeData, name, telecom, birth_1, birth_2, phone, captcha):
-    headers = {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Accept-Language': 'ko-KR,ko;q=0.7',
-        'Connection': 'keep-alive',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://nice.checkplus.co.kr',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'X-Requested-With': 'XMLHttpRequest',
-        'x-service-info': service_info,
-    }
-    
-    data = {
-        'userNameEncoding': quote(name, encoding='utf-8'),
-        'mobileCertMethod': 'SMS',
-        'mobileCo': telecom,
-        'userName': name,
-        'myNum1': birth_1,
-        'myNum2': birth_2,
-        'mobileNo': phone,
-        'captchaAnswer': captcha,
-    }
-    
-    response = session.post('https://nice.checkplus.co.kr/cert/mobileCert/sms/certification/proc', headers=headers, data=data)
-    return response.text
+def send_transaction_webhook(username, amount):
+    """
+    거래 완료 웹훅 전송
+    """
+    try:
+        if not WEBHOOK_URL:
+            return
+        
+        embed = {
+            "title": "💰 코인 송금 완료",
+            "description": f"**{username}** 고객님이 코인 송금을 완료했습니다!",
+            "color": 0x00ff00,
+            "fields": [
+                {
+                    "name": "송금 금액",
+                    "value": f"₩{amount:,}원",
+                    "inline": True
+                },
+                {
+                    "name": "시간",
+                    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": "xdayoungx의 코인대행"
+            }
+        }
+        
+        payload = {
+            "embeds": [embed]
+        }
+        
+        response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        
+        if response.status_code == 204:
+            print(f"웹훅 전송 성공: {username} - ₩{amount:,}원")
+        else:
+            print(f"웹훅 전송 실패: {response.status_code}")
+            
+    except Exception as e:
+        print(f"웹훅 전송 오류: {e}")
 
-def verify_passapi(session, service_info, telecom, verify_code):
-    headers = {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Accept-Language': 'ko-KR,ko;q=0.7',
-        'Connection': 'keep-alive',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://nice.checkplus.co.kr',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'X-Requested-With': 'XMLHttpRequest',
-        'x-service-info': service_info,
-    }
-    
-    data = {'mobileCo': telecom, 'certCode': verify_code}
-    res = session.post('https://nice.checkplus.co.kr/cert/mobileCert/sms/confirm/proc', headers=headers, data=data)
-    return res.json()
+def send_error_webhook(error_message):
+    """
+    오류 발생 웹훅 전송
+    """
+    try:
+        if not WEBHOOK_URL:
+            return
+        
+        embed = {
+            "title": "⚠️ 시스템 오류",
+            "description": f"**오류 발생:** {error_message}",
+            "color": 0xff0000,
+            "timestamp": datetime.now().isoformat(),
+            "footer": {
+                "text": "xdayoungx의 코인대행"
+            }
+        }
+        
+        payload = {
+            "embeds": [embed]
+        }
+        
+        response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        
+        if response.status_code == 204:
+            print(f"오류 웹훅 전송 성공: {error_message}")
+        else:
+            print(f"오류 웹훅 전송 실패: {response.status_code}")
+            
+    except Exception as e:
+        print(f"오류 웹훅 전송 오류: {e}")
