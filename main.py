@@ -1,6 +1,6 @@
         elif interaction.custom_id.startswith("calc_modal_"):
             try:
-                # 입력값 파싱
+                # 1) 입력값 파싱
                 raw = interaction.text_values.get("calc_amount", "").replace(",", "").replace("원", "").strip()
                 try:
                     input_amount = int(raw)
@@ -12,7 +12,7 @@
                     await interaction.response.send_message("금액은 1원 이상이어야 합니다.", ephemeral=True)
                     return
 
-                # 실시간 수치 조회
+                # 2) 실시간 값 조회
                 krw_rate = get_exchange_rate()  # USD -> KRW 환율
                 kimchi_pct = coin.get_kimchi_premium()  # 김치프리미엄 %
                 try:
@@ -20,43 +20,54 @@
                 except Exception:
                     fee_rate = service_fee_rate
 
-                # 수수료(원화)
-                fee_krw = int(round(input_amount * fee_rate))
+                # 3) 수수료/김프 금액 계산 (원화 기준)
+                fee_krw = int(round(input_amount * fee_rate))                      # 서비스 수수료 (원)
+                kimchi_krw = int(round(input_amount * (kimchi_pct / 100.0)))       # 김치프리미엄을 금액 비율로 환산한 값 (원)
+                total_deduction = fee_krw + kimchi_krw                             # 총 차감액
+                net_received = input_amount - total_deduction                     # 수수료+김프 차감 후 실입금(원화)
 
-                # 김프 반영 환율 (요청대로 김프는 항상 포함)
-                adjusted_krw_rate = krw_rate * (1 + (kimchi_pct / 100.0))
-
-                # 수수료 차감 후 실입금(원화)
-                after_fee_krw = input_amount - fee_krw
-
-                # 목표 실입금을 얻기 위해 결제해야 할 총액(gross)
+                # 4) 목표 실입금을 얻기 위해 결제해야 할 총액(gross) 계산 (수수료만 고려하여 역산)
+                #    김프는 시세 영향이므로 gross 계산에서는 서비스 수수료만 고려하는 경우가 일반적입니다.
                 if 1 - fee_rate > 0:
                     gross_needed = int(math.ceil(input_amount / (1 - fee_rate)))
                 else:
                     gross_needed = input_amount + fee_krw
 
-                # 임베드 구성
+                # 5) 임베드 구성 (ephemeral)
                 import disnake
                 embed = disnake.Embed(title="수수료 계산 결과", color=0x1abc9c)
-                
+
+                # 메인 결과: 입력 -> 실입금(수수료+김프 포함 차감)
                 embed.add_field(
                     name=f"{input_amount:,}원 충전시",
-                    value=f"약 ₩{after_fee_krw:,}원 (수수료 {fee_rate*100:.2f}% 포함)",
+                    value=f"약 ₩{net_received:,}원 (수수료 + 김프 포함 적용)",
                     inline=False
                 )
 
+                # 차감 상세
+                embed.add_field(
+                    name="차감 상세 (수수료 + 김프)",
+                    value=(
+                        f"수수료 ({fee_rate*100:.2f}%): ₩{fee_krw:,}\n"
+                        f"김치프리미엄 ({kimchi_pct:.2f}%): ₩{kimchi_krw:,}\n"
+                        f"총 차감액: ₩{total_deduction:,}"
+                    ),
+                    inline=False
+                )
+
+                # gross 예시 (사용자가 net을 목표로 할 때 결제해야 할 총액)
                 embed.add_field(
                     name=f"{gross_needed:,}원 결제시",
-                    value=f"약 ₩{input_amount:,}원 (결제 후 수수료 차감된 금액)",
+                    value=f"약 ₩{input_amount:,}원 (결제 후 서비스 수수료 차감된 금액)",
                     inline=False
                 )
 
+                # 보조 정보: 환율·김프·수수료율·시간
                 embed.add_field(
                     name="기준 정보",
                     value=(
                         f"기준 환율(USD→KRW): {krw_rate:,}\n"
                         f"김치프리미엄: {kimchi_pct:.2f}%\n"
-                        f"김프 반영 환율: {adjusted_krw_rate:,.4f}\n"
                         f"적용 수수료율: {fee_rate*100:.2f}%"
                     ),
                     inline=False
