@@ -1,104 +1,82 @@
-# helpers_db.py
-import sqlite3, os, json
-from datetime import datetime
-from threading import Lock
+# explorer_api.py
+import requests, logging, os
+logger = logging.getLogger(__name__)
 
-DB_PATH = 'DB/buy_panel.db'
-JSON_DUMP = 'db.json'
-_lock = Lock()
+# 권장: BscScan API 키 발급 후 설정
+BSCSCAN_API_KEY = ""  # 여기에 키 넣으세요 (필수 아님, 있으니 정확도/한도 좋아짐)
 
-def init_db():
-    os.makedirs('DB', exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS bank_accounts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        bank_name TEXT,
-        account_number TEXT,
-        created_at TEXT
-    )''')
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS coin_addresses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        coin TEXT,
-        address TEXT,
-        created_at TEXT,
-        UNIQUE(user_id, coin)
-    )''')
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS purchases (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        bank_id INTEGER,
-        coin TEXT,
-        address TEXT,
-        txid TEXT,
-        amount REAL,
-        currency TEXT,
-        status TEXT,
-        created_at TEXT
-    )''')
-    conn.commit()
-    conn.close()
-    dump_json()
+def fetch_bsc_tx(txid):
+    try:
+        if not BSCSCAN_API_KEY:
+            # API 키 없으면 실패(권장: 키 사용)
+            return None
+        url = f"https://api.bscscan.com/api?module=account&action=tokentx&txhash={txid}&apikey={BSCSCAN_API_KEY}"
+        r = requests.get(url, timeout=15).json()
+        if r.get('status') == '1' and r.get('result'):
+            # 여러 이벤트 중 첫 수신 이벤트 사용(운영 환경에선 더 정교히 필터 필요)
+            evt = r['result'][0]
+            to_addr = evt.get('to')
+            from_addr = evt.get('from')
+            token_symbol = evt.get('tokenSymbol')
+            decimals = int(evt.get('tokenDecimal') or 0)
+            value = int(evt.get('value') or 0)
+            amount = value / (10 ** decimals) if decimals else float(value)
+            return {'to_address': to_addr, 'from_address': from_addr, 'amount': amount, 'token_symbol': token_symbol, 'decimals': decimals, 'status': 'success'}
+        return None
+    except Exception as e:
+        logger.exception(e)
+        return None
 
-def _connect():
-    return sqlite3.connect(DB_PATH)
+def fetch_trx_tx(txid):
+    try:
+        url = f"https://apilist.tronscan.org/api/transaction-info?hash={txid}"
+        r = requests.get(url, timeout=15).json()
+        # Parsing may vary; try token transfers field
+        tts = r.get('tokenTransfers') or r.get('token_transfer')
+        if tts and len(tts) > 0:
+            t = tts[0]
+            to = t.get('to_address') or t.get('to')
+            frm = t.get('from_address') or t.get('from')
+            amount = float(t.get('amount') or 0)
+            # decimals may be in token_info
+            decimals = int(t.get('tokenInfo', {}).get('decimals', 0) or 0)
+            amount = amount / (10**decimals) if decimals else amount
+            symbol = t.get('tokenInfo', {}).get('symbol') or t.get('tokenName')
+            return {'to_address': to, 'from_address': frm, 'amount': amount, 'token_symbol': symbol, 'decimals': decimals, 'status': 'success'}
+        return None
+    except Exception as e:
+        logger.exception(e)
+        return None
 
-def _atomic_write_json(data):
-    tmp = JSON_DUMP + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, JSON_DUMP)
+def fetch_blockchair_tx(chain, txid):
+    try:
+        url = f"https://api.blockchair.com/{chain}/dashboards/transaction/{txid}"
+        r = requests.get(url, timeout=15).json()
+        data = r.get('data', {}).get(txid, {})
+        return {'raw': data, 'status':'success'}
+    except Exception as e:
+        logger.exception(e)
+        return None
 
-def dump_json():
-    with _lock:
-        conn = _connect(); c = conn.cursor()
-        out = {}
-        c.execute('SELECT id, user_id, bank_name, account_number, created_at FROM bank_accounts')
-        out['bank_accounts'] = [dict(zip(['id','user_id','bank_name','account_number','created_at'], r)) for r in c.fetchall()]
-        c.execute('SELECT id, user_id, coin, address, created_at FROM coin_addresses')
-        out['coin_addresses'] = [dict(zip(['id','user_id','coin','address','created_at'], r)) for r in c.fetchall()]
-        c.execute('SELECT id, user_id, bank_id, coin, address, txid, amount, currency, status, created_at FROM purchases')
-        out['purchases'] = [dict(zip(['id','user_id','bank_id','coin','address','txid','amount','currency','status','created_at'], r)) for r in c.fetchall()]
-        conn.close()
-        _atomic_write_json(out)
+def fetch_solana_tx(txid):
+    try:
+        url = f"https://public-api.solscan.io/transaction/{txid}"
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200: return None
+        return {'raw': r.json(), 'status':'success'}
+    except Exception as e:
+        logger.exception(e)
+        return None
 
-# CRUD
-def save_bank_info(user_id, bank_name, account_number):
-    conn = _connect(); c = conn.cursor()
-    c.execute('INSERT INTO bank_accounts (user_id, bank_name, account_number, created_at) VALUES (?, ?, ?, ?)',
-              (user_id, bank_name, account_number, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    conn.commit()
-    bid = c.lastrowid
-    conn.close()
-    dump_json()
-    return bid
-
-def get_user_banks(user_id):
-    conn = _connect(); c = conn.cursor()
-    c.execute('SELECT id, bank_name, account_number, created_at FROM bank_accounts WHERE user_id = ? ORDER BY id DESC', (user_id,))
-    rows = c.fetchall(); conn.close()
-    return [{'id': r[0], 'bank_name': r[1], 'account_number': r[2], 'created_at': r[3]} for r in rows]
-
-def set_coin_address(user_id, coin, address):
-    conn = _connect(); c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO coin_addresses (user_id, coin, address, created_at) VALUES (?, ?, ?, ?)',
-              (user_id, coin.upper(), address, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    conn.commit(); conn.close(); dump_json()
-
-def get_coin_address(user_id, coin):
-    conn = _connect(); c = conn.cursor()
-    c.execute('SELECT address FROM coin_addresses WHERE user_id = ? AND coin = ?', (user_id, coin.upper()))
-    row = c.fetchone(); conn.close()
-    return row[0] if row else None
-
-def save_purchase(user_id, bank_id, coin, address, txid, amount, currency='KRW', status='pending'):
-    conn = _connect(); c = conn.cursor()
-    c.execute('INSERT INTO purchases (user_id, bank_id, coin, address, txid, amount, currency, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-              (user_id, bank_id, coin.upper() if coin else None, address, txid, amount, currency, status, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    conn.commit(); rec = c.lastrowid; conn.close(); dump_json()
-    return rec
+def fetch_tx_raw(coin, txid):
+    coin = coin.upper()
+    if coin in ('BNB','USDT'):
+        return fetch_bsc_tx(txid)
+    if coin == 'TRX':
+        return fetch_trx_tx(txid)
+    if coin in ('LTC','DOGE'):
+        chain = 'litecoin' if coin=='LTC' else 'dogecoin'
+        return fetch_blockchair_tx(chain, txid)
+    if coin in ('SOL','SOLANA'):
+        return fetch_solana_tx(txid)
+    return None
