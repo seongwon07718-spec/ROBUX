@@ -1,15 +1,47 @@
-1) 가상환경(권장) 생성
-   python -m venv venv
-   source venv/bin/activate (Linux/macOS) 또는 venv\Scripts\activate (Windows)
+# init_db.py
+import sqlite3, os
+from datetime import datetime
 
-2) 패키지 설치
-   pip install -r requirements.txt
+os.makedirs('DB', exist_ok=True)
+conn = sqlite3.connect('DB/buy_panel.db')
+c = conn.cursor()
 
-3) DB 초기화 (한 번만)
-   python init_db.py
+c.execute('''
+CREATE TABLE IF NOT EXISTS bank_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    bank_name TEXT,
+    account_number TEXT,
+    created_at TEXT
+)
+''')
 
-4) 봇 실행
-   python bot.py
+c.execute('''
+CREATE TABLE IF NOT EXISTS coin_addresses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    coin TEXT,
+    address TEXT,
+    created_at TEXT,
+    UNIQUE(user_id, coin)
+)
+''')
 
-5) DB 확인
-   python db_to_json.py   -> db.json 생성 (편리하게 확인 가능)
+c.execute('''
+CREATE TABLE IF NOT EXISTS purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    bank_id INTEGER,
+    coin TEXT,
+    address TEXT,
+    txid TEXT,
+    amount REAL,
+    currency TEXT,
+    status TEXT,
+    created_at TEXT
+)
+''')
+
+conn.commit()
+conn.close()
+print("DB 초기화 완료: DB/buy_panel.db")
