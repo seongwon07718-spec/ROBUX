@@ -1,33 +1,31 @@
-# bot_restore.py
-import sqlite3, requests, time, asyncio, uuid
-import discord
-from discord import app_commands
-from discord.ext import commands
+# web_app.py
+# Flask 앱: OAuth2 콜백 및 토큰 저장, 즉시 add_user 시도
+from flask import Flask, request, redirect, render_template_string
+import requests, sqlite3, uuid, time
 from urllib.parse import quote_plus
+import os
 
-# ----------------- 설정 (여기에 실제 값 입력) -----------------
+app = Flask(__name__)
+app.secret_key = str(uuid.uuid4())
+
+# ----------------- 설정 (테스트용: 실제 값으로 변경하세요) -----------------
 BOT_TOKEN = "여기에_BOT_TOKEN_입력"
 CLIENT_ID = "1434868431064272907"
 CLIENT_SECRET = "여기에_CLIENT_SECRET_입력"
-OWNER = 1402654236570812467  # 소유자 ID (정수)
 API_ENDPOINT = "https://discord.com/api/v9"
-DATABASE_PATH = "database.db"
-BASE_URL = "http://localhost:5000"  # web_app.py의 BASE_URL과 동일해야 함
-MAX_CONCURRENT = 3  # 동시 복구 작업 개수
+# REDIRECT_URI는 Discord 개발자 포털에 등록한 값과 정확히 일치해야 합니다.
+REDIRECT_URI = "https://btcclink.duckdns.org/join"
+# 웹에서 생성되는 인증 링크의 기본 URL
+BASE_URL = "https://btcclink.duckdns.org"
+DB_PATH = "database.db"
 STATE_EXPIRY_SECONDS = 600
 # ----------------------------------------------------------------
 
-intents = discord.Intents.default()
-intents.members = True
-intents.guilds = True
-intents.message_content = True
+SUCCESS_HTML = "<h2>인증 성공</h2><p>인증이 완료되었습니다. 잠시 후 처리됩니다.</p>"
+FAIL_HTML = "<h2>실패</h2><p>인증 중 오류가 발생했습니다.</p>"
 
-bot = commands.Bot(command_prefix=".", intents=intents)
-tree = bot.tree
-
-# ----------------- DB 유틸 -----------------
 def start_db():
-    con = sqlite3.connect(DATABASE_PATH)
+    con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     return con, cur
 
@@ -67,18 +65,6 @@ def ensure_schema():
     con.commit()
     con.close()
 
-# ----------------- 유틸 -----------------
-def embeda(t, title, desc, fields=None):
-    color_map = {"success":0x5c6cdf,"error":0xff5c5c,"info":0x5c6cdf}
-    color = color_map.get(t, 0x5c6cdf)
-    embed = discord.Embed(title=title, description=desc, color=color)
-    if fields:
-        for name,val,inline in fields:
-            embed.add_field(name=name, value=val, inline=inline)
-    embed.set_footer(text="LinkRestoreBot")
-    return embed
-
-# OAuth url 생성(버튼용 링크)
 def make_oauth_url(guild_id):
     nonce = uuid.uuid4().hex
     state = f"{guild_id}:{nonce}"
@@ -87,204 +73,129 @@ def make_oauth_url(guild_id):
     con.commit()
     con.close()
     scope = quote_plus("identify guilds.join")
-    oauth_url = f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={BASE_URL}/join&response_type=code&scope={scope}&state={state}"
+    oauth_url = f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope={scope}&state={state}"
     return oauth_url
 
-# ----------------- web 연동 helper -----------------
-def exchange_code_sync(code, redirect_uri):
+def exchange_code(code):
     data = {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
         'grant_type': 'authorization_code',
         'code': code,
-        'redirect_uri': redirect_uri
+        'redirect_uri': REDIRECT_URI
     }
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    try:
-        r = requests.post(f"{API_ENDPOINT}/oauth2/token", data=data, headers=headers, timeout=10)
-        return r.json()
-    except Exception as e:
-        print("exchange_code exception:", e)
-        return None
-
-def refresh_token_sync(refresh_token):
-    data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token
-    }
-    headers = {"Content-Type":"application/x-www-form-urlencoded"}
-    try:
-        r = requests.post(f"{API_ENDPOINT}/oauth2/token", data=data, headers=headers, timeout=10)
-    except Exception as e:
-        print("refresh_token exception:", e)
-        return None
-    if r.status_code == 429:
-        try:
-            retry = r.json().get("retry_after", 1)
-        except:
-            retry = 2
-        time.sleep(retry + 1)
-        return refresh_token_sync(refresh_token)
+    r = requests.post(f"{API_ENDPOINT}/oauth2/token", data=data, headers=headers, timeout=10)
     try:
         return r.json()
-    except:
+    except Exception:
         return None
 
-def add_user_sync(access_token, guild_id, user_id):
+def get_user_profile(access_token):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        r = requests.get(f"{API_ENDPOINT}/users/@me", headers=headers, timeout=10)
+        if r.status_code != 200:
+            print("get_user_profile failed:", r.status_code, r.text)
+            return None
+        return r.json()
+    except Exception as e:
+        print("get_user_profile exception:", e)
+        return None
+
+def add_user(access_token, guild_id, user_id):
     jsonData = {"access_token": access_token}
     headers = {"Authorization": f"Bot {BOT_TOKEN}"}
     try:
         r = requests.put(f"{API_ENDPOINT}/guilds/{guild_id}/members/{user_id}", json=jsonData, headers=headers, timeout=10)
+        if r.status_code in (201, 204):
+            return True
+        elif r.status_code == 429:
+            info = r.json()
+            retry = info.get("retry_after", 1)
+            time.sleep(retry + 1)
+            return add_user(access_token, guild_id, user_id)
+        else:
+            print("add_user failed:", r.status_code, r.text)
+            return False
     except Exception as e:
         print("add_user exception:", e)
         return False
-    if r.status_code == 429:
-        try:
-            retry = r.json().get("retry_after", 1)
-        except:
-            retry = 2
-        time.sleep(retry + 1)
-        return add_user_sync(access_token, guild_id, user_id)
-    if r.status_code in (201, 204):
-        return True
-    else:
-        print("add_user failed:", r.status_code, r.text)
-        return False
 
-# ----------------- 인증패널: 임베드 + 링크 버튼 -----------------
-class OAuthView(discord.ui.View):
-    def __init__(self, oauth_url):
-        super().__init__(timeout=None)
-        self.add_item(discord.ui.Button(label="인증하기", style=discord.ButtonStyle.link, url=oauth_url))
+@app.route("/login/<int:guild_id>")
+def login(guild_id):
+    oauth_url = make_oauth_url(guild_id)
+    return redirect(oauth_url)
 
-@tree.command(name="인증패널", description="인증 임베드와 OAuth 링크 버튼을 발행합니다. (관리자 전용)")
-@app_commands.describe(channel="발행할 채널 (텍스트 채널)")
-async def auth_panel(interaction: discord.Interaction, channel: discord.TextChannel):
-    # 관리자 권한 체크
-    if interaction.user.id != OWNER and (not interaction.guild or not interaction.user.guild_permissions.administrator):
-        return await interaction.response.send_message("권한이 없습니다. 관리자만 사용할 수 있습니다.", ephemeral=True)
+@app.route("/join", methods=["GET"])
+def join():
+    code = request.args.get("code")
+    state = request.args.get("state")
+    if not code or not state:
+        return FAIL_HTML, 400
 
-    # auth role 설정 확인
     con, cur = start_db()
-    cur.execute("SELECT auth_role_id FROM guild_settings WHERE guild_id == ?;", (interaction.guild.id,))
+    cur.execute("SELECT guild_id, created_at FROM state_nonce WHERE state == ?;", (state,))
     row = cur.fetchone()
-    con.close()
-    if not row or not row[0]:
-        return await interaction.response.send_message("먼저 /역할 명령어로 인증 역할을 설정해 주세요.", ephemeral=True)
-    auth_role_id = row[0]
-
-    oauth_url = make_oauth_url(interaction.guild.id)
-    embed = embeda("info", "인증하기", "아래 버튼을 눌러 Discord 인증을 진행하세요. 인증을 완료하면 자동으로 초대 또는 토큰 저장이 이루어집니다.")
-    view = OAuthView(oauth_url)
-    try:
-        await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"{channel.mention} 채널에 인증 패널을 발행했습니다.", ephemeral=True)
-    except discord.Forbidden:
-        await interaction.response.send_message("봇에게 해당 채널에 메시지 전송 권한이 없습니다.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"메시지 발송 실패: {e}", ephemeral=True)
-
-# ----------------- /역할 명령 (인증 역할 설정) -----------------
-@tree.command(name="역할", description="인증 역할을 설정합니다. (관리자 전용)")
-@app_commands.describe(role="설정할 역할")
-async def set_role(interaction: discord.Interaction, role: discord.Role):
-    if interaction.user.id != OWNER and (not interaction.guild or not interaction.user.guild_permissions.administrator):
-        return await interaction.response.send_message("권한이 없습니다.", ephemeral=True)
-    con, cur = start_db()
-    cur.execute("INSERT INTO guild_settings (guild_id, auth_role_id) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET auth_role_id=excluded.auth_role_id;", (interaction.guild.id, role.id))
-    con.commit()
-    con.close()
-    await interaction.response.send_message(f"인증 역할이 {role.mention} 으로 설정되었습니다.", ephemeral=True)
-
-# ----------------- 대량 복구 기능 (/복구) -----------------
-async def recover_guild_members(source_guild_id, target_guild_id, followup):
-    con, cur = start_db()
-    cur.execute("SELECT id, token FROM users WHERE guild_id == ?;", (source_guild_id,))
-    rows = cur.fetchall()
-    con.close()
-    total = len(rows)
-    if total == 0:
-        await followup.send("복구 대상이 없습니다.", ephemeral=True)
-        return
-
-    sem = asyncio.Semaphore(MAX_CONCURRENT)
-    loop = asyncio.get_event_loop()
-    success = 0
-    fail = 0
-    done = 0
-
-    await followup.send(f"복구 시작: 총 {total}명. 동시 작업 수 {MAX_CONCURRENT}.", ephemeral=True)
-
-    async def worker(row):
-        nonlocal success, fail, done
-        user_id, refresh_tok = row[0], row[1]
-        async with sem:
-            token_data = await loop.run_in_executor(None, refresh_token_sync, refresh_tok)
-            if not token_data or "access_token" not in token_data:
-                fail += 1
-                done += 1
-                if done % 10 == 0:
-                    await followup.send(f"진행: {done}/{total} (성공:{success} 실패:{fail})", ephemeral=True)
-                return
-            access_tok = token_data["access_token"]
-            new_refresh = token_data.get("refresh_token", refresh_tok)
-            added = await loop.run_in_executor(None, add_user_sync, access_tok, target_guild_id, user_id)
-            if added:
-                success += 1
-                try:
-                    con, cur = start_db()
-                    cur.execute("UPDATE users SET token = ? WHERE id == ?;", (new_refresh, user_id))
-                    con.commit()
-                    con.close()
-                except Exception as e:
-                    print("DB update error:", e)
-            else:
-                fail += 1
-            done += 1
-            if done % 10 == 0:
-                await followup.send(f"진행: {done}/{total} (성공:{success} 실패:{fail})", ephemeral=True)
-
-    tasks = [asyncio.create_task(worker(r)) for r in rows]
-    await asyncio.gather(*tasks)
-    await followup.send(embed=embeda("success", "복구 완료", f"총 {total}명 중 성공: {success}, 실패: {fail}"), ephemeral=True)
-
-@tree.command(name="복구", description="소유자 전용: 복구키로 저장된 사용자를 현재 서버로 복구합니다.")
-@app_commands.describe(recover_key="복구키 (guilds.token 컬럼 값)")
-async def recover_command(interaction: discord.Interaction, recover_key: str):
-    if interaction.user.id != OWNER:
-        return await interaction.response.send_message("이 명령어는 소유자만 사용할 수 있습니다.", ephemeral=True)
-    await interaction.response.send_message("복구를 시작합니다. 진행은 비공개로 전송됩니다.", ephemeral=True)
-    con, cur = start_db()
-    cur.execute("SELECT id FROM guilds WHERE token == ?;", (recover_key,))
-    row = cur.fetchone()
-    con.close()
     if not row:
-        return await interaction.followup.send(embed=embeda("error", "복구 실패", "해당 복구키에 해당하는 서버 정보가 없습니다."), ephemeral=True)
-    source_guild_id = row[0]
-    target_guild_id = interaction.guild.id
-    # bot 권한 확인
+        con.close()
+        return FAIL_HTML, 400
+    guild_id_db, created_at = row
+    con.close()
+    if int(time.time()) - created_at > STATE_EXPIRY_SECONDS:
+        return "<h2>만료된 인증 요청입니다.</h2>", 400
+
+    token_resp = exchange_code(code)
+    if not token_resp or "access_token" not in token_resp:
+        print("token exchange failed:", token_resp)
+        return FAIL_HTML, 500
+
+    access_token = token_resp.get("access_token")
+    refresh_token = token_resp.get("refresh_token")
+    user = get_user_profile(access_token)
+    if not user:
+        return FAIL_HTML, 500
+
+    user_id = user.get("id")
+    guild_id = guild_id_db
+
     try:
-        member = await interaction.guild.fetch_member(bot.user.id)
-        if not member.guild_permissions.administrator:
-            return await interaction.followup.send(embed=embeda("error", "권한 오류", "봇에게 관리자 권한이 필요합니다."), ephemeral=True)
+        con, cur = start_db()
+        cur.execute("INSERT OR REPLACE INTO users (id, token, guild_id) VALUES (?, ?, ?);", (str(user_id), refresh_token, guild_id))
+        con.commit()
+        con.close()
     except Exception as e:
-        print("bot fetch member error:", e)
-        return await interaction.followup.send(embed=embeda("error", "오류", "봇 멤버 조회 실패"), ephemeral=True)
-    # 백그라운드로 복구 실행
-    asyncio.create_task(recover_guild_members(source_guild_id, target_guild_id, interaction.followup))
+        print("DB save error:", e)
 
-# ----------------- on_ready -----------------
-@bot.event
-async def on_ready():
-    ensure_schema()
-    await tree.sync()
-    print(f"Bot ready: {bot.user} (ID: {bot.user.id})")
-
-# ----------------- 실행 -----------------
-if __name__ == "__main__":
-    if BOT_TOKEN.startswith("여기에") or not BOT_TOKEN:
-        print("ERROR: BOT_TOKEN을 설정하세요.")
+    added = add_user(access_token, guild_id, user_id)
+    if added:
+        print(f"User {user_id} added to guild {guild_id}")
     else:
-        bot.run(BOT_TOKEN)
+        print(f"User {user_id} add attempt failed; saved for later recovery")
+
+    return render_template_string(SUCCESS_HTML)
+
+@app.route("/<link>")
+def public_link(link):
+    try:
+        con, cur = start_db()
+        cur.execute("SELECT id FROM guilds WHERE link == ?;", (link,))
+        row = cur.fetchone()
+        con.close()
+        if not row:
+            return "<h2>404</h2><p>링크가 없습니다.</p>", 404
+        gid = row[0]
+        page = f"""
+        <h2>서버 링크 복구</h2>
+        <p>서버ID: {gid}</p>
+        <a href="{BASE_URL}/login/{gid}">Discord로 인증(초대)하기</a>
+        """
+        return render_template_string(page)
+    except Exception as e:
+        print("public_link exception:", e)
+        return "<h2>오류</h2>", 500
+
+if __name__ == "__main__":
+    ensure_schema()
+    # 운영 시에는 443(https)로 리버스 프록시를 권장
+    app.run(host="0.0.0.0", port=5000, debug=False)
