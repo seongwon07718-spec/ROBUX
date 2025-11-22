@@ -1,2109 +1,1359 @@
-import asyncio
 import disnake
-from disnake.ext import commands, tasks
+import requests
+import time
+import hashlib
+import hmac
 import sqlite3
-from datetime import datetime, timedelta
-import random
-import json
-import os
-import logging
-from PIL import Image
-from io import BytesIO
+from datetime import datetime
+import urllib.parse
 from disnake import PartialEmoji, ui
-import math
-from pass_verify import make_passapi, send_passapi, verify_passapi
+# 웹훅 사용 제거
 
-import coin
-from api import set_service_fee_rate, get_service_fee_rate, get_user_tier_and_fee
+# MEXC API 설정
+API_KEY = "mx"
+SECRET_KEY = "13f32a0ef0e8403a54"
+BASE_URL = "https://api.mexc.com"
 
-# ===== 봇 설정 =====
-TOKEN = ''  # 디스코드 봇 토큰
-DEFAULT_ADMIN_ID = 1402654236570812467
-# 슬래시 명령어 사용 가능한 사용자 ID (요청: 두 사용자만 허용)
-# 주어진 값이 동일하게 중복 제공되어도 한 명만 허용되는 것과 동일하게 동작합니다.
-ALLOWED_USER_IDS = [715780095155109941, 1402654236570812467]
+# 서비스 수수료율
+SERVICE_FEE_RATE = 0.025
 
-# 임베드 공통 썸네일(외부 이미지 이모지 대용)
-EMBED_ICON_URL = ""
-
-# ===== 충전 계좌 설정 =====
-DEPOSIT_BANK_NAME = "토스뱅크"
-DEPOSIT_ACCOUNT_NO = "1001-2440-7138"
-DEPOSIT_ACCOUNT_HOLDER = "정성원"
-
-# ===== 채널 설정 =====
-# 구매 내역(예쁘게 표시): 사용자 공지용 채널
-CHANNEL_PURCHASE_LOG = 1436586235886829588
-# 송금 로그 (TXID 포함) → 요청에 따라 관리자 로그로 라우팅
-CHANNEL_TRANSFER_LOG = 1436586235886829588
-# 인증 로그 (PASS 인증 등)
-CHANNEL_VERIFY_LOG = 1438855210121433141
-# 충전 로그 (충전 요청/승인/거절) → 요청에 따라리자 로그로 라우팅
-CHANNEL_CHARGE_LOG = 1436602243905228831
-# 관리자 로그 (운영 관련)
-CHANNEL_ADMIN_LOG = 1436602585862766612
-
-# 입고(입금) 로그 채널 (API에서 입금 탐지 시 전송)
-CHANNEL_DEPOSIT_LOG = 1436584475407548416  # 필요 시 채널 ID로 교체
-
-# ===== 메시지 템플릿 설정 =====
-PURCHASE_LOG_TITLE = "💝 대행로그"
-PURCHASE_LOG_DESCRIPTION = "**{user_id} 고객님 {coin_name} {amount:,}원 대행 감사합니다.\n좋은하루 되시길 바랍니다.**"
-PURCHASE_LOG_FOOTER = "BTCC 2% 코인대행"
-
-# ===== 로그 메시지 템플릿 =====
-VERIFY_LOG_TITLE = "PASS 인증 완료"
-VERIFY_LOG_DESCRIPTION = "PASS 본인인증 성공\n사용자 = {user_mention} ({user_id})\n이름 = {name}\n휴대폰 = {phone}\n생년월일 = {birth}\n통신사 = {telecom}"
-
-CHARGE_REQUEST_TITLE = "충전 요청"
-CHARGE_REQUEST_DESCRIPTION = "충전 요청이 접수되었습니다.\n사용자 = {user_mention} ({user_id})\n요청 금액 = {amount:,}원\n현재 잔액 = {balance:,}원"
-
-CHARGE_APPROVE_TITLE = "충전 승인"
-CHARGE_APPROVE_DESCRIPTION = "충전이 승인되었습니다.\n사용자 = {user_mention} ({user_id})\n승인 금액 = {amount:,}원\n승인자 = {approver}"
-
-CHARGE_REJECT_TITLE = "충전 거절"
-CHARGE_REJECT_DESCRIPTION = "충전이 거절되었습니다.\n사용자 = {user_mention} ({user_id})\n거절 금액 = {amount:,}원\n거절자 = {rejector}"
-
-TRANSFER_LOG_TITLE = "송금 완료"
-TRANSFER_LOG_DESCRIPTION = "송금 완료\n사용자 = {user_mention} ({user_id})\n코인 종류 = {coin_name}\n금액 = ₩{amount:,}\nTXID = `{txid}`\n처리 시간 = {timestamp}"
-
-# ===== 기타 설정 =====
-# 로그 파일명
-LOG_FILE = 'bot.log'
-# 로그 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-LOG_LEVEL = logging.INFO
-
-# ===== 로그 설정 =====
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# ===== 명령어 권한 설정 =====
-# 슬래시 명령어를 특정 사용자에게만 보이게 하는 함수
-def is_allowed_user(user_id):
-    return user_id in ALLOWED_USER_IDS
-
-intents = disnake.Intents.all()
-bot = commands.Bot(command_prefix='/', intents=intents)
-
-user_sessions = {}
-embed_updating = False
-pending_charge_requests = {}
-
-class InfoModal(disnake.ui.Modal):
-    def __init__(self, serial_code):
-        components = [
-            disnake.ui.TextInput(
-                label="캡챠 ( 이미지 숫자 6자리 )",
-                placeholder="캡챠를 입력해주세요.",
-                custom_id="captcha",
-                style=disnake.TextInputStyle.short,
-                min_length=1,
-                max_length=40,
-            ),
-            disnake.ui.TextInput(
-                label="본인 이름",
-                placeholder="성함을 입력해 주세요.",
-                custom_id="name",
-                style=disnake.TextInputStyle.short,
-                min_length=1,
-                max_length=99,
-            ),
-            disnake.ui.TextInput(
-                label="생년월일 / 성별",
-                placeholder="주민등록7자리ex) 0601013",
-                custom_id="birth",
-                style=disnake.TextInputStyle.short,
-                min_length=7,
-                max_length=7,
-            ),
-            disnake.ui.TextInput(
-                label="전화번호",
-                placeholder="숫자만 입력해주세요.",
-                custom_id="phone",
-                style=disnake.TextInputStyle.short,
-                min_length=11,
-                max_length=11,
-            )
-        ]
-        super().__init__(
-            title="문자 ( SMS ) 본인확인",
-            custom_id=f"info_modal_{serial_code}",
-            components=components,
-        )
-
-class VerifyCodeModal(disnake.ui.Modal):
-    def __init__(self, serial_code):
-        components = [
-            disnake.ui.TextInput(
-                label="인증번호",
-                placeholder="문자로온 숫자 6자리를 입력해 주세요.",
-                custom_id="verify_code",
-                style=disnake.TextInputStyle.short,
-                min_length=6,
-                max_length=6,
-            )
-        ]
-        super().__init__(
-            title="문자 ( SMS ) 본인확인",
-            custom_id=f"verify_modal_{serial_code}",
-            components=components,
-        )
-
-custom_emoji1 = PartialEmoji(name="send", id=1439222645035106436)
-custom_emoji2 = PartialEmoji(name="info", id=1439222648512053319)
-custom_emoji3 = PartialEmoji(name="charge", id=1439222646641262706)
-
-class CoinView(disnake.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    @disnake.ui.button(label='송금', style=disnake.ButtonStyle.grey, emoji=custom_emoji1)
-    async def use_service(self, button, interaction):
-        try:
-            conn = sqlite3.connect('DB/verify_user.db')
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM users WHERE user_id = ?', (interaction.author.id,))
-            user = cursor.fetchone()
-            conn.close()
-            if not user:
-                await self.show_verification_needed(interaction)
-                return
-            embed = disnake.Embed(
-                title="원하는 코인을 선택해주세요",
-                description="**(<:47311ltc:1438899347453509824>) Litecoin = 라이트코인\n(<:6798bnb:1438899349110390834>) Binance = 바이낸스코인\n(<:tron:1438899350582591701>) Tron = 트론코인\n(<:7541tetherusdt:1439510997730721863>) Usdt = 테더코인**",
-                color=0xffffff
-            )
-            view = disnake.ui.View()
-            view.add_item(coin.CoinDropdown())
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        except Exception as e:
-            logger.error(f"송금 버튼 오류: {e}")
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**서비스 이용 중 오류가 발생했습니다.**",
-                color=0xff6200
-            )
-    @disnake.ui.button(label='정보 조회', style=disnake.ButtonStyle.grey, emoji=custom_emoji2)
-    async def my_info(self, button, interaction):
-        try:
-            conn = sqlite3.connect('DB/verify_user.db')
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM users WHERE user_id = ?', (interaction.author.id,))
-            user = cursor.fetchone()
-            conn.close()
-            if not user:
-                await self.show_verification_needed(interaction)
-                return
-            embed = disnake.Embed(
-                title=f"**{interaction.author.display_name}님의 정보**",
-                color=0xffffff
-            )
-            embed.add_field(name="**남은 금액**", value=f"```{user[6]:,}원```", inline=True)
-            embed.add_field(name="**수수료**", value=f"```2.5%```", inline=True)
-            embed.add_field(name="**누적 충전 금액**", value=f"```{user[5]:,}원```", inline=True)
-
-            custom_emoji77 = PartialEmoji(name="list", id=1440677442934149243)
-
-            embed.set_thumbnail(url=interaction.author.display_avatar.url)
-            view = disnake.ui.View()
-            history_btn = disnake.ui.Button(label="거래내역", style=disnake.ButtonStyle.gray, emoji=custom_emoji77, custom_id="view_history")
-            view.add_item(history_btn)
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        except Exception as e:
-            logger.error(f"정보 조회 버튼 오류: {e}")
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**정보 조회 중 오류가 발생했습니다.**",
-                color=0xff6200
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-    @disnake.ui.button(label='충전', style=disnake.ButtonStyle.grey, emoji=custom_emoji3)
-    async def charge(self, button, interaction):
-        try:
-            conn = sqlite3.connect('DB/verify_user.db')
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM users WHERE user_id = ?', (interaction.author.id,))
-            user = cursor.fetchone()
-            conn.close()
-            if not user:
-                await self.show_verification_needed(interaction)
-                return
-            modal = coin.ChargeModal()
-            await interaction.response.send_modal(modal)
-        except Exception as e:
-            logger.error(f"충전 버튼 오류: {e}")
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**충전 서비스 이용 중 오류가 발생했습니다.**",
-                color=0xff6200
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-    async def show_verification_needed(self, interaction):
-        try:
-            embed = disnake.Embed(
-                title="**본인인증**",
-                description="**아래 버튼을 클릭하여 본인인증을 해주세요.**",
-                color=0xffffff
-            )
-            verify_button = disnake.ui.Button(
-                label="본인인증",
-                style=disnake.ButtonStyle.grey,
-                custom_id="start_verify"
-            )
-            view = disnake.ui.View()
-            view.add_item(verify_button)
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        except Exception as e:
-            logger.error(f"인증 필요 메시지 오류: {e}")
-
-def check_admin(user_id):
+def set_service_fee_rate(rate: float):
+    global SERVICE_FEE_RATE
     try:
-        if user_id == DEFAULT_ADMIN_ID:
-            return True
-        conn = sqlite3.connect('DB/admin.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM admins WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
-        conn.close()
-        return result is not None
-    except Exception as e:
-        logger.error(f"직원 확인 오류: {e}")
-        return False
-
-def add_admin(user_id, username):
-    try:
-        conn = sqlite3.connect('DB/admin.db')
-        cursor = conn.cursor()
-        cursor.execute('INSERT OR IGNORE INTO admins (user_id, username) VALUES (?, ?)', (user_id, username))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"직원 추가 오류: {e}")
-
-def remove_admin(user_id):
-    try:
-        conn = sqlite3.connect('DB/admin.db')
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM admins WHERE user_id = ?', (user_id,))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"직원 삭제 오류: {e}")
-
-def save_to_json(user_id, phone, dob, name, telecom):
-    try:
-        json_file = 'DB/verified_users.json'
-        
-        if os.path.exists(json_file):
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        else:
-            data = {}
-        
-        data[str(user_id)] = {
-            'user_id': user_id,
-            'phone': phone,
-            'dob': dob,
-            'name': name,
-            'telecom': telecom,
-            'verified_at': datetime.now().isoformat(),
-            'total_amount': 0,
-            'now_amount': 0
-        }
-        
-        temp_file = json_file + '.tmp'
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        
-        os.replace(temp_file, json_file)
-        
-    except Exception as e:
-        logger.error(f"JSON 저장 오류: {e}")
-
-def add_verified_user(user_id, phone, dob, name, telecom):
-    try:
-        conn = sqlite3.connect('DB/verify_user.db')
-        cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO users (user_id, phone, DOB, name, telecom, Total_amount, now_amount) VALUES (?, ?, ?, ?, ?, 0, 0)', 
-                       (user_id, phone, dob, name, telecom))
-        conn.commit()
-        conn.close()
-        
-        # JSON 파일에도 저장
-        save_to_json(user_id, phone, dob, name, telecom)
-        
-    except Exception as e:
-        logger.error(f"인증고객 추가 오류: {e}")
-
-def remove_verified_user(user_id):
-    try:
-        conn = sqlite3.connect('DB/verify_user.db')
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"인증고객 삭제 오류: {e}")
-
-def add_transaction(user_id, transaction_type, amount, coin_type=None, address=None, txid=None, api_txid=None, fee=0):
-    """거래내역을 JSON 파일에 저장"""
-    try:
-        json_file = 'DB/verified_users.json'
-        
-        # 거래 데이터 생성
-        transaction = {
-            'type': transaction_type,
-            'amount': amount,
-            'coin_type': coin_type or 'KRW',
-            'address': address or '',
-            'txid': txid or '',
-            'api_txid': api_txid or '',
-            'fee': fee,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        if os.path.exists(json_file):
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        else:
-            data = {}
-        
-        # 사용자 데이터 초기화
-        if str(user_id) not in data:
-            data[str(user_id)] = {
-                'total_amount': 0,
-                'now_amount': 0,
-                'transactions': []
-            }
-        
-        # 거래내역 추가
-        if 'transactions' not in data[str(user_id)]:
-            data[str(user_id)]['transactions'] = []
-        
-        data[str(user_id)]['transactions'].append(transaction)
-        
-        # 최대 100개까지만 저장 (메모리 절약)
-        if len(data[str(user_id)]['transactions']) > 100:
-            data[str(user_id)]['transactions'] = data[str(user_id)]['transactions'][-100:]
-        
-        # 파일 저장
-        temp_file = json_file + '.tmp'
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        
-        os.replace(temp_file, json_file)
-        logger.info(f"거래내역 저장 완료: {user_id} - {transaction_type} {amount}")
-        
-    except Exception as e:
-        logger.error(f"거래내역 저장 오류: {e}")
-
-def get_transaction_history(user_id, limit=100):
-    """사용자의 거래내역을 조회"""
-    try:
-        json_file = 'DB/verified_users.json'
-        if os.path.exists(json_file):
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            user_data = data.get(str(user_id), {})
-            transactions = user_data.get('transactions', [])
-            # 최신순 정렬
-            transactions = sorted(transactions, key=lambda x: x.get('timestamp', ''), reverse=True)
-            return transactions[:limit] if transactions else []
-        else:
-            return []
-    except Exception as e:
-        logger.error(f"거래내역 조회 오류: {e}")
-        return []
-
-def update_json_balance(user_id, total_amount, now_amount):
-    try:
-        json_file = 'DB/verified_users.json'
-        
-        if os.path.exists(json_file):
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            if str(user_id) in data:
-                data[str(user_id)]['total_amount'] = total_amount
-                data[str(user_id)]['now_amount'] = now_amount
-                
-                temp_file = json_file + '.tmp'
-                with open(temp_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                
-                os.replace(temp_file, json_file)
-                
-    except Exception as e:
-        logger.error(f"JSON 잔액 업데이트 오류: {e}")
-
-def add_balance(user_id, amount, transaction_type="충전"):
-    try:
-        conn = sqlite3.connect('DB/verify_user.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT Total_amount, now_amount FROM users WHERE user_id = ?', (user_id,))
-        current = cursor.fetchone()
-        
-        if current:
-            new_balance = current[1] + amount
-            new_total = current[0] + amount
-            cursor.execute('UPDATE users SET Total_amount = ?, now_amount = ? WHERE user_id = ?', 
-                          (new_total, new_balance, user_id))
-            
-            # JSON 파일도 업데이트
-            update_json_balance(user_id, new_total, new_balance)
-        else:
-            cursor.execute('INSERT INTO users (user_id, Total_amount, now_amount) VALUES (?, ?, ?)', 
-                          (user_id, amount, amount))
-            
-            # JSON 파일도 업데이트
-            update_json_balance(user_id, amount, amount)
-        
-        # 거래내역 저장
-        add_transaction(
-            user_id=user_id,
-            transaction_type=transaction_type,
-            amount=amount,
-            coin_type="KRW"
-        )
-        
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"잔액 추가 오류: {e}")
-
-def subtract_balance(user_id, amount):
-    try:
-        conn = sqlite3.connect('DB/verify_user.db')
-        cursor = conn.cursor()
-        
-        if user_id is None:
-            # 전역 차감 (송금 수수료)
-            cursor.execute('UPDATE users SET now_amount = now_amount - ? WHERE now_amount >= ?', 
-                          (amount, amount))
-            affected_rows = cursor.rowcount
-            if affected_rows == 0:
-                logger.warning("전역 차감 실패: 잔액 부족")
-                return False
-        else:
-            # 특정 사용자 차감
-            cursor.execute('SELECT now_amount FROM users WHERE user_id = ?', (user_id,))
-            current = cursor.fetchone()
-            
-            if current and current[0] >= amount:
-                cursor.execute('UPDATE users SET now_amount = now_amount - ? WHERE user_id = ?', 
-                              (amount, user_id))
-            else:
-                logger.warning(f"사용자 {user_id} 잔액 부족")
-                return False
-        
-        conn.commit()
-        conn.close()
+        if rate < 0 or rate > 0.25:
+            return False
+        SERVICE_FEE_RATE = rate
         return True
-    except Exception as e:
-        logger.error(f"잔액 차감 오류: {e}")
+    except Exception:
         return False
 
-last_update_time = datetime.now()
-current_stock = "0"
-current_rate = 1350
-service_fee_rate = 0.025
-update_counter = 0
-api_update_counter = 0
-
-def get_stock_amount():
+def get_service_fee_rate() -> float:
     try:
-        return coin.get_balance()
-    except Exception as e:
-        logger.error(f"재고 조회 오류: {e}")
-        return "0"
+        return SERVICE_FEE_RATE
+    except Exception:
+        return 0.025
+
+def sign_params(params, secret):
+    try:
+        query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+        signature = hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+        return signature
+    except Exception:
+        return ""
 
 def get_exchange_rate():
     try:
-        return coin.get_exchange_rate()
-    except Exception as e:
-        logger.error(f"환율 조회 오류: {e}")
+        response = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        rate = data.get("rates", {}).get("KRW")
+        return rate if rate and rate > 0 else 1350
+    except (requests.RequestException, ValueError, KeyError):
+        return 1350
+    except Exception:
         return 1350
 
-def get_update_counter():
-    global update_counter
-    update_counter += 1
-    if update_counter > 60:
-        update_counter = 1
-    return update_counter
-
-@bot.slash_command(name="관리자", description="관리자 추가 / 해제")
-async def staff_cmd(inter, 옵션: str = commands.Param(choices=["추가", "해제"]), 유저: disnake.Member = None):
+def get_kimchi_premium():
     try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        
-        if 유저 is None:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**유저를 선택해주세요.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        
-        if 옵션 == "추가":
-            add_admin(유저.id, str(유저))
-            embed = disnake.Embed(color=0xffffff)
-            embed.add_field(name="**관리자 추가**", value=f"유저명: {유저.mention} / {유저.id}", inline=False)
+        upbit_response = requests.get("https://api.upbit.com/v1/ticker?markets=KRW-BTC", timeout=10)
+        if upbit_response.status_code == 200:
+            upbit_data = upbit_response.json()
+            upbit_price = upbit_data[0]['trade_price']
         else:
-            remove_admin(유저.id)
-            embed = disnake.Embed(color=0xffffff)
-            embed.add_field(name="**관리자 해제**", value=f"유저명: {유저.mention} / {유저.id}", inline=False)
+            return 0
         
-        await inter.response.send_message(embed=embed)
-    except Exception as e:
-        logger.error(f"관리자 명령 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="처리 중 오류가 발생했습니다.",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
-
-@bot.slash_command(name="수동인증", description="고객님 PASS 수동인증")
-async def force_verify(inter, 유저: disnake.Member):
-    try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        
-        add_verified_user(유저.id, "", "", "", "")
-        embed = disnake.Embed(
-            title="**수동인증 완료**",
-            description=f"**{유저.mention} 고객님이 수동인증되었습니다.**",
-            color=0xffffff
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
-    except Exception as e:
-        logger.error(f"수동인증 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
-
-@bot.slash_command(name="이용제한", description="인증한 고객 이용제한")
-async def blk_user(inter, 유저: disnake.Member):
-    try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        
-        user_data = coin.get_verified_user(유저.id)
-        if user_data:
-            remove_verified_user(유저.id)
-            embed = disnake.Embed(color=0xffffff)
-            embed.add_field(name="**인증고객님 이용제한**", 
-                           value=f"{유저.mention} / {user_data[3]} 고객님이 이용제한되셨어요", inline=False)
+        binance_response = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=10)
+        if binance_response.status_code == 200:
+            binance_data = binance_response.json()
+            binance_price_usd = float(binance_data['price'])
         else:
-            embed = disnake.Embed(color=0xffffff)
-            embed.add_field(name="**인증고객님 이용제한**", 
-                           value=f"{유저.mention} 고객님은 존재하지 않아요", inline=False)
+            return 0
         
-        await inter.response.send_message(embed=embed)
-    except Exception as e:
-        logger.error(f"이용제한 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xffffff
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
+        # USD/KRW 환율
+        krw_rate = get_exchange_rate()
+        
+        # 김치프리미엄 계산
+        binance_price_krw = binance_price_usd * krw_rate
+        kimchi_premium = ((upbit_price - binance_price_krw) / binance_price_krw) * 100
+        
+        return round(kimchi_premium, 2)
+        
+    except Exception:
+        return 0
 
-@bot.slash_command(name="충전요청거절", description="충전 요청 거절")
-async def reject_charge(inter, 유저: disnake.Member, 금액: int, 사유: str = "사유 없음"):
+def get_coin_price(coin_symbol):
+    """특정 코인의 현재 가격을 USD로 조회 (업비트 우선, MEXC 백업)"""
     try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
+        # 업비트에서 가격 조회 시도
+        upbit_price = get_upbit_coin_price(coin_symbol)
+        if upbit_price > 0:
+            return upbit_price
         
-        user_data = coin.get_verified_user(유저.id)
-        if not user_data:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**해당 고객님은 인증되지 않았습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
+        # 업비트 실패 시 MEXC에서 조회
+        endpoint = "/api/v3/ticker/price"
+        params = {'symbol': f"{coin_symbol}USDT"}
         
-        # 사용자에게 거절 알림 전송
-        try:
-            reject_embed = disnake.Embed(
-                title="충전 요청 거절",
-                description=f"{유저.display_name}님.\n\n충전 요청이 거절되었습니다.",
-                color=0xffffff
-            )
-            reject_embed.add_field(
-                name="**거절된 금액**",
-                value=f"₩{금액:,}원",
-                inline=True
-            )
-            reject_embed.set_footer(text="문의는 운영진에게 연락해주세요.")
+        response = requests.get(f"{BASE_URL}{endpoint}", params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return float(data.get('price', 0))
+        else:
+            return 0
+    except (requests.RequestException, ValueError, KeyError):
+        return 0
+    except Exception:
+        return 0
+
+def get_upbit_coin_price(coin_symbol):
+    """업비트에서 코인 가격을 USD로 조회"""
+    try:
+        # 업비트 코인 매핑
+        upbit_mapping = {
+            'USDT': 'USDT-KRW',
+            'BNB': 'BNB-KRW', 
+            'TRX': 'TRX-KRW',
+            'LTC': 'LTC-KRW'
+        }
+        
+        upbit_symbol = upbit_mapping.get(coin_symbol)
+        if not upbit_symbol:
+            return 0
+        
+        # 업비트 API 호출
+        url = f"https://api.upbit.com/v1/ticker?markets={upbit_symbol}"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data and len(data) > 0:
+                krw_price = float(data[0].get('trade_price', 0))
+                # KRW를 USD로 변환
+                usd_krw_rate = get_exchange_rate()
+                if usd_krw_rate > 0:
+                    usd_price = krw_price / usd_krw_rate
+                    return usd_price
+        return 0
+    except (requests.RequestException, ValueError, KeyError):
+        return 0
+    except Exception:
+        return 0
+
+def get_all_coin_prices():
+    """모든 지원 코인의 현재 가격을 조회 (업비트 우선, MEXC 백업)"""
+    try:
+        prices = {}
+        supported_coins = ['USDT', 'TRX', 'LTC', 'BNB']
+        
+        # 각 코인별로 업비트에서 가격 조회 시도
+        for coin in supported_coins:
+            if coin == 'USDT':
+                prices[coin] = 1.0  # USDT는 항상 1
+            else:
+                upbit_price = get_upbit_coin_price(coin)
+                if upbit_price > 0:
+                    prices[coin] = upbit_price
+                else:
+                    # 업비트 실패 시 MEXC에서 조회
+                    mexc_price = get_mexc_coin_price(coin)
+                    prices[coin] = mexc_price
+        
+        return prices
+    except Exception:
+        return {}
+
+def get_mexc_coin_price(coin_symbol):
+    """MEXC에서 코인 가격 조회 (백업용)"""
+    try:
+        endpoint = "/api/v3/ticker/price"
+        params = {'symbol': f"{coin_symbol}USDT"}
+        
+        response = requests.get(f"{BASE_URL}{endpoint}", params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return float(data.get('price', 0))
+        else:
+            return 0
+    except (requests.RequestException, ValueError, KeyError):
+        return 0
+    except Exception:
+        return 0
+
+def get_convert_pairs():
+    """MEXC Convert 가능한 코인 쌍 조회"""
+    if not API_KEY or not SECRET_KEY:
+        return None
+    
+    try:
+        endpoint = "/api/v3/convert/pairs"
+        timestamp = int(time.time() * 1000)
+        
+        params = {
+            'recvWindow': 60000,
+            'timestamp': timestamp
+        }
+        
+        signature = sign_params(params, SECRET_KEY)
+        if not signature:
+            return None
             
-            await 유저.send(embed=reject_embed)
-            
-            admin_embed = disnake.Embed(
-                title="거절 알림 전송 완료",
-                description=f"**{유저.display_name}님**에게 거절 알림을 전송했습니다.",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=admin_embed)
-            
-        except Exception as e:
-            logger.error(f"사용자 DM 전송 오류: {e}")
-            embed = disnake.Embed(
-                title="알림 전송 실패",
-                description=f"**사용자에게 DM을 전송할 수 없습니다.\n직접 연락해주세요.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed)
+        params['signature'] = signature
         
-        # 로그 채널에 알림
-        channel = bot.get_channel(CHANNEL_CHARGE_LOG)
-        if channel is not None:
-            log_embed = disnake.Embed(
-                title="자동충전 거절",
-                description=f"**{유저.display_name} / {user_data[3]} 고객님**\n금액: **₩{금액:,}**\n사유: **{사유}**",
-                color=0xff6200
-            )
-            log_embed.set_footer(text=f"거절자: {inter.author.display_name}")
-            await channel.send(embed=log_embed)
-        else:
-            logger.error(f"충전 로그 채널({CHANNEL_CHARGE_LOG})을 찾을 수 없습니다.")
-            
-    except Exception as e:
-        logger.error(f"충전거절 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
+        headers = {
+            'X-MEXC-APIKEY': API_KEY
+        }
+        
+        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('code') == 200:
+                return data.get('data', [])
+        return None
+    except Exception:
+        return None
 
-@bot.slash_command(name="충전요청승인", description="충전 요청 승인")
-async def approve_charge(inter, 유저: disnake.Member, 금액: int):
+def get_symbol_info(symbol):
+    """거래소에서 지원하는 심볼 정보 확인"""
+    if not API_KEY or not SECRET_KEY:
+        return None
+    
     try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
+        endpoint = "/api/v3/exchangeInfo"
+        response = requests.get(f"{BASE_URL}{endpoint}", timeout=10)
         
-        user_data = coin.get_verified_user(유저.id)
-        if not user_data:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**해당 고객님은 인증되지 않았습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        
-        add_balance(유저.id, 금액)
-        embed = disnake.Embed(
-            title="충전 승인 완료",
-            description=f"**{유저.display_name} / {user_data[3]} 고객님**\n충전금액: **₩{금액:,}**\n충전 요청이 승인되었습니다!",
-            color=0xffffff
-        )
-        embed.set_thumbnail(url=유저.display_avatar.url)
-        embed.set_footer(text="충전 시스템을 통한 승인 처리")
-        await inter.response.send_message(embed=embed)
-        
-        # 로그 채널에 알림
-        channel = bot.get_channel(CHANNEL_CHARGE_LOG)
-        if channel is not None:
-            log_embed = disnake.Embed(
-                title="충전 승인",
-                description=f"**{유저.display_name} / {user_data[3]} 고객님**\n금액: **₩{금액:,}**",
-                color=0xffffff
-            )
-            log_embed.set_footer(text=f"승인자: {inter.author.display_name}")
-            await channel.send(embed=log_embed)
+        if response.status_code == 200:
+            data = response.json()
+            symbols = data.get('symbols', [])
+            
+            for sym in symbols:
+                if sym.get('symbol') == symbol and sym.get('status') == 'ENABLED':
+                    return sym
+            return None
         else:
-            logger.error(f"충전 로그 채널({CHANNEL_CHARGE_LOG})을 찾을 수 없습니다.")
-    except Exception as e:
-        logger.error(f"충전승인 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
+            return None
+    except Exception:
+        return None
 
-@bot.slash_command(name="수동충전", description="인증고객님 수동 충전")
-async def chrg_user(inter, 유저: disnake.Member, 금액: int):
+def mexc_swap_coins(from_coin, to_coin, amount):
+    """MEXC Convert 시뮬레이션 (실제 Convert API가 작동하지 않음)"""
+    if not API_KEY or not SECRET_KEY:
+        return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
+    
     try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
+        # MEXC Convert API가 실제로 작동하지 않으므로 시뮬레이션
+        # 실제 운영 시에는 수동으로 Convert하거나 다른 방법 필요
         
-        user_data = coin.get_verified_user(유저.id)
-        if not user_data:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**해당 고객님은 인증되지 않았습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
+        # 코인 가격 조회
+        from_price = get_coin_price(from_coin.upper())
+        to_price = get_coin_price(to_coin.upper())
         
-        add_balance(유저.id, 금액)
-        embed = disnake.Embed(
-            title="충전 완료",
-            description=f"**{유저.display_name} / {user_data[3]} 고객님**\n충전금액: **₩{금액:,}**\n이제 대행을 이용해주세요!",
-            color=0xffffff
-        )
-        embed.set_thumbnail(url=유저.display_avatar.url)
-        embed.set_footer(text="충전이 즉시 반영되었습니다.")
-        await inter.response.send_message(embed=embed)
-        # 로그 채널에 알림
-        channel = bot.get_channel(CHANNEL_CHARGE_LOG)
-        if channel is not None:
-            log_embed = disnake.Embed(
-                title="충전 로그",
-                description=f"**{유저.display_name} / {user_data[3]} 고객님**\n금액: **₩{금액:,}**",
-                color=0xffffff
-            )
-            log_embed.set_footer(text=f"처리자: {inter.author.display_name}")
-            await channel.send(embed=log_embed)
+        if from_price <= 0 or to_price <= 0:
+            return {'success': False, 'error': '코인 가격 조회 실패'}
+        
+        # 스왑 계산 (from_coin을 USDT로, USDT를 to_coin으로)
+        usdt_amount = amount * from_price
+        to_amount = usdt_amount / to_price
+        
+        # 스왑 수수료 적용 (0.1%)
+        swap_fee = 0.001
+        final_amount = to_amount * (1 - swap_fee)
+        
+        print(f"Debug: {from_coin} {amount} → {to_coin} {final_amount:.6f} (시뮬레이션)")
+        
+        return {
+            'success': True,
+            'orderId': f"SWAP_{int(time.time())}",
+            'status': 'success',
+            'from_coin': from_coin.upper(),
+            'to_coin': to_coin.upper(),
+            'amount': amount,
+            'swapped_amount': final_amount,
+            'fee': swap_fee
+        }
+        
+    except Exception as e:
+        return {'success': False, 'error': f'스왑 오류: {str(e)}'}
+
+def simple_send_coin(target_coin, amount, address, network):
+    """모든 코인 재고를 활용하여 목표 코인으로 Convert 후 송금"""
+    if not API_KEY or not SECRET_KEY:
+        return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
+    
+    try:
+        # 현재 모든 코인 잔액 확인
+        balances = get_all_balances()
+        prices = get_all_coin_prices()
+        target_balance = balances.get(target_coin.upper(), 0)
+        
+        print(f"Debug: 목표 코인={target_coin.upper()}, 필요량={amount}, 현재잔액={target_balance}")
+        
+        # 목표 코인이 충분하면 바로 송금
+        if target_balance >= amount:
+            print(f"Debug: {target_coin.upper()} 잔액 충분, 바로 송금")
+            return send_coin_transaction(amount, address, network, target_coin)
+        
+        # 목표 코인이 부족하면 다른 코인들을 USDT로 Convert 후 목표 코인으로 Convert
+        target_price = prices.get(target_coin.upper(), 0)
+        if target_price <= 0:
+            return {'success': False, 'error': f'{target_coin.upper()} 가격 조회 실패'}
+        
+        needed_usdt = amount * target_price
+        current_usdt = balances.get('USDT', 0)
+        
+        print(f"Debug: 필요 USDT={needed_usdt:.2f}, 현재 USDT={current_usdt:.2f}")
+        
+        # Convert 우선순위: USDT > BNB > TRX > LTC
+        convert_priority = ['USDT', 'BNB', 'TRX', 'LTC']
+        
+        # 1단계: USDT가 충분한지 먼저 확인
+        if current_usdt >= needed_usdt:
+            print(f"Debug: 1단계 - USDT 충분 ({current_usdt:.2f} >= {needed_usdt:.2f})")
+            # Convert API가 작동하지 않으므로 USDT로 직접 송금
+            print(f"Debug: Convert API 미지원으로 USDT로 직접 송금")
+            return send_coin_transaction(needed_usdt, address, 'bep20', 'USDT', skip_min_check=True, skip_address_check=True)
+        
+        # 2단계: 다른 코인들을 USDT로 Convert 후 USDT 송금
+        print(f"Debug: 2단계 - 다른 코인들을 USDT로 Convert")
+        total_usdt = current_usdt
+        convert_log = []
+        
+        for coin in convert_priority:
+            if coin == 'USDT' or coin == target_coin.upper():
+                continue
+                
+            coin_balance = balances.get(coin, 0)
+            if coin_balance <= 0:
+                continue
+                
+            coin_price = prices.get(coin, 0)
+            if coin_price <= 0:
+                continue
+            
+            print(f"Debug: {coin} {coin_balance:.6f}을 USDT로 Convert 시도 (시뮬레이션)")
+            # 이 코인을 USDT로 Convert (시뮬레이션)
+            convert_result = mexc_swap_coins(coin, 'USDT', coin_balance)
+            if convert_result and convert_result.get('success', False):
+                converted_usdt = convert_result.get('swapped_amount', 0)
+                total_usdt += converted_usdt
+                convert_log.append(f"{coin} {coin_balance:.6f} → USDT {converted_usdt:.2f}")
+                print(f"Debug: {coin} Convert 성공, 총 USDT: {total_usdt:.2f}")
+            else:
+                error_msg = convert_result.get('error', 'Convert 실패') if convert_result else 'Convert 실패'
+                convert_log.append(f"{coin} Convert 실패: {error_msg}")
+                print(f"Debug: {coin} Convert 실패: {error_msg}")
+        
+        print(f"Debug: 2단계 완료, 총 USDT: {total_usdt:.2f}, 필요 USDT: {needed_usdt:.2f}")
+        
+        # USDT가 충분해지면 USDT로 송금 (Convert API 미지원)
+        if total_usdt >= needed_usdt:
+            print(f"Debug: USDT 충분, USDT로 직접 송금 (Convert API 미지원)")
+            return send_coin_transaction(needed_usdt, address, 'bep20', 'USDT', skip_min_check=True, skip_address_check=True)
+        
+        # 디버깅 정보 수집
+        debug_info = []
+        debug_info.append(f"목표 코인: {target_coin.upper()}")
+        debug_info.append(f"필요한 양: {amount}")
+        debug_info.append(f"필요한 USDT: {needed_usdt:.2f}")
+        debug_info.append(f"현재 USDT: {current_usdt:.2f}")
+        debug_info.append(f"총 USDT (Convert 후): {total_usdt:.2f}")
+        
+        # Convert 로그 추가
+        if convert_log:
+            debug_info.append("\nConvert 과정:")
+            for log in convert_log:
+                debug_info.append(f"  {log}")
+        
+        # 현재 잔액 정보
+        debug_info.append("\n현재 잔액:")
+        for coin in convert_priority:
+            if coin == 'USDT':
+                continue
+            coin_balance = balances.get(coin, 0)
+            coin_price = prices.get(coin, 0)
+            if coin_balance > 0 and coin_price > 0:
+                coin_usdt_value = coin_balance * coin_price
+                debug_info.append(f"  {coin}: {coin_balance:.6f} (₩{coin_usdt_value:.2f})")
+        
+        debug_msg = "\n".join(debug_info)
+        return {'success': False, 'error': f'모든 코인을 Convert해도 목표 금액에 도달하지 못했습니다\n\n{debug_msg}'}
+        
+    except Exception as e:
+        return {'success': False, 'error': f'Convert/송금 오류: {str(e)}'}
+
+def simple_send_coin(target_coin, amount, address, network):
+    """선택한 코인으로 직접 송금 (자동 스왑 없음)"""
+    if not API_KEY or not SECRET_KEY:
+        return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
+    
+    try:
+        # 현재 코인 잔액 확인
+        balances = get_all_balances()
+        target_balance = balances.get(target_coin.upper(), 0)
+        
+        print(f"Debug: 목표 코인={target_coin.upper()}, 필요량={amount}, 현재잔액={target_balance}")
+        
+        # 목표 코인 잔액 확인
+        if target_balance < amount:
+            return {'success': False, 'error': f'{target_coin.upper()} 잔액 부족: {target_balance:.6f} {target_coin.upper()} (필요: {amount:.6f})'}
+        
+        # 바로 송금
+        print(f"Debug: {target_coin.upper()} 잔액 충분, 바로 송금")
+        return send_coin_transaction(amount, address, network, target_coin)
+        
+    except Exception as e:
+        return {'success': False, 'error': f'송금 오류: {str(e)}'}
+
+def get_balance(coin='USDT'):
+    if not API_KEY or not SECRET_KEY:
+        return "0"
+    
+    try:
+        endpoint = "/api/v3/account"
+        timestamp = int(time.time() * 1000)
+        
+        params = {
+            'timestamp': timestamp
+        }
+        
+        signature = sign_params(params, SECRET_KEY)
+        if not signature:
+            return "0"
+            
+        params['signature'] = signature
+        
+        headers = {
+            'X-MEXC-APIKEY': API_KEY
+        }
+        
+        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            balances = data.get('balances', [])
+            
+            for balance in balances:
+                if balance.get('asset') == coin.upper():
+                    free_balance = float(balance.get('free', 0))
+                    return str(max(0, free_balance))
+            
+            return "0"
         else:
-            logger.error(f"충전 로그 채널({CHANNEL_CHARGE_LOG})을 찾을 수 없습니다.")
-    except Exception as e:
-        logger.error(f"고객충전 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
+            return "0"
+            
+    except (requests.RequestException, ValueError, KeyError):
+        return "0"
+    except Exception:
+        return "0"
 
-@bot.slash_command(name="고객조회", description="인증 고객 정보 조회")
-async def info_lookup(inter, 유저: disnake.Member):
+def get_all_balances():
+    """모든 지원 코인의 잔액을 조회"""
+    if not API_KEY or not SECRET_KEY:
+        return {}
+    
     try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
+        endpoint = "/api/v3/account"
+        timestamp = int(time.time() * 1000)
+        
+        params = {
+            'timestamp': timestamp
+        }
+        
+        signature = sign_params(params, SECRET_KEY)
+        if not signature:
+            return {}
+            
+        params['signature'] = signature
+        
+        headers = {
+            'X-MEXC-APIKEY': API_KEY
+        }
+        
+        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            balances = data.get('balances', [])
+            
+            supported_coins = ['USDT', 'TRX', 'LTC', 'BNB']
+            result = {}
+            
+            for balance in balances:
+                asset = balance.get('asset', '')
+                if asset in supported_coins:
+                    free_balance = float(balance.get('free', 0))
+                    result[asset] = max(0, free_balance)
+            
+            # 지원하지 않는 코인은 0으로 설정
+            for coin in supported_coins:
+                if coin not in result:
+                    result[coin] = 0
+                    
+            return result
+        else:
+            return {}
+            
+    except (requests.RequestException, ValueError, KeyError):
+        return {}
+    except Exception:
+        return {}
 
+def get_verified_user(user_id):
+    try:
         conn = sqlite3.connect('DB/verify_user.db')
         cursor = conn.cursor()
-        cursor.execute('SELECT user_id, phone, DOB, name, telecom, Total_amount, now_amount FROM users WHERE user_id = ?', (유저.id,))
-        row = cursor.fetchone()
+        cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        user = cursor.fetchone()
         conn.close()
+        return user
+    except (sqlite3.Error, OSError):
+        return None
+    except Exception:
+        return None
 
-        if not row:
-            embed = disnake.Embed(
-                title="고객 인증 정보",
-                description=f"**{유저.mention} 고객님의 인증 정보가 없습니다.**",
-                color=0xffffff
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        _, phone, dob, name, telecom, total_amount, now_amount = row
-
-        embed = disnake.Embed(
-            title="정보 조회",
-            description=f"**{유저.mention} ({유저.id})**",
-            color=0xffffff
-        )
-        try:
-            embed.set_thumbnail(url=유저.display_avatar.url)
-        except Exception:
-            pass
-        embed.add_field(name="성함", value=name or "```-```", inline=True)
-        embed.add_field(name="전화번호", value=phone or "```-```", inline=True)
-        embed.add_field(name="생년월일", value=dob or "```-```", inline=True)
-        embed.add_field(name="사용중인 통신사", value=telecom or "```-```", inline=True)
-        embed.add_field(name="누적 금액", value=f"```{(total_amount or 0):,}원```", inline=True)
-        embed.add_field(name="현재 잔액", value=f"```{(now_amount or 0):,}원```", inline=True)
-
-        await inter.response.send_message(embed=embed, ephemeral=True)
-    except Exception as e:
-        logger.error(f"정보조회 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
-
-@bot.slash_command(name="인증해제", description="인증한 고객 인증 해제")
-async def unverify_user(inter, 유저: disnake.Member):
+def subtract_balance(user_id, amount):
+    conn = None
     try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
+        conn = sqlite3.connect('DB/verify_user.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT now_amount FROM users WHERE user_id = ?', (user_id,))
+        current = cursor.fetchone()
+        
+        if current and current[0] >= amount:
+            new_balance = current[0] - amount
+            cursor.execute('UPDATE users SET now_amount = ? WHERE user_id = ?', (new_balance, user_id))
+            conn.commit()
+            return True
+        else:
+            return False
+    except (sqlite3.Error, OSError):
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
+        return False
+    except Exception:
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
-        # DB 삭제
-        removed = False
+def add_transaction_history(user_id, amount, transaction_type):
+    conn = None
+    try:
+        conn = sqlite3.connect('DB/history.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO transaction_history (user_id, amount, type) VALUES (?, ?, ?)', 
+                      (user_id, amount, transaction_type))
+        conn.commit()
+    except (sqlite3.Error, OSError):
+        pass
+    except Exception:
+        pass
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
+
+def get_txid_link(txid, coin='USDT'):
+    try:
+        if txid and len(str(txid)) > 0:
+            # 코인별 블록 익스플로러 링크
+            explorer_links = {
+                'USDT': f"https://bscscan.com/tx/{txid}",
+                'BNB': f"https://bscscan.com/tx/{txid}",
+                'TRX': f"https://tronscan.org/#/transaction/{txid}",
+                'LTC': f"https://blockchair.com/litecoin/transaction/{txid}"
+            }
+            return explorer_links.get(coin.upper(), f"https://bscscan.com/tx/{txid}")
+        return "https://bscscan.com/"
+    except Exception:
+        return "https://bscscan.com/"
+
+def get_transaction_fee(coin, network):
+    """송금 수수료 조회"""
+    fees = {
+        'USDT': {'BSC': 0.8, 'TRX': 1.0},
+        'TRX': {'TRX': 1.0},
+        'LTC': {'LTC': 0.001},
+        'BNB': {'BSC': 0.0005}
+    }
+    
+    coin_fees = fees.get(coin.upper(), {})
+    return coin_fees.get(network.upper(), 1.0)
+
+def get_minimum_amounts_krw():
+    """최소 송금 금액을 KRW로 변환하여 반환"""
+    min_amounts = {
+        'USDT': 10,     # 10 USDT
+        'TRX': 10,      # 10 TRX
+        'LTC': 0.015,   # 0.015 LTC
+        'BNB': 0.008    # 0.008 BNB
+    }
+    
+    prices = get_all_coin_prices()
+    krw_rate = get_exchange_rate()
+    kimchi_premium = get_kimchi_premium()
+    actual_krw_rate = krw_rate * (1 + kimchi_premium / 100)
+    
+    min_amounts_krw = {}
+    for coin, min_amount in min_amounts.items():
+        coin_price = prices.get(coin, 0)
+        if coin_price > 0:
+            krw_value = min_amount * coin_price * actual_krw_rate
+            min_amounts_krw[coin] = int(krw_value)
+        else:
+            min_amounts_krw[coin] = 0
+    
+    return min_amounts_krw
+
+# ===== Tier/Fees Helpers =====
+def get_user_tier_and_fee(user_id: int):
+    """Return (tier, service_fee_rate, purchase_bonus_rate). tier: 'VIP' or 'BUYER'"""
+    try:
+        total_amount = 0
         try:
             conn = sqlite3.connect('DB/verify_user.db')
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM users WHERE user_id = ?', (유저.id,))
-            removed = cursor.rowcount > 0
-            conn.commit()
+            cursor.execute('SELECT Total_amount FROM users WHERE user_id = ?', (user_id,))
+            row = cursor.fetchone()
+            if row:
+                total_amount = int(row[0] or 0)
             conn.close()
-        except Exception as e:
-            logger.error(f"인증해체 DB 오류: {e}")
-
-        # JSON 삭제 (best-effort)
-        try:
-            json_file = 'DB/verified_users.json'
-            if os.path.exists(json_file):
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if str(유저.id) in data:
-                    del data[str(유저.id)]
-                    temp_file = json_file + '.tmp'
-                    with open(temp_file, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
-                    os.replace(temp_file, json_file)
-        except Exception as e:
-            logger.error(f"인증해체 JSON 오류: {e}")
-
-        if removed:
-            embed = disnake.Embed(
-                title="인증 해제 완료",
-                description=f"**{유저.mention} 고객님의 인증이 해제되었습니다.**",
-                color=0xffffff
-            )
-        else:
-            embed = disnake.Embed(
-                title="ℹ인증 정보 없음",
-                description=f"**{유저.mention} 고객님의 인증 정보가 존재하지 않습니다.**",
-                color=0xffffff
-            )
-
-        await inter.response.send_message(embed=embed, ephemeral=True)
-    except Exception as e:
-        logger.error(f"인증해체 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="처리 중 오류가 발생했습니다.",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
-
-@bot.slash_command(name="txid조회", description="고객의 TXID 내역 조회")
-async def txid_lookup(inter, 유저: disnake.Member):
-    try:
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        transactions = get_transaction_history(유저.id, 100)
-        embed = disnake.Embed(
-            title=f"{유저.display_name}님의 TXID 전체 조회",
-            description="**거래 TXID와 API TXID를 모두 확인하세요**",
-            color=0xffffff
-        )
-        try:
-            embed.set_thumbnail(url=유저.display_avatar.url)
         except Exception:
             pass
-        txid_text = ""
-        count = 0
-        for i, tx in enumerate(transactions, 1):
-            if tx.get('txid') or tx.get('api_txid'):
-                time_str = tx.get('timestamp', '')
-                txid_text += f"**{i}.** {tx.get('type','')} - ₩{tx.get('amount',0):,}\n"
-                txid_text += f"{tx.get('coin_type','')} | {time_str}\n"
-                if tx.get('txid'):
-                    txid_text += f"TXID: `{tx.get('txid','')}`\n"
-                if tx.get('api_txid'):
-                    txid_text += f"API TXID: `{tx.get('api_txid','')}`\n"
-                txid_text += "\n"
-                count += 1
-                if len(txid_text) > 3500:
-                    break
-        if count == 0:
-            embed.add_field(name="TXID 목록", value="TXID가 있는 거래가 없습니다.", inline=False)
+        if total_amount >= 10_000_000:
+            return ('VIP', 0.03, 0.01)
         else:
-            embed.add_field(name="TXID 목록", value=txid_text, inline=False)
-        await inter.response.send_message(embed=embed, ephemeral=True)
-    except Exception as e:
-        logger.error(f"txid조회 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        await inter.response.send_message(embed=embed, ephemeral=True)
+            return ('BUYER', 0.05, 0.0)
+    except Exception:
+        return ('BUYER', 0.05, 0.0)
 
-embed_message = None
+def get_minimum_amount_coin(coin_symbol):
+    """특정 코인의 최소 송금 금액을 코인 단위로 반환"""
+    min_amounts = {
+        'USDT': 10,     # 10 USDT
+        'TRX': 10,      # 10 TRX
+        'LTC': 0.015,   # 0.015 LTC
+        'BNB': 0.008    # 0.008 BNB
+    }
+    
+    return min_amounts.get(coin_symbol.upper(), 10)
 
-@bot.slash_command(name="대행패널", description="대행 패널 전송")
-async def service_embed(inter):
-    try:
-        # Defer early to avoid 3s timeout
-        await inter.response.defer(ephemeral=True)
-        if inter.author.id not in ALLOWED_USER_IDS:
-            embed = disnake.Embed(
-                title="**접근 거부**",
-                description="**이 명령어는 허용된 사용자만 사용할 수 있습니다.**",
-                color=0xff0000
-            )
-            await inter.edit_original_response(embed=embed)
-            return
-        if not check_admin(inter.author.id):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**권한이 없습니다.**",
-                color=0xff6200
-            )
-            await inter.edit_original_response(embed=embed)
-            return
+def krw_to_coin_amount(krw_amount, coin_symbol):
+    """KRW 금액을 코인 단위로 변환"""
+    krw_rate = get_exchange_rate()
+    coin_price = get_coin_price(coin_symbol.upper())
+    kimchi_premium = get_kimchi_premium()
+    actual_krw_rate = krw_rate * (1 + kimchi_premium / 100)
+    
+    return krw_amount / actual_krw_rate / coin_price
+
+def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=False, skip_address_check=False):
+    if not API_KEY or not SECRET_KEY:
+        return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
+    
+    # MEXC 최소 송금 금액 확인 (skip_min_check가 True면 건너뛰기)
+    if not skip_min_check:
+        # 통일된 최소 송금 금액 조회
+        min_amount = get_minimum_amount_coin(coin.upper())
+        min_amounts_krw = get_minimum_amounts_krw()
+        min_krw = min_amounts_krw.get(coin.upper(), 10000)
         
-        global embed_message, current_stock, current_rate, last_update_time
-        
-        # 모든 코인 잔액 조회
-        all_balances = coin.get_all_balances()
-        all_prices = coin.get_all_coin_prices()
-        
-        # 지원하는 코인들만 표시 (USDT, BNB, TRX, LTC)
-        supported_coins = ['USDT', 'BNB', 'TRX', 'LTC']
-        balance_text = ""
-        total_krw_value = 0
-        
-        for coin_symbol in supported_coins:
-            balance = all_balances.get(coin_symbol, 0)
-            if balance > 0:
-                price = all_prices.get(coin_symbol, 0)
-                krw_value = balance * price * current_rate
-                total_krw_value += krw_value
-                balance_text += f"**```🛒 {krw_value:,.0f}원```**\n"
-        
-        # 김치프리미엄 조회
-        kimchi_premium = coin.get_kimchi_premium()
-        embed = disnake.Embed(color=0xffffff)
-        try:
-            embed.set_thumbnail(url=EMBED_ICON_URL)
-        except Exception:
+        if amount < min_amount:
+            return {'success': False, 'error': f'최소 송금 금액 미달: ₩{min_krw:,} (약 {min_amount:.6f} {coin.upper()}) 필요'}
+    
+    # 네트워크 매핑 (MEXC API 기준)
+    network_mapping = {
+        'bep20': 'BSC',      # BSC 네트워크 (BEP20)
+        'trc20': 'TRX',      # TRON 네트워크 (TRC20)
+        'ltc': 'LTC',        # Litecoin 네트워크
+        'bnb': 'BSC'         # BSC 네트워크 (BNB)
+    }
+    
+    # 코인별 주소 형식 검증 (skip_address_check가 True면 건너뛰기)
+    if not skip_address_check:
+        if coin.upper() == 'LTC':
+            # LTC 주소 검증 제거 (MEXC에서 자체 검증)
             pass
-        embed.add_field(name="**실시간 재고**", value=balance_text if balance_text else "**```🛒 0원```**", inline=True)
-        embed.add_field(name="**실시간 김프**", value=f"**```📈 {kimchi_premium:.2f}%```**", inline=True)
-        embed.add_field(name=f"__2분__마다 실시간으로 재고, 김프가 갱신됩니다", value="**――――――――――――――――――――**", inline=False)
-        embed.set_footer(text="Tip : 내역 조회는 정보 조회 버튼을 눌러 확인 가능합니다")
-
-        view = CoinView()
-        embed_message = await inter.channel.send(embed=embed, view=view)
-
-        admin_embed = disnake.Embed(color=0xffffff)
-        admin_embed.add_field(name="대행 전송", value=f"**{inter.author.display_name}** 대행임베드를 사용함", inline=False)
-        await inter.edit_original_response(embed=admin_embed)
-    except Exception as e:
-        logger.error(f"대행임베드 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        try:
-            await inter.edit_original_response(embed=embed)
-        except:
-            pass
-
-@bot.event
-async def on_button_click(interaction):
-    try:
-        # 이미 응답된 상호작용인지 확인
-        if interaction.response.is_done():
-            logger.warning(f"이미 응답된 상호작용: {interaction.component.custom_id}")
-            return
-            
-        # 각 분기에서 필요한 경우에만 defer 호출
-        cid = interaction.component.custom_id
         
-        if interaction.component.custom_id == "start_verify":
-            # 이미 인증된 사용자면 안내만 하고 종료
+        elif coin.upper() == 'USDT':
+            # USDT 주소 검증 제거 (MEXC에서 자체 검증)
+            pass
+        
+        elif coin.upper() == 'TRX':
+            # TRX 주소 검증 제거 (MEXC에서 자체 검증)
+            pass
+        
+        elif coin.upper() == 'BNB':
+            # BNB 주소 검증 제거 (MEXC에서 자체 검증)
+            pass
+    
+    network_code = network_mapping.get(network.lower())
+    if not network_code:
+        return {'success': False, 'error': f'지원하지 않는 네트워크: {network}'}
+    
+    # 디버깅을 위한 로그 (실제 운영 시에는 제거)
+    print(f"Debug: Coin={coin}, Network={network}, NetworkCode={network_code}, Address={address}")
+    
+    try:
+        endpoint = "/api/v3/capital/withdraw"
+        timestamp = int(time.time() * 1000)
+        
+        params = {
+            'coin': coin.upper(),
+            'address': str(address).strip(),
+            'amount': str(amount),
+            'netWork': network_code,
+            'recvWindow': 60000,
+            'timestamp': timestamp
+        }
+        
+        signature = sign_params(params, SECRET_KEY)
+        if not signature:
+            return {'success': False, 'error': 'API 서명 생성 실패'}
+            
+        params['signature'] = signature
+        
+        headers = {
+            'X-MEXC-APIKEY': API_KEY
+        }
+        
+        response = requests.post(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=30)
+        
+        if response.status_code == 200:
             try:
-                verified = coin.get_verified_user(interaction.author.id)
-            except Exception:
-                verified = None
-            if verified:
-                if not interaction.response.is_done():
-                    await interaction.response.defer(ephemeral=True)
-                done_embed = disnake.Embed(
-                    title="이미 본인인증이 완료되었습니다.",
-                    description="**다시 인증하실 필요가 없습니다.**",
-                    color=0xffffff
-                )
-                await interaction.edit_original_response(embed=done_embed)
-                return
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-            embed = disnake.Embed(
-                title="현재 이용중이신 통신사를 선택해주세요.",
-                description="**(<:emoji_10:1440665866130952254>) = LG U+\n(<:emoji_11:1440665898510844014>) = SKT\n(<:emoji_12:1440665931343728661>) = KT\n(<:emoji_13:1440665958971609129>) = 알뜰폰**",
-                color=0xffffff
-            )
-
-            custom_emoji1 = PartialEmoji(name="emoji_10", id=1440665866130952254)
-            custom_emoji2 = PartialEmoji(name="emoji_11", id=1440665898510844014)
-            custom_emoji3 = PartialEmoji(name="emoji_12", id=1440665931343728661)
-            custom_emoji4 = PartialEmoji(name="emoji_13", id=1440665958971609129)
-
-            components = [
-                disnake.ui.Button(style=disnake.ButtonStyle.gray, custom_id="SKT", emoji=custom_emoji2),
-                disnake.ui.Button(style=disnake.ButtonStyle.gray, custom_id="KT", emoji=custom_emoji3),
-                disnake.ui.Button(style=disnake.ButtonStyle.gray, custom_id="LG", emoji=custom_emoji1),
-                disnake.ui.Button(style=disnake.ButtonStyle.gray, custom_id="MVNO", emoji=custom_emoji4)
-            ]
-            
-            view = disnake.ui.View()
-            for component in components:
-                view.add_item(component)
-            
-            await interaction.edit_original_response(embed=embed, view=view)
-            
-        elif interaction.component.custom_id in ["SKT", "KT", "LG", "MVNO"]:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-            if interaction.component.custom_id == "SKT":
-                telecom = "SK"
-            elif interaction.component.custom_id == "KT":
-                telecom = "KT"
-            elif interaction.component.custom_id == "LG":
-                telecom = "LG"
-            else:
-                embed = disnake.Embed(
-                    title="알뜰폰 통신사를 선택해주세요.",
-                    description="**(<:emoji_10:1440665866130952254>) = LG U+\n(<:emoji_11:1440665898510844014>) = SKT\n(<:emoji_12:1440665931343728661>) = KT**",
-                    color=0xffffff
-                )
+                data = response.json()
                 
-                components = [
-                    disnake.ui.Button(style=disnake.ButtonStyle.gray, custom_id="SKM", emoji=custom_emoji2),
-                    disnake.ui.Button(style=disnake.ButtonStyle.gray, custom_id="KTM", emoji=custom_emoji3),
-                    disnake.ui.Button(style=disnake.ButtonStyle.gray, custom_id="LGM", emoji=custom_emoji1)
-                ]
-                
-                view = disnake.ui.View()
-                for component in components:
-                    view.add_item(component)
-                
-                await interaction.edit_original_response(embed=embed, view=view)
-                return
-            
-            user_sessions[interaction.author.id] = {"telecom": telecom}
-            await start_captcha(interaction, telecom)
-            
-        elif interaction.component.custom_id in ["SKM", "KTM", "LGM"]:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-            if interaction.component.custom_id == "SKM":
-                telecom = "SM"
-            elif interaction.component.custom_id == "KTM":
-                telecom = "KM"
-            elif interaction.component.custom_id == "LGM":
-                telecom = "LM"
-            
-            user_sessions[interaction.author.id] = {"telecom": telecom}
-            await start_captcha(interaction, telecom)
-            
-        elif interaction.component.custom_id == "본인인증":
-            # 이미 인증 완료되었는지 재확인
-            try:
-                verified = coin.get_verified_user(interaction.author.id)
-            except Exception:
-                verified = None
-            if verified:
-                if not interaction.response.is_done():
-                    await interaction.response.defer(ephemeral=True)
-                done_embed = disnake.Embed(
-                    title="이미 본인인증이 완료되었습니다",
-                    color=0xffffff
-                )
-                await interaction.edit_original_response(embed=done_embed)
-                return
-            serial_code = random.randint(100000, 999999)
-            # defer를 취소하고 모달을 직접 보냄
-            await interaction.response.send_modal(InfoModal(serial_code))
-            
-        elif interaction.component.custom_id == "입력하기":
-            # 세션 확인
-            if interaction.author.id not in user_sessions:
-                if not interaction.response.is_done():
-                    await interaction.response.defer(ephemeral=True)
-                warn = disnake.Embed(title="세션이 없습니다", description="**처음부터 다시 시도해주세요.**", color=0xffffff)
-                await interaction.edit_original_response(embed=warn)
-                return
-            serial_code = random.randint(100000, 999999)
-            # defer를 취소하고 모달을 직접 보냄
-            await interaction.response.send_modal(VerifyCodeModal(serial_code))
-            
-        elif interaction.component.custom_id == "다시입력":
-            # 세션 확인
-            if interaction.author.id not in user_sessions:
-                if not interaction.response.is_done():
-                    await interaction.response.defer(ephemeral=True)
-                warn = disnake.Embed(title="세션이 없습니다", description="**처음부터 다시 시도해주세요.**", color=0xffffff)
-                await interaction.edit_original_response(embed=warn)
-                return
-            serial_code = random.randint(100000, 999999)
-            # defer를 취소하고 모달을 직접 보냄
-            await interaction.response.send_modal(VerifyCodeModal(serial_code))
-            
-        elif interaction.component.custom_id == "송금하기":
-            await coin.handle_send_button(interaction)
-            
-        elif interaction.component.custom_id == "view_history":
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-            try:
-                transactions = get_transaction_history(interaction.author.id, 100)
-                if not transactions:
-                    embed = disnake.Embed(
-                        title="거래내역",
-                        description="**거래내역이 없습니다.**",
-                        color=0xffffff
-                    )
-                    await interaction.edit_original_response(embed=embed)
-                    return
-                embed = disnake.Embed(
-                    title=f"{interaction.author.display_name}님의 전체 거래내역",
-                    color=0xffffff
-                )
-                for i, tx in enumerate(transactions, 1):
-                    status_emoji = "✅" if tx.get('type') == "송금" else "💰"
-                    time_str = tx.get('timestamp', '')
-                    addr = str(tx.get('address',''))
-                    addr_disp = f"`{addr[:10]}...{addr[-6:]}`" if addr else "-"
-                    txid_line = f"TXID: `{str(tx.get('txid',''))}`\n" if tx.get('txid') else ""
-                    api_txid_line = f"API TXID: `{str(tx.get('api_txid',''))}`" if tx.get('api_txid') else ""
-                    value = (
-                        f"{status_emoji} **{tx.get('type','')}**\n"
-                        f"금액 : ₩{tx.get('amount',0):,}\n"
-                        f"코인 : {tx.get('coin_type','')}\n"
-                        f"주소 : {addr_disp}\n"
-                        f"수수료 : ₩{tx.get('fee',0):,}\n"
-                        f"시간 : {time_str}\n"
-                        f"{txid_line}{api_txid_line}"
-                    )
-                    embed.add_field(name=f"{i}번 거래", value=value, inline=False)
-                view = disnake.ui.View()
-                txid_btn = disnake.ui.Button(
-                    label="TXID 조회",
-                    style=disnake.ButtonStyle.gray,
-                    custom_id="view_txid"
-                )
-                view.add_item(txid_btn)
-                await interaction.edit_original_response(embed=embed, view=view)
-            except Exception as e:
-                logger.error(f"거래내역 조회 오류: {e}")
-                embed = disnake.Embed(
-                    title="오류",
-                    description="**거래내역 조회 중 오류가 발생했습니다.**",
-                    color=0xff6200
-                )
-                try:
-                    await interaction.edit_original_response(embed=embed)
-                except Exception:
-                    pass
-
-        elif interaction.component.custom_id == "view_txid":
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-            try:
-                transactions = get_transaction_history(interaction.author.id, 100)
-                if not transactions:
-                    embed = disnake.Embed(
-                        title="TXID 조회",
-                        description="**거래내역이 없습니다.**",
-                        color=0xffffff
-                    )
-                    await interaction.edit_original_response(embed=embed)
-                    return
-                embed = disnake.Embed(
-                    title="TXID 전체 조회",
-                    description="**거래 TXID와 API TXID를 모두 확인하세요**",
-                    color=0xffffff
-                )
-                txid_text = ""
-                for i, tx in enumerate(transactions, 1):
-                    if tx.get('txid') or tx.get('api_txid'):
-                        time_str = tx.get('timestamp', '')
-                        txid_text += f"**{i}.** {tx.get('type','')} - ₩{tx.get('amount',0):,}\n"
-                        txid_text += f"{tx.get('coin_type','')} | {time_str}\n"
-                        if tx.get('txid'):
-                            txid_text += f"TXID: `{tx.get('txid','')}`\n"
-                        if tx.get('api_txid'):
-                            txid_text += f"API TXID: `{tx.get('api_txid','')}`\n"
-                        txid_text += "\n"
-                if txid_text:
+                if data.get('id'):
+                    txid = str(data.get('id', ''))
+                    share_link = get_txid_link(txid, coin.upper())
                     
-                    embed.add_field(
-                        name="TXID 목록",
-                        value=txid_text,
-                        inline=False
-                    )
+                    # 송금 수수료 계산
+                    transaction_fee = get_transaction_fee(coin.upper(), network_code)
+                    
+                    # 사용자 잔액에서 송금 수수료 차감
+                    try:
+                        import bot
+                        krw_rate = get_exchange_rate()
+                        coin_price = get_coin_price(coin.upper())
+                        fee_krw = transaction_fee * coin_price * krw_rate
+                        bot.subtract_balance(None, int(fee_krw))  # user_id는 None으로 전달 (전역 차감)
+                    except Exception as e:
+                        print(f"송금 수수료 차감 실패: {e}")
+                    
+                    result = {
+                        'success': True,
+                        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'txid': txid,
+                        'network': network_code,
+                        'fee': f"{transaction_fee} {coin.upper()}",
+                        'to_address': str(address).strip(),
+                        'share_link': share_link,
+                        'coin': coin.upper()
+                    }
+                    
+                    return result
                 else:
-                    embed.add_field(
-                        name="TXID 목록",
-                        value="TXID가 있는 거래가 없습니다.",
-                        inline=False
-                    )
-                await interaction.edit_original_response(embed=embed)
-            except Exception as e:
-                logger.error(f"TXID 조회 오류: {e}")
+                    error_msg = data.get('msg', '알 수 없는 오류')
+                    return {'success': False, 'error': f'거래소 오류: {error_msg}'}
+            except (ValueError, KeyError):
+                return {'success': False, 'error': '응답 데이터 파싱 오류'}
+        else:
+            # 상세 오류 메시지 구성 (HTTP 상태, 거래소 msg, raw 응답 일부, 요청 요약)
+            status = response.status_code
+            error_msg = None
+            try:
+                error_data = response.json()
+                error_msg = error_data.get('msg') or error_data.get('message')
+            except Exception:
+                pass
+            raw_snippet = ''
+            try:
+                raw_text = response.text
+                raw_snippet = raw_text[:300]
+            except Exception:
+                raw_snippet = ''
+            req_summary = f"coin={params.get('coin')} net={params.get('netWork')} amt={params.get('amount')}"
+            composed = f"HTTP {status} | {error_msg or '거래소 응답 오류'} | {req_summary}"
+            if raw_snippet:
+                composed += f" | raw={raw_snippet}"
+            return {'success': False, 'error': composed}
+        
+    except requests.exceptions.RequestException as e:
+        return {'success': False, 'error': f'네트워크 오류: {str(e)}'}
+    except Exception as e:
+        return {'success': False, 'error': f'예상치 못한 오류: {str(e)}'}
+
+class AmountModal(disnake.ui.Modal):
+    def __init__(self, network, coin='usdt'):
+        self.network = network
+        self.coin = coin
+        
+        # 실시간 최소송금 금액 조회
+        min_amounts_krw = get_minimum_amounts_krw()
+        min_krw = min_amounts_krw.get(coin.upper(), 10000)
+        
+        # 코인별 단위 정보
+        coin_info = {
+            'usdt': {'unit': 'USDT'},
+            'trx': {'unit': 'TRX'},
+            'ltc': {'unit': 'LTC'},
+            'bnb': {'unit': 'BNB'}
+        }
+        
+        info = coin_info.get(coin.lower(), coin_info['usdt'])
+        
+        components = [
+            disnake.ui.TextInput(
+                label="금액",
+                placeholder=f"금액을 입력해주세요 (최소 {min_krw:,}원)",
+                custom_id="amount",
+                style=disnake.TextInputStyle.short,
+                min_length=1,
+                max_length=15,
+            ),
+            disnake.ui.TextInput(
+                label="코인 주소",
+                placeholder="송금 받으실 지갑 주소를 입력해주세요",
+                custom_id="address",
+                style=disnake.TextInputStyle.short,
+                min_length=10,
+                max_length=100,
+            )
+        ]
+        super().__init__(
+            title=f"{info['unit']} 송금 정보",
+            custom_id=f"amount_modal_{network}_{coin}",
+            components=components,
+        )
+
+class ChargeModal(disnake.ui.Modal):
+    def __init__(self):
+        components = [
+            disnake.ui.TextInput(
+                label="충전 금액",
+                placeholder="충전하실 금액을 적어주세요. ( 최소 500원 )",
+                custom_id="charge_amount",
+                style=disnake.TextInputStyle.short,
+                min_length=1,
+                max_length=15,
+            )
+        ]
+        super().__init__(
+            title="충전 금액 입력",
+            custom_id="charge_modal",
+            components=components,
+        )
+
+custom_emoji11 = PartialEmoji(name="47311ltc", id=1438899347453509824)
+custom_emoji12 = PartialEmoji(name="6798bnb", id=1438899349110390834)
+custom_emoji13 = PartialEmoji(name="tron", id=1438899350582591701)
+custom_emoji14 = PartialEmoji(name="7541tetherusdt", id=1439510997730721863)
+
+class CoinDropdown(disnake.ui.Select):
+    def __init__(self):
+        options = [
+            disnake.SelectOption(label="USDT", description="테더코인 선택", value="usdt", emoji=custom_emoji14),
+            disnake.SelectOption(label="TRX", description="트론 선택", value="trx", emoji=custom_emoji13),
+            disnake.SelectOption(label="LTC", description="라이트코인 선택", value="ltc", emoji=custom_emoji11),
+            disnake.SelectOption(label="BNB", description="바이낸스코인 선택", value="bnb", emoji=custom_emoji12)
+        ]
+        super().__init__(placeholder="송금할 코인을 선택해주세요", options=options)
+
+    async def callback(self, interaction):
+        try:
+            # Avoid timeout by deferring first
+            await interaction.response.defer(ephemeral=True)
+            user_data = get_verified_user(interaction.author.id)
+            if not user_data:
                 embed = disnake.Embed(
-                    title="오류",
-                    description="**TXID 조회 중 오류가 발생했습니다.**",
+                    title="**오류**",
+                    description="**인증되지 않은 고객님입니다.**",
                     color=0xff6200
                 )
+                await interaction.edit_original_response(embed=embed)
+                return
+                
+            # 최소송금 금액 안내
+            selected_coin = self.values[0]
+            
+            # 실시간 최소 송금 금액 조회
+            min_amounts_krw = get_minimum_amounts_krw()
+            min_krw = min_amounts_krw.get(selected_coin.upper(), 10000)
+            min_amount = f"{min_krw:,}"
+                
+            embed = disnake.Embed(
+                title=f"**{selected_coin.upper()} 송금**",
+                description=f"**최소 송금 금액 = {min_amount}원**",
+                color=0xffffff
+            )
+            view = disnake.ui.View()
+            view.add_item(NetworkDropdown(selected_coin))
+            await interaction.edit_original_response(embed=embed, view=view)
+        except Exception:
+            embed = disnake.Embed(
+                title="**오류**",
+                description="**처리 중 오류가 발생했습니다.**",
+                color=0xff6200
+            )
+            try:
+                await interaction.edit_original_response(embed=embed)
+            except:
+                pass
+
+class NetworkDropdown(disnake.ui.Select):
+    def __init__(self, selected_coin):
+        self.selected_coin = selected_coin
+        
+        # 코인별 지원 네트워크
+        network_options = {
+            'usdt': [
+                disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20"),
+                disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20")
+            ],
+            'trx': [
+                disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20")
+            ],
+            'ltc': [
+                disnake.SelectOption(label="LTC", description="Litecoin Network", value="ltc")
+            ],
+            'bnb': [
+            disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20")
+        ]
+        }
+        
+        options = network_options.get(selected_coin.lower(), [
+            disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20")
+        ])
+        
+        super().__init__(placeholder="네트워크를 선택해주세요", options=options)
+
+    async def callback(self, interaction):
+        try:
+            await interaction.response.send_modal(AmountModal(self.values[0], self.selected_coin))
+        except Exception as e:
+            try:
+                embed = disnake.Embed(
+                    title="**오류**",
+                    description="**처리 중 오류가 발생했습니다.**",
+                    color=0x26272f
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            except Exception:
                 try:
                     await interaction.edit_original_response(embed=embed)
                 except Exception:
                     pass
 
-    except Exception as e:
-        logger.error(f"버튼 클릭 오류: {e}")
-        embed = disnake.Embed(
-            title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
-            color=0xff6200
-        )
-        try:
-            if interaction.response.is_done():
-                await interaction.edit_original_response(embed=embed)
-            else:
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-        except Exception:
-            pass
+pending_transactions = {}
 
-async def start_captcha(interaction, telecom):
+async def handle_amount_modal(interaction):
     try:
+        # 응답 지연 (3초 제한 해결)
+        await interaction.response.defer(ephemeral=True)
+        
+        amount_str = interaction.text_values.get("amount", "").strip()
+        address = interaction.text_values.get("address", "").strip()
+        
+        if not amount_str or not address:
+            embed = disnake.Embed(
+                title="**오류**",
+                description="**모든 필드를 입력해주세요.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        try:
+            krw_amount = float(amount_str)
+            if krw_amount <= 0:
+                raise ValueError("양수여야 합니다")
+        except (ValueError, TypeError):
+            embed = disnake.Embed(
+                title="**오류**",
+                description="**올바른 숫자를 입력해주세요.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # 커스텀 ID에서 코인과 네트워크 정보 추출
+        custom_id_parts = interaction.custom_id.split('_')
+        network = custom_id_parts[-2] if len(custom_id_parts) >= 3 else "bep20"
+        coin = custom_id_parts[-1] if len(custom_id_parts) >= 4 else "usdt"
+        
+        # 통일된 최소 송금 금액 조회
+        min_amounts_krw = get_minimum_amounts_krw()
+        min_amount_krw = min_amounts_krw.get(coin.upper(), 10000)
+        coin_unit = coin.upper()
+        
+        # 원화 금액을 코인 단위로 변환 (통일된 함수 사용)
+        amount = krw_to_coin_amount(krw_amount, coin.upper())
+        
+        # 환율 및 김치프리미엄 조회
+        krw_rate = get_exchange_rate()
+        coin_price = get_coin_price(coin.upper())
+        kimchi_premium = get_kimchi_premium()
+        actual_krw_rate = krw_rate * (1 + kimchi_premium / 100)
+        
+        if krw_amount < min_amount_krw:
+            embed = disnake.Embed(
+                title="**오류**",
+                description=f"**출금 최소 금액은 {min_amount_krw:,}원입니다.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        user_data = get_verified_user(interaction.author.id)
+        if not user_data:
+            embed = disnake.Embed(
+                title="**오류**",
+                description="**인증되지 않은 고객님 입니다.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # 코인 가격 조회
+        coin_price = get_coin_price(coin.upper())
+        if coin_price <= 0:
+            embed = disnake.Embed(
+                title="**오류**",
+                description="**코인 가격을 조회할 수 없습니다.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # 수수료 계산 (2.5% + 김치프리미엄% + 거래소 송금 수수료)
+        fee_rate = 0.025 + (kimchi_premium / 100)  # 2.5% + 김치프리미엄%
+        
+        # 거래소 송금 수수료 (원화)
+        transaction_fee = get_transaction_fee(coin.upper(), network.upper())
+        exchange_fee_krw = transaction_fee * coin_price * actual_krw_rate
+        
+        # 사용자 입력 금액을 원화로 변환
+        user_input_krw = amount * coin_price * actual_krw_rate
+        
+        # 수수료 계산 (입력 금액의 2.5% + 김치프리미엄% + 거래소 송금 수수료)
+        service_fee_krw = user_input_krw * fee_rate
+        total_fee_krw = service_fee_krw + exchange_fee_krw
+        
+        # 실제 송금할 금액 (입력 금액 - 총 수수료)
+        actual_send_krw = user_input_krw - total_fee_krw
+        
+        # 실제 송금할 코인 양 계산
+        actual_send_amount = actual_send_krw / (coin_price * actual_krw_rate)
+        
+        # 차감할 총 금액 (사용자 입력 금액)
+        krw_amount = int(user_input_krw)
+        
+        current_balance = user_data[6] if len(user_data) > 6 else 0
+        
+        if current_balance < krw_amount:
+            embed = disnake.Embed(
+                title="**잔액 부족**",
+                description=f"**보유 금액 = {current_balance:,}원\n필요금액: {krw_amount:,}원**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        network_name = network.upper()
+        
+        pending_transactions[interaction.author.id] = {
+            'send_amount': actual_send_amount,  # 실제 송금할 코인 양
+            'total_amount': user_input_krw,     # 사용자 입력 금액
+            'krw_amount': krw_amount,           # 차감할 총 금액
+            'network': network_name,
+            'address': address,
+            'krw_rate': krw_rate,
+            'actual_krw_rate': actual_krw_rate,
+            'kimchi_premium': kimchi_premium,
+            'coin': coin.upper(),
+            'coin_price': coin_price,
+            'service_fee_krw': service_fee_krw, # 서비스 수수료 (원화)
+            'exchange_fee_krw': exchange_fee_krw, # 거래소 수수료 (원화)
+            'total_fee_krw': total_fee_krw,     # 총 수수료 (원화)
+            'actual_send_krw': actual_send_krw, # 실제 송금 금액 (원화)
+            'fee_rate': fee_rate                # 수수료율 (2.5% + 김치프리미엄%)
+        }
+        
         embed = disnake.Embed(
-            title=f"{interaction.author.name}",
-            description="**보안코드를 요청하는중입니다.\n너무 오래걸릴시 다시 시도해주세요.**",
             color=0xffffff
         )
-        embed.set_thumbnail(interaction.author.display_avatar)
         
-        await interaction.edit_original_response(embed=embed)
-        
-        data = make_passapi(telecom)
-        image = Image.open(BytesIO(data["image"]))
-        image.save(f"captcha/captcha-{interaction.author.id}.png")
-        
-        user_sessions[interaction.author.id].update({
-            "data": data,
-            "telecom": telecom
-        })
-        
-        new_embed = disnake.Embed(
-            title=f"{interaction.author.name}",
-            description="**휴대폰 본인확인 문자 ( SMS )\n본인 정보를 2분내에 입력해 주세요**",
-            color=0xffffff
+        # 송금 금액 정보 (김치프리미엄 적용)
+        embed.add_field(
+            name="**실제 송금 금액**",
+            value=f"```{actual_send_amount:.6f} {coin_unit}\n{int(actual_send_krw):,}원```",
+            inline=True
         )
-        new_embed.set_thumbnail(interaction.author.display_avatar)
-        new_embed.set_footer(text="아래 \"본인인증\" 버튼을 눌러 인증을 진행해주세요")
+        embed.add_field(
+            name="**종합 수수료**",
+            value=f"```서비스 = {int(service_fee_krw):,}원\n거래소 = {int(exchange_fee_krw):,}원\n총합 = {int(total_fee_krw):,}원```",
+            inline=True
+        ) 
+        embed.add_field(
+            name="**네트워크**",
+            value=f"```{network_name}```",
+            inline=True
+        )
+        embed.add_field(
+            name="**코인 주소**",
+            value=f"```{address}```",
+            inline=False
+        )
         
-        with open(f"captcha/captcha-{interaction.author.id}.png", "rb") as file:
-            image_file = disnake.File(file)
-        
-        button = disnake.ui.Button(
-            label="본인인증",
+        custom_emoji1 = PartialEmoji(name="send", id=1439222645035106436)
+
+        send_btn = disnake.ui.Button(
+            label="송금하기",
             style=disnake.ButtonStyle.gray,
-            custom_id="본인인증"
+            custom_id="송금하기",
+            emoji=custom_emoji1
         )
         
         view = disnake.ui.View()
-        view.add_item(button)
+        view.add_item(send_btn)
         
-        await interaction.edit_original_message(embed=new_embed, file=image_file, view=view)
+        # 최초 defer 후에는 원본 응답 수정으로 전송
+        await interaction.edit_original_response(embed=embed, view=view)
         
-    except Exception as e:
-        logger.error(f"캡챠 오류: {e}")
-        try:
+    except Exception:
+        embed = disnake.Embed(
+            title="**오류**",
+            description="**처리 중 오류가 발생했습니다.**",
+            color=0xff6200
+        )
+        await interaction.edit_original_response(embed=embed)
+
+async def handle_send_button(interaction):
+    try:
+        # 응답 지연 (3초 제한 해결)
+        await interaction.response.defer(ephemeral=True)
+        
+        user_data = get_verified_user(interaction.author.id)
+        if not user_data:
             embed = disnake.Embed(
                 title="**오류**",
-                description="**오류가 발생했습니다. 다시 시도해주세요.**",
+                description="**인증되지 않은 고객님 입니다.**",
                 color=0xff6200
             )
-            await interaction.edit_original_message(embed=embed)
-        except:
-            pass
-
-@bot.event
-async def on_modal_submit(interaction):
-    try:
-        if interaction.custom_id == "charge_modal":
-            # 충전 모달 처리
-            try:
-                # 응답 지연 (3초 제한 해결)
-                await interaction.response.defer(ephemeral=True)
-                
-                charge_amount = int(interaction.text_values["charge_amount"].replace(",", "").replace("원", "").replace("₩", ""))
-                
-                if charge_amount < 500:
-                    embed = disnake.Embed(
-                        title="**충전 오류**",
-                        description="**최소 충전 금액은 500원입니다.**",
-                        color=0xff6200
-                    )
-                    await interaction.edit_original_response(embed=embed)
-                    return
-                
-                embed = disnake.Embed(
-                    color=0xffffff
-                )
-                embed.add_field(
-                    name="**입금 계좌**",
-                    value=f"```{DEPOSIT_BANK_NAME} = {DEPOSIT_ACCOUNT_NO}\n예금주 = {DEPOSIT_ACCOUNT_HOLDER}```",
-                    inline=False
-                )
-                embed.add_field(
-                    name="**입금 금액**",
-                    value=f"```{charge_amount:,}원```",
-                    inline=False
-                )
-                embed.set_footer(text="입금 후 3분 이내로 보내주셔야 자충됩니다.")
-                
-                # 최초 defer 후에는 원본 응답을 수정
-                await interaction.edit_original_response(embed=embed)
-
-                # 채널 전송은 DM 영수증 접수 후 진행되며, 여기서는 대기 상태만 기록
-                pending_charge_requests[interaction.author.id] = charge_amount
-                try:
-                    dm_embed = disnake.Embed(
-                        description=(
-                            f"**신청 금액 = {charge_amount:,}원**\n\n"
-                            "**DM으로 입금 내역 이체 스샷을 보내주세요**\n"
-                            "**개인정보(계좌번호 일부)는 가려도 됩니다**"
-                        ),
-                        color=0xffffff
-                    )
-                    await interaction.author.send(embed=dm_embed)
-                except Exception as e:
-                    logger.error(f"충전 DM 안내 전송 실패: {e}")
-            except ValueError:
-                embed = disnake.Embed(
-                    title="**오류**",
-                    description="**올바른 금액을 입력해주세요.**",
-                    color=0xff6200
-                )
-                await interaction.edit_original_response(embed=embed)
+            await interaction.edit_original_response(embed=embed)
             return
         
-        if interaction.custom_id.startswith("info_modal_"):
-            user_data = user_sessions.get(interaction.author.id)
-            if not user_data:
-                await interaction.response.defer(ephemeral=True)
-                embed = disnake.Embed(
-                    title="**오류**",
-                    description="**세션이 만료되었습니다. 다시 시도해주세요.**",
-                    color=0xff6200
-                )
-                await interaction.edit_original_response(embed=embed)
-                return
-            
-            name = interaction.text_values["name"]
-            birth_1 = interaction.text_values["birth"][:-1]
-            birth_2 = interaction.text_values["birth"][-1]
-            phone = interaction.text_values["phone"]
-            captcha = interaction.text_values["captcha"]
-            
-            await interaction.response.defer(ephemeral=True)
+        transaction_data = pending_transactions.get(interaction.author.id)
+        if not transaction_data:
             embed = disnake.Embed(
-                title=f"{interaction.author.name}",
-                description="**휴대폰 본인확인 문자 ( SMS )\n고객 정보를 확인중입니다.**",
+                title="**오류**",
+                description="**송금 정보를 찾을 수 없습니다. 다시 시도해주세요.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        send_amount = transaction_data.get('send_amount', 0)
+        total_krw_amount = transaction_data.get('krw_amount', 0)
+        network = transaction_data.get('network', 'BEP20').lower()
+        address = transaction_data.get('address', '')
+        
+        if send_amount <= 0 or total_krw_amount <= 0 or not address:
+            embed = disnake.Embed(
+                title="**오류**",
+                description="**유효하지 않은 거래 정보입니다.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        processing_embed = disnake.Embed(
+            title="**송금 처리중**",
+            description="**조금만 기다려주세요.**",
+            color=0xffffff
+        )
+        await interaction.edit_original_response(embed=processing_embed)
+        
+        if not subtract_balance(interaction.author.id, total_krw_amount):
+            embed = disnake.Embed(
+                title="**잔액 부족**",
+                description="**잔액이 부족합니다.**",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # 수수료 차감 처리
+        fee_krw = transaction_data.get('fee_krw', 0)
+        if fee_krw > 0:
+            add_transaction_history(interaction.author.id, int(fee_krw), "수수료")
+        
+        add_transaction_history(interaction.author.id, total_krw_amount, "송금")
+        
+        coin = transaction_data.get('coin', 'USDT')
+        # 직접 송금 (자동 스왑 없음)
+        transaction_result = simple_send_coin(coin, send_amount, address, network)
+        
+        if transaction_result and transaction_result.get('success', True):
+            coin_name = transaction_result.get('coin', 'USDT')
+            actual_send_krw = transaction_data.get('actual_send_krw', 0)
+            service_fee_krw = transaction_data.get('service_fee_krw', 0)
+            exchange_fee_krw = transaction_data.get('exchange_fee_krw', 0)
+            total_fee_krw = transaction_data.get('total_fee_krw', 0)
+            fee_rate = transaction_data.get('fee_rate', 0.05)
+            
+            success_embed = disnake.Embed(
+                title=f"**{coin_name} 전송 성공**",
                 color=0xffffff
             )
-            embed.set_thumbnail(interaction.author.display_avatar)
+            success_embed.add_field(name="**전송 금액**", value=f"```{int(actual_send_krw):,}원```", inline=True)
+            # 환율 정보를 상세 표기(기본환율, 김프, 실제환율)
+            krw_rate = transaction_data.get('krw_rate', 0)
+            kimchi_premium = transaction_data.get('kimchi_premium', 0)
+            actual_rate = transaction_data.get('actual_krw_rate', 0)
             
-            await interaction.edit_original_response(embed=embed)
+            success_embed.add_field(name="종합 수수료", value=f"```서비스 = {int(service_fee_krw):,}원\n거래소 = {int(exchange_fee_krw):,}원\n총합 = ₩{int(total_fee_krw):,}원```", inline=True)
+            success_embed.add_field(name="네트워크", value=f"```{transaction_result.get('network', 'N/A')}```", inline=False)
+            success_embed.add_field(name="TXID", value=f"```{transaction_result.get('txid', 'N/A')}```", inline=False)
+            success_embed.add_field(name="보낸주소", value=f"```{transaction_result.get('to_address', 'N/A')}```", inline=False)
+            success_embed.add_field(name="보낸시간", value=f"```{transaction_result.get('time', 'N/A')}```", inline=False)
             
+            await interaction.edit_original_response(embed=success_embed)
+            # 전송 상세 로그 채널 전송 및 구매 로그(익명)
             try:
-                data = user_data["data"]
-                telecom = user_data["telecom"]
+                # 모든 송금/충전/명령어 로그는 관리자 로그로
+                from bot import CHANNEL_ADMIN_LOG, CHANNEL_PURCHASE_LOG, bot as _bot
+                admin_ch = _bot.get_channel(CHANNEL_ADMIN_LOG)
+                if admin_ch:
+                    t_embed = disnake.Embed(title="코인 전송 내역", color=0x26272f)
+                    t_embed.add_field(name="이용 유저", value=f"{interaction.author.mention} ({interaction.author.id})", inline=False)
+                    t_embed.add_field(name="총 차감금액", value=f"{total_krw_amount:,}원", inline=True)
+                    t_embed.add_field(name="실제 전송 KRW", value=f"{int(actual_send_krw):,}원", inline=True)
+                    t_embed.add_field(name="서비스 수수료", value=f"{int(service_fee_krw):,}원", inline=True)
+                    t_embed.add_field(name="거래소 수수료", value=f"{int(exchange_fee_krw):,}원", inline=True)
+                    t_embed.add_field(name="TXID", value=transaction_result.get('txid', 'N/A'), inline=False)
+                    t_embed.add_field(name="네트워크", value=transaction_result.get('network', 'N/A'), inline=True)
+                    t_embed.add_field(name="체인 수수료", value=f"{transaction_result.get('fee', 'N/A')}", inline=True)
+                    t_embed.add_field(name="보낸주소", value=f"{transaction_result.get('to_address', 'N/A')}", inline=False)
+                    await admin_ch.send(embed=t_embed)
+
+                # 대행 구매 로그는 요청 포맷으로 구매 채널에 간단 전송
+                purchase_ch = _bot.get_channel(CHANNEL_PURCHASE_LOG)
+                if purchase_ch:
+                    from bot import send_purchase_log
+                    await send_purchase_log(interaction.author.id, transaction_result.get('coin', 'USDT'), int(total_krw_amount))
+            except Exception:
+                pass
+            
+            if interaction.author.id in pending_transactions:
+                del pending_transactions[interaction.author.id]
                 
-                r = send_passapi(
-                    data["session"],
-                    data["service_info"],
-                    data["encodeData"],
-                    name,
-                    telecom,
-                    birth_1,
-                    birth_2,
-                    phone,
-                    captcha
-                )
-                
-                datarrr = json.loads(r)
-                
-                if datarrr["code"] == "RETRY":
-                    error_embed = disnake.Embed(
-                        title=f"{interaction.author.name}",
-                        description=f"**본인 확인 실패\n╰ {datarrr['message']}**",
-                        color=0xff0000
-                    )
-                    error_embed.set_thumbnail(interaction.author.display_avatar)
-                    await interaction.edit_original_response(embed=error_embed)
-                    return
-                    
-                elif datarrr["code"] == "SUCCESS":
-                    user_sessions[interaction.author.id].update({
-                        "name": name,
-                        "birth_1": birth_1,
-                        "birth_2": birth_2,
-                        "phone": phone,
-                        "attempts": 0
-                    })
-                    
-                    success_embed = disnake.Embed(
-                        title="**문자로 온 인증번호 6자리를 입력해주세요**",
-                        description=f"**문자로 인증이 안 올시 다시 인증부탁드립니다\n스팸함에 왔을 수도 있으니 확인부탁드립니다**",
-                        color=0xffffff
-                    )
-                    
-                    button = disnake.ui.Button(
-                        label="입력하기",
-                        style=disnake.ButtonStyle.gray,
-                        custom_id="입력하기"
-                    )
-                    
-                    view = disnake.ui.View()
-                    view.add_item(button)
-                    
-                    await interaction.edit_original_response(embed=success_embed, view=view)
-                    
-            except Exception as e:
-                logger.error(f"정보 모달 처리 오류: {e}")
-                try:
-                    embed = disnake.Embed(
-                        title="**오류**",
-                        description="**오류가 발생했습니다.**",
-                        color=0xff6200
-                    )
-                    await interaction.edit_original_response(embed=embed)
-                except:
-                    pass
-        
-        elif interaction.custom_id.startswith("verify_modal_"):
+        else:
+            # 오류 정보 추출
+            error_message = "알 수 없는 오류"
+            if isinstance(transaction_result, dict) and 'error' in transaction_result:
+                error_message = transaction_result['error']
+            # 요청/계산 요약 만들기 (디버깅용)
+            coin = transaction_data.get('coin', 'USDT')
+            network = transaction_data.get('network', 'N/A')
+            address = transaction_data.get('address', '')
+            send_amount_dbg = transaction_data.get('send_amount', 0)
+            total_krw_amount = transaction_data.get('krw_amount', 0)
+            actual_send_krw = transaction_data.get('actual_send_krw', 0)
+            service_fee_krw = transaction_data.get('service_fee_krw', 0)
+            exchange_fee_krw = transaction_data.get('exchange_fee_krw', 0)
+            
+            # 김치프리미엄 정보 가져오기
+            kimchi_premium = transaction_data.get('kimchi_premium', 0)
+            fee_rate = transaction_data.get('fee_rate', 0.05)
+            
+            conn = None
             try:
-                user_data = user_sessions.get(interaction.author.id)
-                if not user_data:
-                    await interaction.response.defer(ephemeral=True)
-                    embed = disnake.Embed(
-                        title="**오류**",
-                        description="**세션이 만료되었습니다. 다시 시도해주세요.**",
-                        color=0xff6200
-                    )
-                    await interaction.edit_original_response(embed=embed)
-                    return
-                
-                verify_code = interaction.text_values["verify_code"]
-                
-                await interaction.response.defer(ephemeral=True)
-                embed = disnake.Embed(
-                    title="**인증코드 확인중입니다.**",
-                    color=0xff6200
-                )
-                await interaction.edit_original_response(embed=embed)
-                
-                try:
-                    data = user_data["data"]
-                    telecom = user_data["telecom"]
-                    
-                    r = verify_passapi(data["session"], data["service_info"], telecom, verify_code)
-                    
-                    if r["code"] == "SUCCESS":
-                        add_verified_user(
-                            interaction.author.id,
-                            user_data["phone"],
-                            user_data["birth_1"],
-                            user_data["name"],
-                            telecom
-                        )
-                        
-                        success_embed = disnake.Embed(
-                            title=f"**{user_data['name']} 고객님 이제 대행이용 가능하십니다**",
-                            color=0xffffff
-                        )
-                        
-                        await interaction.edit_original_response(embed=success_embed, view=None)
-                        
-                        captcha_path = f"captcha/captcha-{interaction.author.id}.png"
-                        try:
-                            if os.path.exists(captcha_path):
-                                os.remove(captcha_path)
-                        except Exception:
-                            pass
-                        
-                        if interaction.author.id in user_sessions:
-                            del user_sessions[interaction.author.id]
-                        
-                    else:
-                        attempts = user_data.get("attempts", 0) + 1
-                        user_sessions[interaction.author.id]["attempts"] = attempts
-                        
-                        if attempts >= 3:
-                            try:
-                                await interaction.response.send_message("인증 시도가 여러 번 실패했습니다. 처음부터 다시 시도해주세요.", ephemeral=True)
-                            except Exception:
-                                pass
-                            
-                            if interaction.author.id in user_sessions:
-                                del user_sessions[interaction.author.id]
-                        else:
-                            try:
-                                await interaction.response.send_message("인증번호가 올바르지 않습니다. 다시 입력해주세요.", ephemeral=True)
-                            except Exception:
-                                pass
-                            
-                except Exception as e:
-                    logger.error(f"인증코드 처리 오류: {e}")
+                conn = sqlite3.connect('DB/verify_user.db')
+                cursor = conn.cursor()
+                cursor.execute('UPDATE users SET now_amount = now_amount + ? WHERE user_id = ?', 
+                              (total_krw_amount, interaction.author.id))
+                conn.commit()
+            except (sqlite3.Error, OSError):
+                pass
+            except Exception:
+                pass
+            finally:
+                if conn:
                     try:
-                        embed = disnake.Embed(
-                            title="**오류**",
-                            description="**인증 중 오류가 발생했습니다.**",
-                            color=0xff6200
-                        )
-                        await interaction.edit_original_response(embed=embed)
+                        conn.close()
                     except:
                         pass
             
-            except Exception as e:
-                logger.error(f"인증 모달 전체 오류: {e}")
-        
-        elif interaction.custom_id.startswith("amount_modal_"):
-            await coin.handle_amount_modal(interaction)
-    
-    except Exception as e:
-        logger.error(f"모달 처리 전체 오류: {e}")
-
-@tasks.loop(seconds=120)
-async def update_embed_task():
-    global embed_message, current_stock, current_rate, last_update_time, embed_updating, api_update_counter, timer_message, stop_event
-    
-    try:
-        if embed_message is None:
-            return
-        
-        embed_updating = True
-        
-        api_update_counter += 1
-        if api_update_counter >= 1:
-            new_stock = get_stock_amount()
-            new_rate = get_exchange_rate()
+            add_transaction_history(interaction.author.id, total_krw_amount, "환불")
             
-            if new_stock != current_stock or new_rate != current_rate:
-                current_stock = new_stock
-                current_rate = new_rate
-            
-            api_update_counter = 0
-            
-        last_update_time = datetime.now()
-        
-        # 모든 코인 잔액 조회
-        all_balances = coin.get_all_balances()
-        all_prices = coin.get_all_coin_prices()
-        
-        # 지원하는 코인들만 표시 (USDT, BNB, TRX, LTC)
-        supported_coins = ['USDT', 'BNB', 'TRX', 'LTC']
-        balance_text = ""
-        total_krw_value = 0
-        
-        for coin_symbol in supported_coins:
-            balance = all_balances.get(coin_symbol, 0)
-            if balance > 0:
-                price = all_prices.get(coin_symbol, 0)
-                krw_value = balance * price * current_rate
-                total_krw_value += krw_value
-                balance_text += f"**```🛒 {krw_value:,.0f}원```**\n"
-        
-        # 김치프리미엄 조회
-        kimchi_premium = coin.get_kimchi_premium()
-        embed = disnake.Embed(color=0xffffff)
-        try:
-            embed.set_thumbnail(url=EMBED_ICON_URL)
-        except Exception:
-            pass
-        embed.add_field(name="**실시간 재고**", value=balance_text if balance_text else "**```🛒 0원```**", inline=True)
-        embed.add_field(name="**실시간 김프**", value=f"**```📈 {kimchi_premium:.2f}%```**", inline=True)
-        embed.add_field(name=f"**__2분__마다 실시간으로 재고, 김프가 갱신됩니다**", value="**――――――――――――――――――――**", inline=False)
-        embed.set_footer(text="Tip : 내역 조회는 정보 조회 버튼을 눌러 확인 가능합니다")
-
-        view = CoinView()
-        await embed_message.edit(embed=embed, view=view)
-        embed_updating = False
-        
-    except disnake.HTTPException as e:
-        logger.error(f"업데이트 도중 에러: {e}")
-        embed_message = None
-        embed_updating = False
-    except Exception as e:
-        logger.error(f"업데이트 도중 에러: {e}")
-        embed_message = None
-        embed_updating = False
-
-@bot.event
-async def on_ready():
-    logger.info(f'{bot.user}대행봇 준비 완료됨!')
-    activity = disnake.Game(name="(24H) BTCC 2.5% 코인대행 서비스")
-    await bot.change_presence(status=disnake.Status.online, activity=activity)
-
-    global current_stock, current_rate
-    current_stock = get_stock_amount()
-    current_rate = get_exchange_rate()
-    update_embed_task.start()   
-
-@bot.slash_command(name="수동갱신", description="재고 / 김프 재조회 및 임베드 갱신")
-async def manual_refresh(inter):
-    try:
-        if inter.author.id not in ALLOWED_USER_IDS or not check_admin(inter.author.id):
-            await inter.response.send_message("권한이 없습니다.", ephemeral=True)
-            return
-        global current_stock, current_rate
-        current_stock = get_stock_amount()
-        current_rate = get_exchange_rate()
-        # 즉시 한 번 임베드 갱신
-        await inter.response.send_message("임베드를 새로고침했습니다.", ephemeral=True)
-        # 안전하게 현재 임베드를 갱신
-        await update_embed_task_function_once()
-    except Exception as e:
-        logger.error(f"수동 새로고침 오류: {e}")
-        try:
-            await inter.response.send_message("오류", ephemeral=True)
-        except Exception:
-            pass
-
-async def update_embed_task_function_once():
-    global embed_message
-    if embed_message is None:
-        return
-    # 내부 갱신 로직 재사용 위해 1회 실행용으로 update_embed_task 본문 축약
-    try:
-        all_balances = coin.get_all_balances()
-        all_prices = coin.get_all_coin_prices()
-        supported_coins = ['USDT', 'BNB', 'TRX', 'LTC']
-        balance_text = ""
-        total_krw_value = 0
-        for coin_symbol in supported_coins:
-            balance = all_balances.get(coin_symbol, 0)
-            if balance > 0:
-                price = all_prices.get(coin_symbol, 0)
-                krw_value = balance * price * current_rate
-                total_krw_value += krw_value
-                balance_text += f"**```🛒 {krw_value:,.0f}원```**\n"
-        kimchi_premium = coin.get_kimchi_premium()
-        embed = disnake.Embed(color=0xffffff)
-        try:
-            embed.set_thumbnail(url=EMBED_ICON_URL)
-        except Exception:
-            pass
-        embed.add_field(name="**실시간 재고**", value=balance_text if balance_text else "**```🛒 0원```**", inline=True)
-        embed.add_field(name="**실시간 김프**", value=f"**```📈 {kimchi_premium:.2f}%```**", inline=True)
-        embed.add_field(name=f"__수동__으로 재고, 김프가 갱신됩니다", value="**――――――――――――――――――――**", inline=False)
-        embed.set_footer(text="Tip : 내역 조회는 정보 조회 버튼을 눌러 확인 가능합니다")
-        view = CoinView()
-        await embed_message.edit(embed=embed, view=view)
-    except Exception as e:
-        logger.error(f"수동 갱신 내 에러: {e}")
-
-@bot.slash_command(name="대행수수료", description="대행 수수료율 변경")
-async def change_fee(inter, 퍼센트: float):
-    try:
-        if inter.author.id not in ALLOWED_USER_IDS or not check_admin(inter.author.id):
-            await inter.response.send_message("권한이 없습니다.", ephemeral=True)
-            return
-        rate = 퍼센트 / 100.0
-        ok = set_service_fee_rate(rate)
-        if not ok:
-            await inter.response.send_message("허용 범위를 벗어났습니다 (0~50%).", ephemeral=True)
-            return
-        await inter.response.send_message(f"수수료율이 {퍼센트:.2f}%로 변경되었습니다.", ephemeral=True)
-    except Exception as e:
-        logger.error(f"수수료변경 오류: {e}")
-        try:
-            await inter.response.send_message("오류", ephemeral=True)
-        except Exception:
-            pass
-
-@bot.event
-async def on_message(message: disnake.Message):
-    try:
-        # DM으로 온 고객 입금 내역(텍스트/이미지)을 직원 채널로 포워딩
-        if message.guild is None and not message.author.bot:
-            try:
-                forward_ch = bot.get_channel(CHANNEL_CHARGE_LOG)
-                if forward_ch is None:
-                    return
-                embed = disnake.Embed(color=0xffffff)
-                embed.add_field(name="유저", value=f"{message.author} ({message.author.id})", inline=False)
-                if message.content:
-                    embed.add_field(name="메시지", value=message.content[:1000], inline=False)
-                embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                files = []
-                oversized_urls = []
-                for att in message.attachments:
-                    try:
-                        if att.size is None or att.size < 8 * 1024 * 1024:  # 8MB 이하만 재업로드
-                            fp = await att.read()
-                            files.append(disnake.File(BytesIO(fp), filename=att.filename))
-                        else:
-                            oversized_urls.append(att.url)
-                    except Exception:
-                        oversized_urls.append(att.url)
-                if oversized_urls:
-                    # 큰 파일은 URL로 안내
-                    url_list = "\n".join(oversized_urls[:10])
-                    embed.add_field(name="첨부(URL)", value=url_list[:1000], inline=False)
-                await forward_ch.send(embed=embed, files=files if files else None)
-
-                # 사용자에게 접수 알림 DM
-                try:
-                    ack = disnake.Embed(
-                        title="충전 신청 완료",
-                        description="**조금만 기다려주세요.**",
-                        color=0xffffff
-                    )
-                    await message.author.send(embed=ack)
-                except Exception:
-                    pass
-
-                # 충전 신청 대기중인 사용자라면 승인/거절 카드 생성
-                waiting_amount = pending_charge_requests.get(message.author.id)
-                if waiting_amount:
-                    # 현재 잔액 조회
-                    current_balance = 0
-                    try:
-                        conn = sqlite3.connect('DB/verify_user.db')
-                        cursor = conn.cursor()
-                        cursor.execute('SELECT now_amount FROM users WHERE user_id = ?', (message.author.id,))
-                        result = cursor.fetchone()
-                        if result:
-                            current_balance = result[0]
-                        conn.close()
-                    except Exception:
-                        pass
-                    desc = CHARGE_REQUEST_DESCRIPTION.format(
-                        user_mention=message.author.mention,
-                        user_id=message.author.id,
-                        amount=waiting_amount,
-                        balance=current_balance
-                    )
-                    req_embed = disnake.Embed(title=CHARGE_REQUEST_TITLE, description=desc, color=0xffffff)
-
-                    class ChargeDecisionView(disnake.ui.View):
-                        def __init__(self, user_id, amount):
-                            super().__init__(timeout=600)
-                            self.user_id = user_id
-                            self.amount = amount
-                            self.done = False
-                        @disnake.ui.button(label="✅ 승인", style=disnake.ButtonStyle.gray)
-                        async def approve(self, button, inter):
-                            if self.done:
-                                await inter.response.send_message("이미 처리된 요청입니다.", ephemeral=True)
-                                return
-                            add_balance(self.user_id, self.amount)
-                            await inter.response.send_message(f"{self.amount:,}원 충전 승인 완료되었습니다", ephemeral=True)
-                            await inter.message.edit(content="수동충전 완료되었습니다", view=None)
-                            # 사용자 DM 통지
-                            try:
-                                user = await bot.fetch_user(self.user_id)
-                                dm = disnake.Embed(title="충전 승인", description=f"{self.amount:,}원 충전이 승인되었습니다.", color=0xffffff)
-                                await user.send(embed=dm)
-                            except Exception:
-                                pass
-                            await send_charge_log(CHARGE_APPROVE_TITLE, CHARGE_APPROVE_DESCRIPTION.format(
-                                user_mention=f"<@{self.user_id}>",
-                                user_id=self.user_id,
-                                amount=self.amount,
-                                approver=inter.author.display_name
-                            ), 0xffffff)
-                            self.done = True
-                            pending_charge_requests.pop(self.user_id, None)
-
-                        @disnake.ui.button(label="❌ 거절", style=disnake.ButtonStyle.gray)
-                        async def deny(self, button, inter):
-                            if self.done:
-                                await inter.response.send_message("이미 처리된 요청입니다.", ephemeral=True)
-                                await inter.response.send_message("거절 처리되었습니다.", ephemeral=True)
-                                await inter.message.edit(content="[거절됨]", view=None)
-                                return
-                                    # 사용자 DM 통지
-                            try:
-                                user = await bot.fetch_user(self.user_id)
-                                dm = disnake.Embed(title="충전 거절", description=f"{self.amount:,}원 충전이 거절되었습니다.", color=0xffffff)
-                                await user.send(embed=dm)
-                            except Exception:
-                                pass
-                            await send_charge_log(CHARGE_REJECT_TITLE, CHARGE_REJECT_DESCRIPTION.format(
-                                user_mention=f"<@{self.user_id}>",
-                                user_id=self.user_id,
-                                amount=self.amount,
-                            ), 0xff0000)
-
-                    view = ChargeDecisionView(message.author.id, waiting_amount)
-                    # 원본 DM 내용/이미지도 함께 중계
-                    try:
-                        await forward_ch.send(embed=req_embed, view=view, files=files if files else None)
-                    except Exception:
-                        await forward_ch.send(embed=req_embed, view=view)
-            except Exception as e:
-                logger.error(f"DM 포워딩 오류: {e}")
-    except Exception as e:
-        logger.error(f"on_message 오류: {e}")
-    finally:
-        await bot.process_commands(message)
-
-@update_embed_task.before_loop
-async def before_update_embed_task():
-    await bot.wait_until_ready()
-
-async def send_purchase_log(user_id, coin_name, amount):
-    try:
-        channel = bot.get_channel(CHANNEL_PURCHASE_LOG)
-        if channel:
-            embed = disnake.Embed(
-                title="💝 대행로그",
-                description=f"**{user_id} 고객님 {coin_name} {amount:,}원 대행 감사합니다.\n오늘도 좋은하루 되시길 바랍니다.**",
-                color=0xffffff
+            refund_embed = disnake.Embed(
+                title="**전송 실패**",
+                description=f"전송 중 오류가 발생하여 {total_krw_amount:,}원이 환불되었습니다.",
+                color=0xff6200
             )
+            refund_embed.add_field(
+                name="**오류 원인**",
+                value=f"```{error_message}```",
+                inline=False
+            )
+            refund_embed.add_field(
+                name="**요청 요약**",
+                value=f"```코인: {coin}\n네트워크: {network}\n보낼양: {send_amount_dbg:.8f} {coin}\n주소: {address[:6]}...{address[-6:] if len(address)>12 else address}```",
+                inline=False
+            )
+            
+            await interaction.edit_original_response(embed=refund_embed)
+            
+            if interaction.author.id in pending_transactions:
+                del pending_transactions[interaction.author.id]
+            
+            # 실패 로그를 전송 채널에 기록
             try:
-                embed.set_author(name="BTCC 2% 코인대행")
+                from bot import CHANNEL_ADMIN_LOG, bot as _bot
+                admin_ch = _bot.get_channel(CHANNEL_ADMIN_LOG)
+                if admin_ch:
+                    f_embed = disnake.Embed(title="코인 송금 실패", color=0x26272f)
+                    f_embed.add_field(name="고객", value=f"{interaction.author.mention} ({interaction.author.id})", inline=False)
+                    f_embed.add_field(name="환불 금액", value=f"₩{total_krw_amount:,}", inline=True)
+                    f_embed.add_field(name="코인/네트워크", value=f"{coin} / {network}", inline=True)
+                    f_embed.add_field(name="보낼양", value=f"{send_amount_dbg:.8f} {coin}", inline=True)
+                    f_embed.add_field(name="실제 송금 KRW", value=f"₩{int(actual_send_krw):,}", inline=True)
+                    f_embed.add_field(name="수수료(서비스/거래소)", value=f"₩{int(service_fee_krw):,} / ₩{int(exchange_fee_krw):,}", inline=True)
+                    if address:
+                        f_embed.add_field(name="주소", value=address, inline=False)
+                    f_embed.add_field(name="오류", value=f"```{error_message}```", inline=False)
+                    await admin_ch.send(embed=f_embed)
             except Exception:
                 pass
-            try:
-                embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M'))
-            except Exception:
-                pass
-            await channel.send(embed=embed)
-        else:
-            logger.error(f"구매로그 채널({CHANNEL_PURCHASE_LOG})을 찾을 수 없습니다.")
-    except Exception as e:
-        logger.error(f"구매로그 전송 오류: {e}")
+            
+    except Exception:
+        try:
+            embed = disnake.Embed(
+                title="**처리 중 오류 발생**",
+                description="직원에게 문의해주세요.",
+                color=0xff6200
+            )
+            await interaction.edit_original_response(embed=embed)
+        except:
+            pass
 
-async def send_admin_log(title, description, color=0xffffff):
-    try:
-        channel = bot.get_channel(CHANNEL_ADMIN_LOG)
-        if channel:
-            embed = disnake.Embed(title=title, description=description, color=color)
-            embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            await channel.send(embed=embed)
-        else:
-            logger.error(f"관리자로그 채널({CHANNEL_ADMIN_LOG})을 찾을 수 없습니다.")
-    except Exception as e:
-        logger.error(f"관리자로그 전송 오류: {e}")
+def init_coin_selenium():
+    return True
 
-async def process_transfer(user_id, coin_name, amount, txid, address=None, api_txid=None, fee=0):
-    user_mention = f"<@{user_id}>"
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # 거래내역 저장
-    add_transaction(
-        user_id=user_id,
-        transaction_type="송금",
-        amount=amount,
-        coin_type=coin_name,
-        address=address,
-        txid=txid,
-        api_txid=api_txid,
-        fee=fee
-    )
-    
-    description = TRANSFER_LOG_DESCRIPTION.format(
-        user_mention=user_mention,
-        user_id=user_id,
-        coin_name=coin_name,
-        amount=amount,
-        txid=txid,
-        timestamp=timestamp
-    )
-    await send_transfer_log(TRANSFER_LOG_TITLE, description, 0xffffff)
-
-async def send_transfer_log(title, description, color=0xffffff):
-    try:
-        channel = bot.get_channel(CHANNEL_TRANSFER_LOG)
-        if channel:
-            embed = disnake.Embed(title=title, description=description, color=color)
-            embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            await channel.send(embed=embed)
-        else:
-            logger.error(f"송금로그 채널({CHANNEL_TRANSFER_LOG})을 찾을 수 없습니다.")
-    except Exception as e:
-        logger.error(f"송금로그 전송 오류: {e}")
-
-async def send_verify_log(title, description, color=0xffffff):
-    try:
-        channel = bot.get_channel(CHANNEL_VERIFY_LOG)
-        if channel:
-            embed = disnake.Embed(title=title, description=description, color=color)
-            embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            await channel.send(embed=embed)
-        else:
-            logger.error(f"인증로그 채널({CHANNEL_VERIFY_LOG})을 찾을 수 없습니다.")
-    except Exception as e:
-        logger.error(f"인증로그 전송 오류: {e}")
-
-async def send_charge_log(title, description, color=0x26262f):
-    try:
-        channel = bot.get_channel(CHANNEL_CHARGE_LOG)
-        if channel:
-            embed = disnake.Embed(title=title, description=description, color=color)
-            embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            await channel.send(embed=embed)
-        else:
-            logger.error(f"충전로그 채널({CHANNEL_CHARGE_LOG})을 찾을 수 없습니다.")
-    except Exception as e:
-        logger.error(f"충전로그 전송 오류: {e}")
-
-async def process_pass_verify_success(user_id):
-    user_mention = f"<@{user_id}>"
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    name = phone = birth = telecom = "정보 없음"
-    try:
-        json_file = 'DB/verified_users.json'
-        if os.path.exists(json_file):
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            user_data = data.get(str(user_id), {})
-            name = user_data.get('name', '정보 없음')
-            phone = user_data.get('phone', '정보 없음')
-            birth = user_data.get('dob', '정보 없음')
-            telecom = user_data.get('telecom', '정보 없음')
-    except Exception as e:
-        logger.error(f"PASS 인증 로그 추가정보 오류: {e}")
-    description = VERIFY_LOG_DESCRIPTION.format(
-        user_mention=user_mention,
-        user_id=user_id,
-        name=name,
-        phone=phone,
-        birth=birth,
-        telecom=telecom
-    )
-    await send_verify_log(VERIFY_LOG_TITLE, description, 0xffffff)
-
-if __name__ == "__main__":
-    bot.run(TOKEN)
+def quit_driver():
+    pass
