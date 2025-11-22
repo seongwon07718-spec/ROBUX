@@ -1,11 +1,17 @@
-        elif interaction.component.custom_id == "open_calc_modal":
-            # 모달 바로 띄우기 (단일 입력)
-            serial_code = random.randint(100000, 999999)
-            try:
-                await interaction.response.send_modal(CalculatorModal(serial_code))
-            except Exception as e:
-                logger.error(f"계산기 모달 오픈 오류: {e}")
-                try:
-                    await interaction.response.send_message("계산기 실행 중 오류가 발생했습니다.", ephemeral=True)
-                except:
-                    pass
+class CalculatorModal(disnake.ui.Modal):
+    def __init__(self, serial_code):
+        components = [
+            disnake.ui.TextInput(
+                label="계산할 금액 (원)",
+                placeholder="예: 100000",
+                custom_id="calc_amount",
+                style=disnake.TextInputStyle.short,
+                min_length=1,
+                max_length=20,
+            )
+        ]
+        super().__init__(
+            title="수수료 계산기",
+            custom_id=f"calc_modal_{serial_code}",
+            components=components,
+        )
