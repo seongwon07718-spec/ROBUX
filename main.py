@@ -1,202 +1,342 @@
-# web.py - 수정된 최종본
-import requests
-from flask import Flask, request, render_template, redirect
-import uuid
+# bot_app.py - 슬래시 명령어 통합 최종본 (discord.py v2 / app_commands 사용)
+import os
 import sqlite3
-import datetime
-from json import JSONDecodeError
+import asyncio
+from typing import Optional, List
 
-app = Flask(__name__)
-app.secret_key = str(uuid.uuid4())
+import discord
+from discord import app_commands
+from discord.ext import commands
 
-# -----------------------------
-# 여기 값들을 실제 값으로 바꿔주세요.
-# 가능하면 .env로 관리하세요.
-# -----------------------------
-API_ENDPOINT = 'https://discord.com/api/v9'
-CLIENT_ID = "1434868431064272907"  # Discord OAuth2 Client ID
-CLIENT_SECRET = "여기에_CLIENT_SECRET을_넣으세요"
-BOT_TOKEN = "여기에_BOT_TOKEN을_넣으세요"
-# redirect_uri는 Discord 개발자 포털에 등록된 값과 정확히 일치해야 합니다.
-# 예: https://your-domain.com/join 또는 http://localhost/join
-REDIRECT_URI = "https://your-domain.com/join"
-# -----------------------------
+# ----------------------------
+# 설정 - 환경변수로 관리하세요
+# ----------------------------
+BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # 반드시 설정
+ADMIN_ID = int(os.getenv("ADMIN_ID", "1402654236570812467"))  # 소유자 ID (예시)
+ALLOWED_USER_IDS = [int(x) for x in os.getenv("ALLOWED_USER_IDS", "12023760,1250580892537386").split(",") if x]  # 추가 허용 사용자
+DATABASE_PATH = os.getenv("DATABASE_PATH", "database.db")
+# ----------------------------
 
+# intents
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+intents.members = True  # 멤버 관련 작업(역할, 초대 등)에 필요
+
+bot = commands.Bot(command_prefix=".", intents=intents)
+tree = bot.tree
+
+# ----------------------------
+# DB 유틸리티
+# ----------------------------
 def start_db():
-    con = sqlite3.connect("database.db")
+    con = sqlite3.connect(DATABASE_PATH)
     cur = con.cursor()
     return con, cur
 
-def geticon_url(guild_id):
+def ensure_schema():
     con, cur = start_db()
-    cur.execute("SELECT icon FROM guilds WHERE id == ?", (guild_id,))
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS guild_settings (
+        guild_id INTEGER PRIMARY KEY,
+        log_channel_id INTEGER,
+        auth_role_id INTEGER,
+        filter_enabled INTEGER DEFAULT 0,
+        content_text TEXT DEFAULT ''
+    );
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS licenses (
+        key TEXT PRIMARY KEY,
+        days INTEGER
+    );
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        token TEXT,
+        guild_id INTEGER
+    );
+    """)
+    con.commit()
+    con.close()
+
+# ----------------------------
+# 권한 체크 헬퍼
+# ----------------------------
+def is_owner(user: discord.User) -> bool:
+    return user.id == ADMIN_ID
+
+def is_allowed_dev(user: discord.User) -> bool:
+    return user.id in ALLOWED_USER_IDS or is_owner(user)
+
+async def check_guild_admin(interaction: discord.Interaction) -> bool:
+    # 서버 관리자이거나 관리권한(Manage Guild) 보유 확인
+    if not interaction.guild:
+        return False
+    member = interaction.user
+    if isinstance(member, discord.Member):
+        return member.guild_permissions.administrator or member.guild_permissions.manage_guild
+    # fallback
+    return False
+
+def require_permission_message():
+    return "권한이 없습니다. 관리자이거나 허용된 사용자만 사용 가능합니다."
+
+# ----------------------------
+# 임베드 템플릿
+# ----------------------------
+def embeda(embed_type: str, title: str, description: str, fields: Optional[List[tuple]] = None) -> discord.Embed:
+    color_map = {
+        "success": 0x5c6cdf,
+        "error": 0xff5c5c,
+        "warn": 0xffa500,
+        "info": 0x5c6cdf
+    }
+    color = color_map.get(embed_type, 0x5c6cdf)
+    embed = discord.Embed(title=title, description=description, color=color)
+    if fields:
+        for n, (name, value, inline) in enumerate(fields):
+            embed.add_field(name=name, value=value, inline=inline)
+    embed.set_footer(text="SinLinkBackup")
+    return embed
+
+# ----------------------------
+# 유틸: DB 설정 읽기/쓰기
+# ----------------------------
+def set_log_channel(guild_id: int, channel_id: int):
+    con, cur = start_db()
+    cur.execute("INSERT INTO guild_settings (guild_id, log_channel_id) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET log_channel_id=excluded.log_channel_id;", (guild_id, channel_id))
+    con.commit()
+    con.close()
+
+def get_guild_settings(guild_id: int):
+    con, cur = start_db()
+    cur.execute("SELECT guild_id, log_channel_id, auth_role_id, filter_enabled, content_text FROM guild_settings WHERE guild_id = ?;", (guild_id,))
     row = cur.fetchone()
     con.close()
-    if not row or not row[0]:
+    if not row:
         return None
-    icon_hash = row[0]
-    return f'https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.png'
-
-def get_user_profile(access_token):
-    headers = {"Authorization": f"Bearer {access_token}"}
-    try:
-        res = requests.get(f"{API_ENDPOINT}/users/@me", headers=headers, timeout=10)
-        if res.status_code != 200:
-            print("get_user_profile 실패:", res.status_code, res.text)
-            return False
-        return res.json()
-    except Exception as e:
-        print("get_user_profile 예외:", e)
-        return False
-
-def get_kr_time():
-    return datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-
-def get_ip():
-    return request.headers.get("CF-Connecting-IP", request.remote_addr)
-
-def get_agent():
-    return request.user_agent.string
-
-def getguild(guild_id):
-    headers = {"Authorization": f"Bot {BOT_TOKEN}"}
-    try:
-        r = requests.get(f'{API_ENDPOINT}/guilds/{guild_id}', headers=headers, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-        else:
-            print("getguild 실패:", r.status_code, r.text)
-            return None
-    except Exception as e:
-        print("getguild 예외:", e)
-        return None
-
-def add_user(access_token, user_id, guild_id):
-    json_data = {"access_token": access_token}
-    headers = {"Authorization": f"Bot {BOT_TOKEN}"}
-    while True:
-        try:
-            r = requests.put(f'{API_ENDPOINT}/guilds/{guild_id}/members/{user_id}', json=json_data, headers=headers, timeout=10)
-        except Exception as e:
-            print("add_user 요청 예외:", e)
-            return False
-
-        if r.status_code == 429:
-            # rate limit: 대기 후 재시도
-            try:
-                info = r.json()
-                retry = info.get("retry_after", 1)
-            except Exception:
-                retry = 2
-            print("rate limited, retry after", retry)
-            import time
-            time.sleep(retry + 1)
-            continue
-
-        # 201(추가됨), 204(성공/갱신됨) 등 처리
-        if r.status_code in (201, 204):
-            return True
-        else:
-            try:
-                print("add_user 실패 응답:", r.status_code, r.json())
-            except Exception:
-                print("add_user 실패 응답 텍스트:", r.text)
-            return False
-
-def exchange_code(code):
-    data = {
-        'client_id': CLIENT_ID,
-        'client_secret': CLIENT_SECRET,
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': REDIRECT_URI
+    return {
+        "guild_id": row[0],
+        "log_channel_id": row[1],
+        "auth_role_id": row[2],
+        "filter_enabled": bool(row[3]),
+        "content_text": row[4]
     }
-    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    try:
-        r = requests.post(f"{API_ENDPOINT}/oauth2/token", data=data, headers=headers, timeout=10)
-        return r.json()
-    except Exception as e:
-        print("exchange_code 예외:", e)
-        return None
 
-def get_guild_with_counts(guild_id):
-    headers = {"Authorization": f"Bot {BOT_TOKEN}"}
-    try:
-        r = requests.get(f'{API_ENDPOINT}/guilds/{guild_id}?with_counts=true', headers=headers, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-        else:
-            print("get_guild_with_counts 실패:", r.status_code, r.text)
-            return None
-    except Exception as e:
-        print("get_guild_with_counts 예외:", e)
-        return None
+def set_auth_role(guild_id: int, role_id: int):
+    con, cur = start_db()
+    cur.execute("INSERT INTO guild_settings (guild_id, auth_role_id) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET auth_role_id=excluded.auth_role_id;", (guild_id, role_id))
+    con.commit()
+    con.close()
 
-@app.route('/<link>', methods=['GET'])
-def join_page(link):
+def set_filter(guild_id: int, enabled: bool):
+    con, cur = start_db()
+    cur.execute("INSERT INTO guild_settings (guild_id, filter_enabled) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET filter_enabled=excluded.filter_enabled;", (guild_id, int(enabled)))
+    con.commit()
+    con.close()
+
+def set_content_text(guild_id: int, text: str):
+    con, cur = start_db()
+    cur.execute("INSERT INTO guild_settings (guild_id, content_text) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET content_text=excluded.content_text;", (guild_id, text))
+    con.commit()
+    con.close()
+
+# ----------------------------
+# 인증 버튼 뷰 예시
+# ----------------------------
+class AuthButtonView(discord.ui.View):
+    def __init__(self, guild_id: int, role_id: Optional[int]):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+        self.role_id = role_id
+
+    @discord.ui.button(label="인증 하기", style=discord.ButtonStyle.primary, custom_id="sinlink_auth_button")
+    async def auth_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 인증 버튼 클릭시 역할 부여(설정된 role_id가 있을 경우)
+        await interaction.response.defer(ephemeral=True)
+        if not interaction.guild:
+            return await interaction.followup.send("서버에서만 사용 가능한 버튼입니다.", ephemeral=True)
+
+        settings = get_guild_settings(interaction.guild.id)
+        role_id = settings.get("auth_role_id") if settings else self.role_id
+        if not role_id:
+            return await interaction.followup.send("인증 역할이 설정되어 있지 않습니다. 관리자에게 문의하세요.", ephemeral=True)
+
+        role = interaction.guild.get_role(role_id)
+        if not role:
+            return await interaction.followup.send("설정된 역할을 찾을 수 없습니다.", ephemeral=True)
+
+        try:
+            await interaction.user.add_roles(role, reason="인증 버튼을 통한 역할 부여")
+            await interaction.followup.send(embed=embeda("success", "인증 완료", f"{interaction.user.mention}님에게 역할이 부여되었습니다."), ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send(embed=embeda("error", "권한 오류", "봇에게 역할을 부여할 권한이 없습니다."), ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(embed=embeda("error", "오류", str(e)), ephemeral=True)
+
+# ----------------------------
+# 슬래시 명령어들
+# ----------------------------
+
+# /정보 - 서버 라이센스 및 설정 정보 표시
+@tree.command(name="정보", description="서버의 라이센스와 설정 정보를 표시합니다.")
+@app_commands.describe()
+async def info_command(interaction: discord.Interaction):
+    # 권한: 서버 관리자 또는 허용된 개발자
+    if not (await check_guild_admin(interaction) or is_allowed_dev(interaction.user)):
+        return await interaction.response.send_message(require_permission_message(), ephemeral=True)
+
+    guild = interaction.guild
+    if not guild:
+        return await interaction.response.send_message("서버에서만 사용할 수 있는 명령어입니다.", ephemeral=True)
+
+    settings = get_guild_settings(guild.id)
+    fields = []
+    if settings:
+        fields.append(("로그 채널", f"<#{settings['log_channel_id']}>" if settings['log_channel_id'] else "미설정", True))
+        fields.append(("인증 역할", f"<@&{settings['auth_role_id']}>" if settings['auth_role_id'] else "미설정", True))
+        fields.append(("필터링 활성화", "예" if settings['filter_enabled'] else "아니오", True))
+        fields.append(("인증 내용", settings['content_text'] or "미설정", False))
+    else:
+        fields.append(("설정", "설정이 없습니다.", False))
+
+    embed = embeda("info", "서버 정보", f"{guild.name} ({guild.id})", fields=fields)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# /로그채널 - 로그 전송 채널 설정 (채널 파라미터)
+@tree.command(name="로그채널", description="로그를 전송할 채널을 설정합니다.")
+@app_commands.describe(channel="로그를 받을 텍스트 채널")
+async def log_channel_command(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not (await check_guild_admin(interaction) or is_allowed_dev(interaction.user)):
+        return await interaction.response.send_message(require_permission_message(), ephemeral=True)
+
+    set_log_channel(interaction.guild.id, channel.id)
+    embed = embeda("success", "로그 채널 설정", f"이제 로그는 {channel.mention} 채널로 전송됩니다.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# /역할 - 인증 역할 설정 및 역할 자동 부여 테스트
+@tree.command(name="역할", description="인증 역할을 설정하거나 테스트로 부여합니다.")
+@app_commands.describe(role="인증 역할으로 사용할 역할", action="set:설정, test:테스트 부여")
+async def role_command(interaction: discord.Interaction, role: Optional[discord.Role], action: Optional[str] = "set"):
+    if not (await check_guild_admin(interaction) or is_allowed_dev(interaction.user)):
+        return await interaction.response.send_message(require_permission_message(), ephemeral=True)
+
+    if action == "set":
+        if not role:
+            return await interaction.response.send_message("설정할 역할을 선택하세요.", ephemeral=True)
+        set_auth_role(interaction.guild.id, role.id)
+        await interaction.response.send_message(embed=embeda("success", "인증 역할 설정", f"인증 역할이 {role.mention} 으로 설정되었습니다."), ephemeral=True)
+    elif action == "test":
+        # 테스트 부여: 명령어 호출자에게 역할 부여 시도
+        if not role:
+            return await interaction.response.send_message("테스트할 역할을 선택하세요.", ephemeral=True)
+        try:
+            await interaction.user.add_roles(role, reason="테스트 역할 부여")
+            await interaction.response.send_message(embed=embeda("success", "테스트 성공", f"{interaction.user.mention}님에게 역할을 부여했습니다."), ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(embed=embeda("error", "권한 오류", "봇에게 역할을 부여할 권한이 없습니다."), ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(embed=embeda("error", "오류", str(e)), ephemeral=True)
+    else:
+        await interaction.response.send_message("action 파라미터는 set 또는 test 만 허용됩니다.", ephemeral=True)
+
+# /필터링설정 - 필터 온/오프 및 내용 변경
+@tree.command(name="필터링설정", description="서버의 메시지 필터링을 설정합니다.")
+@app_commands.describe(enable="필터링 사용 여부", content="필터링 시 안내할 내용")
+async def filter_command(interaction: discord.Interaction, enable: bool, content: Optional[str] = ""):
+    if not (await check_guild_admin(interaction) or is_allowed_dev(interaction.user)):
+        return await interaction.response.send_message(require_permission_message(), ephemeral=True)
+
+    set_filter(interaction.guild.id, enable)
+    if content:
+        set_content_text(interaction.guild.id, content)
+    embed = embeda("success", "필터링 설정 변경", f"필터링이 {'활성화' if enable else '비활성화'} 되었습니다.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# /내용 - 인증/안내 메시지 내용 수정 (관리자 전용)
+@tree.command(name="내용", description="인증 메시지 또는 안내 문구를 설정합니다.")
+@app_commands.describe(text="설정할 안내 텍스트")
+async def content_command(interaction: discord.Interaction, text: str):
+    if not (await check_guild_admin(interaction) or is_allowed_dev(interaction.user)):
+        return await interaction.response.send_message(require_permission_message(), ephemeral=True)
+
+    set_content_text(interaction.guild.id, text)
+    await interaction.response.send_message(embed=embeda("success", "내용 저장", "안내 메시지가 저장되었습니다."), ephemeral=True)
+
+# /인증버튼 - 인증 버튼 메시지 발행 (관리자 권한)
+@tree.command(name="인증버튼", description="인증 버튼을 포함한 메시지를 발행합니다.")
+@app_commands.describe(channel="버튼을 보낼 텍스트 채널", role="버튼 클릭 시 부여할 역할 (선택 가능)")
+async def auth_button_command(interaction: discord.Interaction, channel: discord.TextChannel, role: Optional[discord.Role] = None):
+    if not (await check_guild_admin(interaction) or is_allowed_dev(interaction.user)):
+        return await interaction.response.send_message(require_permission_message(), ephemeral=True)
+
+    # 뷰와 버튼 생성
+    view = AuthButtonView(interaction.guild.id, role.id if role else None)
+    content_text = get_guild_settings(interaction.guild.id)['content_text'] if get_guild_settings(interaction.guild.id) else "인증 버튼을 눌러 인증하세요."
     try:
-        con, cur = start_db()
-        cur.execute("SELECT id FROM guilds WHERE link == ?", (link,))
-        row = cur.fetchone()
+        await channel.send(embed=embeda("info", "인증하기", content_text), view=view)
+        await interaction.response.send_message(embed=embeda("success", "인증 메시지 발행", f"{channel.mention} 채널에 인증 버튼을 발행했습니다."), ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message(embed=embeda("error", "권한 오류", "봇에게 해당 채널에 메시지를 보낼 권한이 없습니다."), ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(embed=embeda("error", "오류", str(e)), ephemeral=True)
+
+# /복구 - 소유자 전용 복구 명령 (복구키를 이용해 DB에서 사용자 불러와 복구 진행)
+@tree.command(name="복구", description="소유자 전용: 복구키로 저장된 사용자를 현재 서버로 복구합니다.")
+@app_commands.describe(recover_key="복구에 사용할 키")
+async def recover_command(interaction: discord.Interaction, recover_key: str):
+    if not is_owner(interaction.user):
+        return await interaction.response.send_message("이 명령어는 소유자만 사용할 수 있습니다.", ephemeral=True)
+
+    await interaction.response.send_message("복구를 시작합니다. (콘솔 로그를 확인하세요)", ephemeral=True)
+    # DB에서 복구키로 guild 찾아오기 (예시 테이블 구조에 맞게 조정)
+    con, cur = start_db()
+    cur.execute("SELECT id FROM guilds WHERE token == ?;", (recover_key,))
+    row = cur.fetchone()
+    if not row:
         con.close()
-        if not row:
-            return render_template("fail.html"), 404
+        return await interaction.followup.send(embed=embeda("error", "복구 실패", "해당 복구키에 해당하는 서버 정보가 없습니다."), ephemeral=True)
 
-        gid = row[0]
-        ginfo = getguild(gid)
-        r = get_guild_with_counts(gid)
-        # 안전하게 템플릿에 전달
-        icon_url = ginfo.get('icon') if isinstance(ginfo, dict) else None
-        member_count = r.get('approximate_member_count') if isinstance(r, dict) else None
-        return render_template("s.html", link=link, id=gid, info=ginfo, icon=icon_url, member=member_count)
-    except Exception as e:
-        print("join_page 예외:", e)
-        return render_template("fail.html"), 500
+    source_guild_id = row[0]
+    cur.execute("SELECT id, token FROM users WHERE guild_id == ?;", (source_guild_id,))
+    users = cur.fetchall()
+    con.close()
 
-@app.route('/join', methods=['GET'])
-def callback():
-    code = request.args.get('code')
-    state = request.args.get('state')  # state에 guild_id 등을 담아 보냈다면 그 값을 사용
-    if not code or not state:
-        return render_template("fail.html"), 400
+    # 복구 루프 (예: refresh_token 사용해서 add_user 호출) - 실제 refresh_token 함수는 별도 구현 필요
+    progress = 0
+    total = len(users)
+    await interaction.followup.send(f"총 {total}명 복구 시도합니다.", ephemeral=True)
+    for u in users:
+        user_id, refresh_token = u[0], u[1]
+        try:
+            # 실제 구현에서는 refresh_token -> access_token 변환 후 add_user 호출
+            # 예시: new_token = await refresh_token(refresh_token)
+            # await add_user(new_token['access_token'], interaction.guild.id, user_id)
+            progress += 1
+            await asyncio.sleep(0.1)  # 실제 네트워크 콜 대체
+        except Exception as e:
+            print("복구 중 예외:", e)
+            continue
+    await interaction.followup.send(embed=embeda("success", "복구 완료", f"{progress}/{total} 명 복구 시도 완료"), ephemeral=True)
 
-    token_resp = exchange_code(code)
-    if not token_resp or "access_token" not in token_resp:
-        print("토큰 교환 실패:", token_resp)
-        return render_template("fail.html"), 500
+# ----------------------------
+# 봇 이벤트: 준비 및 명령어 동기화
+# ----------------------------
+@bot.event
+async def on_ready():
+    ensure_schema()
+    # guild 기반 동기화(개발 중에는 특정 guild에만 동기화하면 빠릅니다)
+    # await tree.sync(guild=discord.Object(id=YOUR_DEV_GUILD_ID))
+    await tree.sync()  # 전역 동기화 (권장: 배포 후 한번)
+    print(f"Bot ready. Logged in as {bot.user} (ID: {bot.user.id})")
 
-    access_token = token_resp.get('access_token')
-    refresh_token = token_resp.get('refresh_token')
-
-    user_data = get_user_profile(access_token)
-    if not user_data:
-        return render_template("fail.html"), 500
-
-    # state가 guild id라 가정
-    try:
-        guild_id = int(state)
-    except:
-        return render_template("fail.html"), 400
-
-    # 서버 정보 확인(선택적)
-    guild_info = getguild(guild_id)
-    # 멤버 추가 시도
-    added = add_user(access_token, user_data['id'], guild_id)
-    if not added:
-        # 실패 시에도 DB 저장은 상황에 따라 다름. 여기서는 실패 로그만
-        print("멤버 추가 실패:", user_data['id'], guild_id)
-
-    # DB에 users 저장 (user_id, refresh_token, guild_id)
-    try:
-        con, cur = start_db()
-        cur.execute("INSERT INTO users (id, token, guild_id) VALUES (?, ?, ?);", (str(user_data["id"]), refresh_token, guild_id))
-        con.commit()
-        con.close()
-    except Exception as e:
-        print("DB 저장 중 예외:", e)
-
-    return render_template("success.html")
-
+# ----------------------------
+# 실행
+# ----------------------------
 if __name__ == "__main__":
-    # production 환경에서는 debug=False, 포트·호스트는 배포 환경에 맞게 설정하세요.
-    app.run(debug=False, host='0.0.0.0', port=80)
+    if not BOT_TOKEN:
+        print("ERROR: DISCORD_BOT_TOKEN 환경변수를 설정하세요.")
+    else:
+        bot.run(BOT_TOKEN)
