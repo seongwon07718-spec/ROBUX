@@ -3,7 +3,7 @@ from disnake.ext import commands, tasks
 import requests
 from datetime import datetime, timezone, timedelta
 
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # 봇 토큰을 꼭 본인 것으로 교체하세요
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # 자신의 봇 토큰으로 교체하세요
 
 KST = timezone(timedelta(hours=9))
 
