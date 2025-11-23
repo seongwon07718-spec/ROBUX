@@ -1,28 +1,31 @@
-import asyncio
-import time
-import disnake
-from disnake.ext import commands
+        kimchi_premium = coin.get_kimchi_premium()
+        embed = disnake.Embed(color=0xffffff)
+        try:
+            embed.set_thumbnail(url=EMBED_ICON_URL)
+        except Exception:
+            pass
 
-bot = commands.Bot(command_prefix="!", intents=disnake.Intents.default())
+        embed.add_field(name="**실시간 재고**", value=balance_text if balance_text else "**```🛒 0원```**", inline=True)
+        embed.add_field(name="**실시간 김프**", value=f"**```📈 {kimchi_premium:.2f}%```**", inline=True)
+        embed.add_field(name=f"**<a:sexymega:1441678230175350817> {timestamp_str}에 재고, 김프가 갱신되었습니다**", value="**――――――――――――――――――――**", inline=False)
+        embed.set_footer(text="Tip : 정보 조회 버튼 누르시면 거래내역 확인 가능")
 
-@bot.slash_command(description="임베드에 60초 타임스탬프 카운트업")
-async def 타임스탬프카운터(interaction: disnake.ApplicationCommandInteraction):
-    await interaction.response.send_message("타임스탬프 카운트업 시작", ephemeral=False)
-    message = await interaction.original_message()
+        view = CoinView()
+        embed_message = await inter.channel.send(embed=embed, view=view)
 
-    start_ts = int(time.time())
-    while True:
-        current_ts = int(time.time())
-        elapsed = current_ts - start_ts
-        seconds = elapsed % 60
-        if seconds == 0:
-            seconds = 60
-
-        display_ts = current_ts - seconds + 1
-        timestamp_str = f"<t:{display_ts}:R>"
-
-        embed = disnake.Embed(title="실시간 타임스탬프 카운트업")
-        embed.add_field(name="마지막 업데이트", value=timestamp_str)
-
-        await message.edit(embed=embed)
+        admin_embed = disnake.Embed(color=0xffffff)
+        admin_embed.add_field(name="대행 전송", value=f"**{inter.author.display_name}** 대행임베드를 사용함", inline=False)
+        await inter.edit_original_response(embed=admin_embed)
         await asyncio.sleep(1)
+
+    except Exception as e:
+        logger.error(f"대행임베드 오류: {e}")
+        embed = disnake.Embed(
+            title="**오류**",
+            description="**처리 중 오류가 발생했습니다.**",
+            color=0xff6200
+        )
+        try:
+            await inter.edit_original_response(embed=embed)
+        except:
+            pass
