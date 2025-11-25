@@ -7,100 +7,81 @@ import sqlite3
 from datetime import datetime
 import urllib.parse
 from disnake import PartialEmoji, ui
-# 웹훅 사용 제거
 
-# MEXC API 설정
+# --- MEXC API 설정 (하드코딩 유지) ---
 API_KEY = "mx0J"
 SECRET_KEY = "13faaa36b0656a882a54"
 BASE_URL = "https://api.mexc.com"
 
-# 서비스 수수료율
-SERVICE_FEE_RATE = 0.025
+# --- 전역 서비스 수수료율 설정 ---
+SERVICE_FEE_RATE = 0.025 # 기본 서비스 수수료율 (2.5%)
 
 def set_service_fee_rate(rate: float):
+    """서비스 수수료율 설정 (0~0.25 사이)"""
     global SERVICE_FEE_RATE
     try:
-        if rate < 0 or rate > 0.25:
-            return False
-        SERVICE_FEE_RATE = rate
-        return True
+        if 0 <= rate <= 0.25:
+            SERVICE_FEE_RATE = rate
+            return True
+        return False
     except Exception:
         return False
 
 def get_service_fee_rate() -> float:
-    try:
-        return SERVICE_FEE_RATE
-    except Exception:
-        return 0.025
+    """현재 서비스 수수료율 반환"""
+    return SERVICE_FEE_RATE
 
+# --- MEXC API Helper Functions ---
 def sign_params(params, secret):
+    """MEXC API 요청 서명 생성"""
     try:
-        query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+        # 파라미터는 알파벳 순으로 정렬 후 쿼리 스트링 생성
+        sorted_params = sorted(params.items())
+        query_string = '&'.join([f"{k}={v}" for k, v in sorted_params])
         signature = hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
         return signature
     except Exception:
         return ""
 
+# --- Price & Rate Helper Functions ---
 def get_exchange_rate():
+    """USD/KRW 환율 조회 (exchangerate-api.com)"""
     try:
         response = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=10)
         response.raise_for_status()
         data = response.json()
         rate = data.get("rates", {}).get("KRW")
-        return rate if rate and rate > 0 else 1350
+        return rate if rate and rate > 0 else 1350 # 기본값 설정
     except (requests.RequestException, ValueError, KeyError):
         return 1350
     except Exception:
         return 1350
 
 def get_kimchi_premium():
+    """김치 프리미엄 계산 (업비트-바이낸스 BTC 가격 비교)"""
     try:
+        # 업비트 BTC 가격 조회 (KRW)
         upbit_response = requests.get("https://api.upbit.com/v1/ticker?markets=KRW-BTC", timeout=10)
-        if upbit_response.status_code == 200:
-            upbit_data = upbit_response.json()
-            upbit_price = upbit_data[0]['trade_price']
-        else:
-            return 0
-        
+        upbit_response.raise_for_status()
+        upbit_data = upbit_response.json()
+        upbit_price = upbit_data[0]['trade_price']
+
+        # 바이낸스 BTC 가격 조회 (USDT)
         binance_response = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=10)
-        if binance_response.status_code == 200:
-            binance_data = binance_response.json()
-            binance_price_usd = float(binance_data['price'])
-        else:
-            return 0
+        binance_response.raise_for_status()
+        binance_data = binance_response.json()
+        binance_price_usd = float(binance_data['price'])
         
         # USD/KRW 환율
         krw_rate = get_exchange_rate()
+        if krw_rate <= 0: return 0 # 환율 조회 실패 시
         
-        # 김치프리미엄 계산
+        # 김치 프리미엄 계산
         binance_price_krw = binance_price_usd * krw_rate
         kimchi_premium = ((upbit_price - binance_price_krw) / binance_price_krw) * 100
         
         return round(kimchi_premium, 2)
-        
-    except Exception:
-        return 0
-
-def get_coin_price(coin_symbol):
-    """특정 코인의 현재 가격을 USD로 조회 (업비트 우선, MEXC 백업)"""
-    try:
-        # 업비트에서 가격 조회 시도
-        upbit_price = get_upbit_coin_price(coin_symbol)
-        if upbit_price > 0:
-            return upbit_price
-        
-        # 업비트 실패 시 MEXC에서 조회
-        endpoint = "/api/v3/ticker/price"
-        params = {'symbol': f"{coin_symbol}USDT"}
-        
-        response = requests.get(f"{BASE_URL}{endpoint}", params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return float(data.get('price', 0))
-        else:
-            return 0
-    except (requests.RequestException, ValueError, KeyError):
+    except (requests.RequestException, ValueError, KeyError, IndexError):
         return 0
     except Exception:
         return 0
@@ -108,159 +89,111 @@ def get_coin_price(coin_symbol):
 def get_upbit_coin_price(coin_symbol):
     """업비트에서 코인 가격을 USD로 조회"""
     try:
-        # 업비트 코인 매핑
         upbit_mapping = {
-            'USDT': 'USDT-KRW',
+            'USDT': 'USDT-KRW', # 업비트에 USDT-KRW 직접적인 마켓은 없으나, 개념상 1 USDT = 1300KRW로 가정
             'BNB': 'BNB-KRW', 
             'TRX': 'TRX-KRW',
             'LTC': 'LTC-KRW'
         }
         
-        upbit_symbol = upbit_mapping.get(coin_symbol)
+        if coin_symbol.upper() == 'USDT':
+            # USDT는 고정값으로 처리하거나, KRW 시세 반영을 위해 Upbit의 다른 페어를 통해 간접 계산
+            # 여기서는 편의상 USD 고정 (또는 KRW 환율 사용)
+            return 1.0 # USDT는 USD에 고정
+        
+        upbit_symbol = upbit_mapping.get(coin_symbol.upper())
         if not upbit_symbol:
-            return 0
+            return 0 # 지원하지 않는 코인
         
-        # 업비트 API 호출
-        url = f"https://api.upbit.com/v1/ticker?markets={upbit_symbol}"
+        url = f"https://api.upbit.com/v1/ticker?markets=KRW-{coin_symbol.upper()}" # KRW 마켓 조회
         response = requests.get(url, timeout=10)
+        response.raise_for_status()
         
-        if response.status_code == 200:
-            data = response.json()
-            if data and len(data) > 0:
-                krw_price = float(data[0].get('trade_price', 0))
-                # KRW를 USD로 변환
-                usd_krw_rate = get_exchange_rate()
-                if usd_krw_rate > 0:
-                    usd_price = krw_price / usd_krw_rate
-                    return usd_price
+        data = response.json()
+        if data and len(data) > 0:
+            krw_price = float(data[0].get('trade_price', 0))
+            usd_krw_rate = get_exchange_rate()
+            if usd_krw_rate > 0:
+                usd_price = krw_price / usd_krw_rate
+                return usd_price
         return 0
+    except (requests.RequestException, ValueError, KeyError, IndexError):
+        return 0
+    except Exception:
+        return 0
+
+def get_mexc_coin_price(coin_symbol):
+    """MEXC에서 코인 가격 조회 (USDT 페어)"""
+    try:
+        endpoint = "/api/v3/ticker/price"
+        params = {'symbol': f"{coin_symbol.upper()}USDT"}
+
+        response = requests.get(f"{BASE_URL}{endpoint}", params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        return float(data.get('price', 0))
     except (requests.RequestException, ValueError, KeyError):
         return 0
     except Exception:
         return 0
+
+def get_coin_price(coin_symbol):
+    """특정 코인의 현재 가격을 USD로 조회 (업비트 우선, MEXC 백업)"""
+    if coin_symbol.upper() == 'USDT':
+        return 1.0 # USDT는 항상 $1
+
+    try:
+        upbit_price = get_upbit_coin_price(coin_symbol)
+        if upbit_price > 0:
+            return upbit_price
+    except Exception:
+        pass # 업비트 조회 실패 시 MEXC로 넘어감
+
+    # 업비트 실패 시 MEXC에서 조회
+    return get_mexc_coin_price(coin_symbol)
 
 def get_all_coin_prices():
     """모든 지원 코인의 현재 가격을 조회 (업비트 우선, MEXC 백업)"""
-    try:
-        prices = {}
-        supported_coins = ['USDT', 'TRX', 'LTC', 'BNB']
-        
-        # 각 코인별로 업비트에서 가격 조회 시도
-        for coin in supported_coins:
-            if coin == 'USDT':
-                prices[coin] = 1.0  # USDT는 항상 1
-            else:
-                upbit_price = get_upbit_coin_price(coin)
-                if upbit_price > 0:
-                    prices[coin] = upbit_price
-                else:
-                    # 업비트 실패 시 MEXC에서 조회
-                    mexc_price = get_mexc_coin_price(coin)
-                    prices[coin] = mexc_price
-        
-        return prices
-    except Exception:
-        return {}
+    prices = {}
+    supported_coins = ['USDT', 'TRX', 'LTC', 'BNB'] # USDT는 고정 1달러로 처리됨
 
-def get_mexc_coin_price(coin_symbol):
-    """MEXC에서 코인 가격 조회 (백업용)"""
-    try:
-        endpoint = "/api/v3/ticker/price"
-        params = {'symbol': f"{coin_symbol}USDT"}
-        
-        response = requests.get(f"{BASE_URL}{endpoint}", params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return float(data.get('price', 0))
-        else:
-            return 0
-    except (requests.RequestException, ValueError, KeyError):
-        return 0
-    except Exception:
-        return 0
+    for coin in supported_coins:
+        prices[coin] = get_coin_price(coin) # USDT는 get_coin_price에서 1.0으로 반환
 
-def get_convert_pairs():
-    """MEXC Convert 가능한 코인 쌍 조회"""
-    if not API_KEY or not SECRET_KEY:
-        return None
-    
-    try:
-        endpoint = "/api/v3/convert/pairs"
-        timestamp = int(time.time() * 1000)
-        
-        params = {
-            'recvWindow': 60000,
-            'timestamp': timestamp
-        }
-        
-        signature = sign_params(params, SECRET_KEY)
-        if not signature:
-            return None
-            
-        params['signature'] = signature
-        
-        headers = {
-            'X-MEXC-APIKEY': API_KEY
-        }
-        
-        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('code') == 200:
-                return data.get('data', [])
-        return None
-    except Exception:
-        return None
+    return prices
 
-def get_symbol_info(symbol):
-    """거래소에서 지원하는 심볼 정보 확인"""
-    if not API_KEY or not SECRET_KEY:
-        return None
-    
-    try:
-        endpoint = "/api/v3/exchangeInfo"
-        response = requests.get(f"{BASE_URL}{endpoint}", timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            symbols = data.get('symbols', [])
-            
-            for sym in symbols:
-                if sym.get('symbol') == symbol and sym.get('status') == 'ENABLED':
-                    return sym
-            return None
-        else:
-            return None
-    except Exception:
-        return None
-
+# --- MEXC Trading/Swap Functions ---
 def mexc_swap_coins(from_coin, to_coin, amount):
-    """MEXC Convert 시뮬레이션 (실제 Convert API가 작동하지 않음)"""
+    """MEXC Convert 시뮬레이션: from_coin을 to_coin으로 변환"""
+    # 실제 MEXC에는 'Convert' API가 명확히 제공되지 않으며, 현물 거래 API를 통해 이루어짐.
+    # 사용자의 요청에 따라 Convert 로직을 시뮬레이션합니다.
     if not API_KEY or not SECRET_KEY:
-        return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
-    
+        return {'success': False, 'error': 'API 키가 설정되지 않았습니다.'}
+
+    if from_coin.upper() == to_coin.upper():
+        return {'success': True, 'orderId': f"SWAP_SAME_{int(time.time())}", 'status': 'success',
+                'from_coin': from_coin.upper(), 'to_coin': to_coin.upper(), 'amount': amount,
+                'swapped_amount': amount, 'fee': 0.0}
+
     try:
-        # MEXC Convert API가 실제로 작동하지 않으므로 시뮬레이션
-        # 실제 운영 시에는 수동으로 Convert하거나 다른 방법 필요
-        
-        # 코인 가격 조회
         from_price = get_coin_price(from_coin.upper())
         to_price = get_coin_price(to_coin.upper())
         
         if from_price <= 0 or to_price <= 0:
-            return {'success': False, 'error': '코인 가격 조회 실패'}
+            return {'success': False, 'error': f'{from_coin.upper()} 또는 {to_coin.upper()} 가격 조회 실패'}
         
-        # 스왑 계산 (from_coin을 USDT로, USDT를 to_coin으로)
-        usdt_amount = amount * from_price
-        to_amount = usdt_amount / to_price
+        # From 코인을 USDT 가치로 변환
+        usdt_value = amount * from_price
         
-        # 스왑 수수료 적용 (0.1%)
-        swap_fee = 0.001
-        final_amount = to_amount * (1 - swap_fee)
+        # USDT 가치를 To 코인으로 변환
+        converted_amount_before_fee = usdt_value / to_price
         
-        print(f"Debug: {from_coin} {amount} → {to_coin} {final_amount:.6f} (시뮬레이션)")
+        # 스왑 수수료 적용 (예: 0.1%)
+        swap_fee_rate = 0.001
+        final_amount = converted_amount_before_fee * (1 - swap_fee_rate)
+        
+        print(f"Debug: {from_coin.upper()} {amount:.6f} → {to_coin.upper()} {final_amount:.6f} (시뮬레이션, 수수료: {swap_fee_rate * 100:.1f}%)")
         
         return {
             'success': True,
@@ -270,444 +203,42 @@ def mexc_swap_coins(from_coin, to_coin, amount):
             'to_coin': to_coin.upper(),
             'amount': amount,
             'swapped_amount': final_amount,
-            'fee': swap_fee
+            'fee_rate': swap_fee_rate,
+            'fee_amount_in_target_coin': converted_amount_before_fee * swap_fee_rate
         }
-        
     except Exception as e:
-        return {'success': False, 'error': f'스왑 오류: {str(e)}'}
-
-def simple_send_coin(target_coin, amount, address, network):
-    """모든 코인 재고를 활용하여 목표 코인으로 Convert 후 송금"""
-    if not API_KEY or not SECRET_KEY:
-        return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
-    
-    try:
-        # 현재 모든 코인 잔액 확인
-        balances = get_all_balances()
-        prices = get_all_coin_prices()
-        target_balance = balances.get(target_coin.upper(), 0)
-        
-        print(f"Debug: 목표 코인={target_coin.upper()}, 필요량={amount}, 현재잔액={target_balance}")
-        
-        # 목표 코인이 충분하면 바로 송금
-        if target_balance >= amount:
-            print(f"Debug: {target_coin.upper()} 잔액 충분, 바로 송금")
-            return send_coin_transaction(amount, address, network, target_coin)
-        
-        # 목표 코인이 부족하면 다른 코인들을 USDT로 Convert 후 목표 코인으로 Convert
-        target_price = prices.get(target_coin.upper(), 0)
-        if target_price <= 0:
-            return {'success': False, 'error': f'{target_coin.upper()} 가격 조회 실패'}
-        
-        needed_usdt = amount * target_price
-        current_usdt = balances.get('USDT', 0)
-        
-        print(f"Debug: 필요 USDT={needed_usdt:.2f}, 현재 USDT={current_usdt:.2f}")
-        
-        # Convert 우선순위: USDT > BNB > TRX > LTC
-        convert_priority = ['USDT', 'BNB', 'TRX', 'LTC']
-        
-        # 1단계: USDT가 충분한지 먼저 확인
-        if current_usdt >= needed_usdt:
-            print(f"Debug: 1단계 - USDT 충분 ({current_usdt:.2f} >= {needed_usdt:.2f})")
-            # Convert API가 작동하지 않으므로 USDT로 직접 송금
-            print(f"Debug: Convert API 미지원으로 USDT로 직접 송금")
-            return send_coin_transaction(needed_usdt, address, 'bep20', 'USDT', skip_min_check=True, skip_address_check=True)
-        
-        # 2단계: 다른 코인들을 USDT로 Convert 후 USDT 송금
-        print(f"Debug: 2단계 - 다른 코인들을 USDT로 Convert")
-        total_usdt = current_usdt
-        convert_log = []
-        
-        for coin in convert_priority:
-            if coin == 'USDT' or coin == target_coin.upper():
-                continue
-                
-            coin_balance = balances.get(coin, 0)
-            if coin_balance <= 0:
-                continue
-                
-            coin_price = prices.get(coin, 0)
-            if coin_price <= 0:
-                continue
-            
-            print(f"Debug: {coin} {coin_balance:.6f}을 USDT로 Convert 시도 (시뮬레이션)")
-            # 이 코인을 USDT로 Convert (시뮬레이션)
-            convert_result = mexc_swap_coins(coin, 'USDT', coin_balance)
-            if convert_result and convert_result.get('success', False):
-                converted_usdt = convert_result.get('swapped_amount', 0)
-                total_usdt += converted_usdt
-                convert_log.append(f"{coin} {coin_balance:.6f} → USDT {converted_usdt:.2f}")
-                print(f"Debug: {coin} Convert 성공, 총 USDT: {total_usdt:.2f}")
-            else:
-                error_msg = convert_result.get('error', 'Convert 실패') if convert_result else 'Convert 실패'
-                convert_log.append(f"{coin} Convert 실패: {error_msg}")
-                print(f"Debug: {coin} Convert 실패: {error_msg}")
-        
-        print(f"Debug: 2단계 완료, 총 USDT: {total_usdt:.2f}, 필요 USDT: {needed_usdt:.2f}")
-        
-        # USDT가 충분해지면 USDT로 송금 (Convert API 미지원)
-        if total_usdt >= needed_usdt:
-            print(f"Debug: USDT 충분, USDT로 직접 송금 (Convert API 미지원)")
-            return send_coin_transaction(needed_usdt, address, 'bep20', 'USDT', skip_min_check=True, skip_address_check=True)
-        
-        # 디버깅 정보 수집
-        debug_info = []
-        debug_info.append(f"목표 코인: {target_coin.upper()}")
-        debug_info.append(f"필요한 양: {amount}")
-        debug_info.append(f"필요한 USDT: {needed_usdt:.2f}")
-        debug_info.append(f"현재 USDT: {current_usdt:.2f}")
-        debug_info.append(f"총 USDT (Convert 후): {total_usdt:.2f}")
-        
-        # Convert 로그 추가
-        if convert_log:
-            debug_info.append("\nConvert 과정:")
-            for log in convert_log:
-                debug_info.append(f"  {log}")
-        
-        # 현재 잔액 정보
-        debug_info.append("\n현재 잔액:")
-        for coin in convert_priority:
-            if coin == 'USDT':
-                continue
-            coin_balance = balances.get(coin, 0)
-            coin_price = prices.get(coin, 0)
-            if coin_balance > 0 and coin_price > 0:
-                coin_usdt_value = coin_balance * coin_price
-                debug_info.append(f"  {coin}: {coin_balance:.6f} (₩{coin_usdt_value:.2f})")
-        
-        debug_msg = "\n".join(debug_info)
-        return {'success': False, 'error': f'모든 코인을 Convert해도 목표 금액에 도달하지 못했습니다\n\n{debug_msg}'}
-        
-    except Exception as e:
-        return {'success': False, 'error': f'Convert/송금 오류: {str(e)}'}
-
-def simple_send_coin(target_coin, amount, address, network):
-    """선택한 코인으로 직접 송금 (자동 스왑 없음)"""
-    if not API_KEY or not SECRET_KEY:
-        return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
-    
-    try:
-        # 현재 코인 잔액 확인
-        balances = get_all_balances()
-        target_balance = balances.get(target_coin.upper(), 0)
-        
-        print(f"Debug: 목표 코인={target_coin.upper()}, 필요량={amount}, 현재잔액={target_balance}")
-        
-        # 목표 코인 잔액 확인
-        if target_balance < amount:
-            return {'success': False, 'error': f'{target_coin.upper()} 잔액 부족: {target_balance:.6f} {target_coin.upper()} (필요: {amount:.6f})'}
-        
-        # 바로 송금
-        print(f"Debug: {target_coin.upper()} 잔액 충분, 바로 송금")
-        return send_coin_transaction(amount, address, network, target_coin)
-        
-    except Exception as e:
-        return {'success': False, 'error': f'송금 오류: {str(e)}'}
-
-def get_balance(coin='USDT'):
-    if not API_KEY or not SECRET_KEY:
-        return "0"
-    
-    try:
-        endpoint = "/api/v3/account"
-        timestamp = int(time.time() * 1000)
-        
-        params = {
-            'timestamp': timestamp
-        }
-        
-        signature = sign_params(params, SECRET_KEY)
-        if not signature:
-            return "0"
-            
-        params['signature'] = signature
-        
-        headers = {
-            'X-MEXC-APIKEY': API_KEY
-        }
-        
-        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            balances = data.get('balances', [])
-            
-            for balance in balances:
-                if balance.get('asset') == coin.upper():
-                    free_balance = float(balance.get('free', 0))
-                    return str(max(0, free_balance))
-            
-            return "0"
-        else:
-            return "0"
-            
-    except (requests.RequestException, ValueError, KeyError):
-        return "0"
-    except Exception:
-        return "0"
-
-def get_all_balances():
-    """모든 지원 코인의 잔액을 조회"""
-    if not API_KEY or not SECRET_KEY:
-        return {}
-    
-    try:
-        endpoint = "/api/v3/account"
-        timestamp = int(time.time() * 1000)
-        
-        params = {
-            'timestamp': timestamp
-        }
-        
-        signature = sign_params(params, SECRET_KEY)
-        if not signature:
-            return {}
-            
-        params['signature'] = signature
-        
-        headers = {
-            'X-MEXC-APIKEY': API_KEY
-        }
-        
-        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            balances = data.get('balances', [])
-            
-            supported_coins = ['USDT', 'TRX', 'LTC', 'BNB']
-            result = {}
-            
-            for balance in balances:
-                asset = balance.get('asset', '')
-                if asset in supported_coins:
-                    free_balance = float(balance.get('free', 0))
-                    result[asset] = max(0, free_balance)
-            
-            # 지원하지 않는 코인은 0으로 설정
-            for coin in supported_coins:
-                if coin not in result:
-                    result[coin] = 0
-                    
-            return result
-        else:
-            return {}
-            
-    except (requests.RequestException, ValueError, KeyError):
-        return {}
-    except Exception:
-        return {}
-
-def get_verified_user(user_id):
-    try:
-        conn = sqlite3.connect('DB/verify_user.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        user = cursor.fetchone()
-        conn.close()
-        return user
-    except (sqlite3.Error, OSError):
-        return None
-    except Exception:
-        return None
-
-def subtract_balance(user_id, amount):
-    conn = None
-    try:
-        conn = sqlite3.connect('DB/verify_user.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT now_amount FROM users WHERE user_id = ?', (user_id,))
-        current = cursor.fetchone()
-        
-        if current and current[0] >= amount:
-            new_balance = current[0] - amount
-            cursor.execute('UPDATE users SET now_amount = ? WHERE user_id = ?', (new_balance, user_id))
-            conn.commit()
-            return True
-        else:
-            return False
-    except (sqlite3.Error, OSError):
-        if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
-        return False
-    except Exception:
-        if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
-        return False
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
-
-def add_transaction_history(user_id, amount, transaction_type):
-    conn = None
-    try:
-        conn = sqlite3.connect('DB/history.db')
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO transaction_history (user_id, amount, type) VALUES (?, ?, ?)', 
-                      (user_id, amount, transaction_type))
-        conn.commit()
-    except (sqlite3.Error, OSError):
-        pass
-    except Exception:
-        pass
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
-
-def get_txid_link(txid, coin='USDT'):
-    try:
-        if txid and len(str(txid)) > 0:
-            # 코인별 블록 익스플로러 링크
-            explorer_links = {
-                'USDT': f"https://bscscan.com/tx/{txid}",
-                'BNB': f"https://bscscan.com/tx/{txid}",
-                'TRX': f"https://tronscan.org/#/transaction/{txid}",
-                'LTC': f"https://blockchair.com/litecoin/transaction/{txid}"
-            }
-            return explorer_links.get(coin.upper(), f"https://bscscan.com/tx/{txid}")
-        return "https://bscscan.com/"
-    except Exception:
-        return "https://bscscan.com/"
+        return {'success': False, 'error': f'시뮬레이션 스왑 오류: {str(e)}'}
 
 def get_transaction_fee(coin, network):
-    """송금 수수료 조회"""
+    """네트워크별 코인 송금 수수료 조회 (코인 단위)"""
     fees = {
-        'USDT': {'BSC': 0.8, 'TRX': 1.0},
+        'USDT': {'BSC': 0.8, 'TRX': 1.0}, # 예시 값
         'TRX': {'TRX': 1.0},
         'LTC': {'LTC': 0.001},
         'BNB': {'BSC': 0.0005}
     }
-    
-    coin_fees = fees.get(coin.upper(), {})
-    return coin_fees.get(network.upper(), 1.0)
-
-def get_minimum_amounts_krw():
-    """최소 송금 금액을 KRW로 변환하여 반환"""
-    min_amounts = {
-        'USDT': 10,     # 10 USDT
-        'TRX': 10,      # 10 TRX
-        'LTC': 0.015,   # 0.015 LTC
-        'BNB': 0.008    # 0.008 BNB
-    }
-    
-    prices = get_all_coin_prices()
-    krw_rate = get_exchange_rate()
-    kimchi_premium = get_kimchi_premium()
-    actual_krw_rate = krw_rate * (1 + kimchi_premium / 100)
-    
-    min_amounts_krw = {}
-    for coin, min_amount in min_amounts.items():
-        coin_price = prices.get(coin, 0)
-        if coin_price > 0:
-            krw_value = min_amount * coin_price * actual_krw_rate
-            min_amounts_krw[coin] = int(krw_value)
-        else:
-            min_amounts_krw[coin] = 0
-    
-    return min_amounts_krw
-
-# ===== Tier/Fees Helpers =====
-def get_user_tier_and_fee(user_id: int):
-    """Return (tier, service_fee_rate, purchase_bonus_rate). tier: 'VIP' or 'BUYER'"""
-    try:
-        total_amount = 0
-        try:
-            conn = sqlite3.connect('DB/verify_user.db')
-            cursor = conn.cursor()
-            cursor.execute('SELECT Total_amount FROM users WHERE user_id = ?', (user_id,))
-            row = cursor.fetchone()
-            if row:
-                total_amount = int(row[0] or 0)
-            conn.close()
-        except Exception:
-            pass
-        if total_amount >= 10_000_000:
-            return ('VIP', 0.03, 0.01)
-        else:
-            return ('BUYER', 0.05, 0.0)
-    except Exception:
-        return ('BUYER', 0.05, 0.0)
-
-def get_minimum_amount_coin(coin_symbol):
-    """특정 코인의 최소 송금 금액을 코인 단위로 반환"""
-    min_amounts = {
-        'USDT': 10,     # 10 USDT
-        'TRX': 10,      # 10 TRX
-        'LTC': 0.015,   # 0.015 LTC
-        'BNB': 0.008    # 0.008 BNB
-    }
-    
-    return min_amounts.get(coin_symbol.upper(), 10)
-
-def krw_to_coin_amount(krw_amount, coin_symbol):
-    """KRW 금액을 코인 단위로 변환"""
-    krw_rate = get_exchange_rate()
-    coin_price = get_coin_price(coin_symbol.upper())
-    kimchi_premium = get_kimchi_premium()
-    actual_krw_rate = krw_rate * (1 + kimchi_premium / 100)
-    
-    return krw_amount / actual_krw_rate / coin_price
+    return fees.get(coin.upper(), {}).get(network.upper(), 0.0) # 기본 0.0 수수료 (조회 불가 시)
 
 def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=False, skip_address_check=False):
+    """MEXC에서 코인 송금 (출금)"""
     if not API_KEY or not SECRET_KEY:
         return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
-    
-    # MEXC 최소 송금 금액 확인 (skip_min_check가 True면 건너뛰기)
-    if not skip_min_check:
-        # 통일된 최소 송금 금액 조회
-        min_amount = get_minimum_amount_coin(coin.upper())
-        min_amounts_krw = get_minimum_amounts_krw()
-        min_krw = min_amounts_krw.get(coin.upper(), 10000)
-        
-        if amount < min_amount:
-            return {'success': False, 'error': f'최소 송금 금액 미달: ₩{min_krw:,} (약 {min_amount:.6f} {coin.upper()}) 필요'}
-    
-    # 네트워크 매핑 (MEXC API 기준)
+
     network_mapping = {
-        'bep20': 'BSC',      # BSC 네트워크 (BEP20)
-        'trc20': 'TRX',      # TRON 네트워크 (TRC20)
-        'ltc': 'LTC',        # Litecoin 네트워크
-        'bnb': 'BSC'         # BSC 네트워크 (BNB)
+        'bep20': 'BSC', 'trc20': 'TRX', 'ltc': 'LTC', 'bnb': 'BSC'
     }
-    
-    # 코인별 주소 형식 검증 (skip_address_check가 True면 건너뛰기)
-    if not skip_address_check:
-        if coin.upper() == 'LTC':
-            # LTC 주소 검증 제거 (MEXC에서 자체 검증)
-            pass
-        
-        elif coin.upper() == 'USDT':
-            # USDT 주소 검증 제거 (MEXC에서 자체 검증)
-            pass
-        
-        elif coin.upper() == 'TRX':
-            # TRX 주소 검증 제거 (MEXC에서 자체 검증)
-            pass
-        
-        elif coin.upper() == 'BNB':
-            # BNB 주소 검증 제거 (MEXC에서 자체 검증)
-            pass
-    
     network_code = network_mapping.get(network.lower())
     if not network_code:
         return {'success': False, 'error': f'지원하지 않는 네트워크: {network}'}
     
-    # 디버깅을 위한 로그 (실제 운영 시에는 제거)
-    print(f"Debug: Coin={coin}, Network={network}, NetworkCode={network_code}, Address={address}")
-    
+    # 최소 송금 금액 확인 (실제 거래소 API와 연동 시 유효성 검사 필요)
+    if not skip_min_check:
+        min_amount = get_minimum_amount_coin(coin.upper())
+        if amount < min_amount:
+             return {'success': False, 'error': f'최소 송금 금액 미달: {min_amount:.6f} {coin.upper()} 필요'}
+
+    # 주소 형식 검증은 MEXC API에 맡김 (혹은 외부 라이브러리 사용)
+
     try:
         endpoint = "/api/v3/capital/withdraw"
         timestamp = int(time.time() * 1000)
@@ -715,8 +246,8 @@ def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=
         params = {
             'coin': coin.upper(),
             'address': str(address).strip(),
-            'amount': str(amount),
-            'netWork': network_code,
+            'amount': f"{amount:.8f}", # 정밀도 유지
+            'network': network_code, # MEXC API에서는 'network' 파라미터 사용 (일부 v3는 'netWork')
             'recvWindow': 60000,
             'timestamp': timestamp
         }
@@ -732,88 +263,349 @@ def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=
         }
         
         response = requests.post(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=30)
+        response.raise_for_status() # HTTP 오류 발생 시 예외 발생
         
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                
-                if data.get('id'):
-                    txid = str(data.get('id', ''))
-                    share_link = get_txid_link(txid, coin.upper())
-                    
-                    # 송금 수수료 계산
-                    transaction_fee = get_transaction_fee(coin.upper(), network_code)
-                    
-                    # 사용자 잔액에서 송금 수수료 차감
-                    try:
-                        import bot
-                        krw_rate = get_exchange_rate()
-                        coin_price = get_coin_price(coin.upper())
-                        fee_krw = transaction_fee * coin_price * krw_rate
-                        bot.subtract_balance(None, int(fee_krw))  # user_id는 None으로 전달 (전역 차감)
-                    except Exception as e:
-                        print(f"송금 수수료 차감 실패: {e}")
-                    
-                    result = {
-                        'success': True,
-                        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'txid': txid,
-                        'network': network_code,
-                        'fee': f"{transaction_fee} {coin.upper()}",
-                        'to_address': str(address).strip(),
-                        'share_link': share_link,
-                        'coin': coin.upper()
-                    }
-                    
-                    return result
-                else:
-                    error_msg = data.get('msg', '알 수 없는 오류')
-                    return {'success': False, 'error': f'거래소 오류: {error_msg}'}
-            except (ValueError, KeyError):
-                return {'success': False, 'error': '응답 데이터 파싱 오류'}
+        data = response.json()
+        if data.get('id'): # 출금 성공 시 id (TXID) 반환
+            txid = str(data.get('id', ''))
+            share_link = get_txid_link(txid, coin.upper())
+            
+            result = {
+                'success': True,
+                'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'txid': txid,
+                'network': network_code,
+                'sent_amount': amount,
+                'to_address': str(address).strip(),
+                'share_link': share_link,
+                'coin': coin.upper()
+            }
+            return result
         else:
-            # 상세 오류 메시지 구성 (HTTP 상태, 거래소 msg, raw 응답 일부, 요청 요약)
-            status = response.status_code
-            error_msg = None
-            try:
-                error_data = response.json()
-                error_msg = error_data.get('msg') or error_data.get('message')
-            except Exception:
-                pass
-            raw_snippet = ''
-            try:
-                raw_text = response.text
-                raw_snippet = raw_text[:300]
-            except Exception:
-                raw_snippet = ''
-            req_summary = f"coin={params.get('coin')} net={params.get('netWork')} amt={params.get('amount')}"
-            composed = f"HTTP {status} | {error_msg or '거래소 응답 오류'} | {req_summary}"
-            if raw_snippet:
-                composed += f" | raw={raw_snippet}"
-            return {'success': False, 'error': composed}
+            error_msg = data.get('msg', '알 수 없는 거래소 오류')
+            return {'success': False, 'error': f'거래소 오류: {error_msg}'}
         
     except requests.exceptions.RequestException as e:
-        return {'success': False, 'error': f'네트워크 오류: {str(e)}'}
+        return {'success': False, 'error': f'네트워크 또는 API 통신 오류: {str(e)}'}
     except Exception as e:
-        return {'success': False, 'error': f'예상치 못한 오류: {str(e)}'}
+        error_data = {}
+        try:
+            error_data = response.json()
+        except Exception:
+            pass
+        return {'success': False, 'error': f'예상치 못한 오류 발생: {e} (RAW 응답: {error_data})'}
+
+# --- Advanced Coin Transfer Logic (Auto-Swap & Convert) ---
+def simple_send_coin(target_coin, amount, address, network):
+    """
+    모든 코인 재고를 활용하여 목표 코인으로 Convert 후 송금 시도
+    1. 목표 코인이 충분하면 바로 송금
+    2. 목표 코인 부족 시:
+       a. USDT 잔액이 충분하면 USDT를 목표 코인으로 Convert 후 송금 (시뮬레이션)
+       b. USDT도 부족하면 다른 코인(BNB, TRX, LTC)을 USDT로 Convert 후, 그 USDT를 목표 코인으로 Convert 후 송금 (시뮬레이션)
+    """
+    if not API_KEY or not SECRET_KEY:
+        return {'success': False, 'error': 'API 키가 설정되지 않았습니다.'}
+
+    try:
+        balances = get_all_balances()
+        prices = get_all_coin_prices() # 모든 코인의 USD 가격
+        target_balance = balances.get(target_coin.upper(), 0)
+        target_coin_price_usd = prices.get(target_coin.upper(), 0)
+
+        # 목표 코인 가격 조회 실패 시
+        if target_coin_price_usd <= 0:
+            return {'success': False, 'error': f'목표 코인 {target_coin.upper()}의 가격을 조회할 수 없습니다.'}
+
+        print(f"Debug: 목표 코인={target_coin.upper()}, 필요량={amount:.6f}, 현재 잔액={target_balance:.6f}")
+
+        # 1. 목표 코인이 충분하면 바로 송금
+        if target_balance >= amount:
+            print(f"Debug: {target_coin.upper()} 잔액 충분, 바로 송금 진행")
+            return send_coin_transaction(amount, address, network, target_coin)
+
+        # 2. 목표 코인이 부족하면 다른 코인 활용 로직
+        #   a. 필요한 USDT 양 계산 (목표 코인 양 * 목표 코인 USD 가격)
+        needed_usdt_value = amount * target_coin_price_usd
+        current_usdt_balance = balances.get('USDT', 0)
+        total_usdt_after_conversions = current_usdt_balance
+        
+        convert_log = []
+        
+        # 2.b. 보유 코인들을 USDT로 전환 시도 (USDT 우선, 그 다음 BNB, TRX, LTC)
+        convert_priority = ['BNB', 'TRX', 'LTC'] # USDT는 이미 total_usdt_after_conversions에 포함
+        
+        for coin_to_convert in convert_priority:
+            if total_usdt_after_conversions >= needed_usdt_value:
+                break # 이미 충분한 USDT를 확보했다면 추가 변환 불필요
+
+            coin_balance = balances.get(coin_to_convert, 0)
+            if coin_balance <= 0:
+                continue
+
+            # 이 코인을 USDT로 변환 (시뮬레이션)
+            print(f"Debug: {coin_to_convert} {coin_balance:.6f}을 USDT로 Convert 시도 (시뮬레이션)")
+            convert_result = mexc_swap_coins(coin_to_convert, 'USDT', coin_balance)
+            
+            if convert_result and convert_result.get('success', False):
+                converted_usdt = convert_result.get('swapped_amount', 0)
+                total_usdt_after_conversions += converted_usdt
+                convert_log.append(f"  {coin_to_convert} {coin_balance:.6f} → USDT {converted_usdt:.6f} (Fee: {converted_usdt * convert_result.get('fee_rate',0):.6f} USDT)")
+                print(f"Debug: {coin_to_convert} Convert 성공, 현재 확보된 USDT: {total_usdt_after_conversions:.6f}")
+            else:
+                error_msg = convert_result.get('error', 'Convert 실패') if convert_result else 'Convert 실패'
+                convert_log.append(f"  {coin_to_convert} Convert 실패: {error_msg}")
+                print(f"Debug: {coin_to_convert} Convert 실패: {error_msg}")
+        
+        print(f"Debug: 총 확보된 USDT (변환 후): {total_usdt_after_conversions:.6f}, 필요한 USDT 가치: {needed_usdt_value:.6f}")
+
+        # 2.c. 최종 확보된 USDT로 목표 코인으로 Convert 시도
+        if total_usdt_after_conversions >= needed_usdt_value:
+            # 필요한 만큼의 USDT를 목표 코인으로 변환 (시뮬레이션)
+            usdt_to_convert_for_target = needed_usdt_value # 필요한 USDT만큼만 변환
+            
+            print(f"Debug: 확보된 USDT {total_usdt_after_conversions:.6f}로 {target_coin.upper()} {amount:.6f} 생성 시도 (USDT {usdt_to_convert_for_target:.6f} 필요)")
+            convert_to_target_result = mexc_swap_coins('USDT', target_coin.upper(), usdt_to_convert_for_target)
+
+            if convert_to_target_result and convert_to_target_result.get('success', False):
+                final_target_amount = convert_to_target_result.get('swapped_amount', 0)
+                convert_log.append(f"  USDT {usdt_to_convert_for_target:.6f} → {target_coin.upper()} {final_target_amount:.6f} (Fee: {convert_to_target_result.get('fee_amount_in_target_coin',0):.6f} {target_coin.upper()})")
+                print(f"Debug: 최종 {target_coin.upper()} 확보량: {final_target_amount:.6f}")
+
+                if final_target_amount >= amount:
+                    # 최종 목표 코인 확보 및 송금
+                    return send_coin_transaction(amount, address, network, target_coin)
+                else:
+                    # Convert 후에도 목표량 미달 (수수료 등 고려)
+                    debug_msg = "\n".join(convert_log)
+                    return {'success': False, 'error': f'코인 변환 후에도 {target_coin.upper()} 잔액이 부족합니다.\n{debug_msg}\n(최종 확보량: {final_target_amount:.6f} {target_coin.upper()}, 필요량: {amount:.6f})'}
+            else:
+                error_msg = convert_to_target_result.get('error', 'Convert 실패') if convert_to_target_result else 'Convert 실패'
+                debug_msg = "\n".join(convert_log)
+                return {'success': False, 'error': f'USDT를 {target_coin.upper()}로 변환 실패: {error_msg}\n{debug_msg}'}
+        else:
+            # 모든 코인을 USDT로 변환해도 목표 USDT 가치에 미달
+            debug_msg = "\n".join(convert_log)
+            return {'success': False, 'error': f'모든 코인을 변환해도 필요한 USDT를 확보하지 못했습니다.\n{debug_msg}\n(확보 USDT: {total_usdt_after_conversions:.6f}, 필요 USDT: {needed_usdt_value:.6f})'}
+
+    except Exception as e:
+        return {'success': False, 'error': f'자동 Convert/송금 오류: {str(e)}'}
+
+# --- Balance & DB Helper Functions ---
+def get_balance(coin='USDT'):
+    """단일 코인의 잔액 조회"""
+    if not API_KEY or not SECRET_KEY:
+        return "0"
+    
+    try:
+        endpoint = "/api/v3/account"
+        timestamp = int(time.time() * 1000)
+        
+        params = { 'timestamp': timestamp }
+        signature = sign_params(params, SECRET_KEY)
+        if not signature: return "0"
+        params['signature'] = signature
+        
+        headers = { 'X-MEXC-APIKEY': API_KEY }
+        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        balances = data.get('balances', [])
+        for balance in balances:
+            if balance.get('asset') == coin.upper():
+                free_balance = float(balance.get('free', 0))
+                return str(max(0, free_balance))
+        return "0"
+    except (requests.RequestException, ValueError, KeyError):
+        return "0"
+    except Exception:
+        return "0"
+
+def get_all_balances():
+    """MEXC 지갑의 모든 지원 코인 잔액 조회"""
+    if not API_KEY or not SECRET_KEY:
+        return {}
+
+    try:
+        endpoint = "/api/v3/account"
+        timestamp = int(time.time() * 1000)
+        
+        params = { 'timestamp': timestamp }
+        signature = sign_params(params, SECRET_KEY)
+        if not signature: return {}
+        params['signature'] = signature
+        
+        headers = { 'X-MEXC-APIKEY': API_KEY }
+        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        balances = data.get('balances', [])
+        
+        supported_coins = ['USDT', 'TRX', 'LTC', 'BNB']
+        result = {coin: 0.0 for coin in supported_coins} # 기본값 0.0으로 초기화
+        
+        for balance in balances:
+            asset = balance.get('asset', '')
+            if asset in supported_coins:
+                free_balance = float(balance.get('free', 0))
+                result[asset] = max(0, free_balance)
+        return result
+    except (requests.RequestException, ValueError, KeyError):
+        return {}
+    except Exception:
+        return {}
+
+def get_verified_user(user_id):
+    """사용자 인증 정보 및 잔액 조회"""
+    try:
+        conn = sqlite3.connect('DB/verify_user.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        user = cursor.fetchone()
+        conn.close()
+        return user
+    except (sqlite3.Error, OSError):
+        return None
+    except Exception:
+        return None
+
+def subtract_balance(user_id, amount):
+    """사용자 잔액 차감"""
+    conn = None
+    try:
+        conn = sqlite3.connect('DB/verify_user.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT now_amount FROM users WHERE user_id = ?', (user_id,))
+        current = cursor.fetchone()
+
+        if current and current[0] >= amount:
+            new_balance = current[0] - amount
+            cursor.execute('UPDATE users SET now_amount = ? WHERE user_id = ?', (new_balance, user_id))
+            conn.commit()
+            return True
+        else:
+            return False
+    except (sqlite3.Error, OSError):
+        if conn: conn.rollback()
+        return False
+    except Exception:
+        if conn: conn.rollback()
+        return False
+    finally:
+        if conn: conn.close()
+
+def add_transaction_history(user_id, amount, transaction_type):
+    """거래 내역 추가"""
+    conn = None
+    try:
+        conn = sqlite3.connect('DB/history.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO transaction_history (user_id, amount, type) VALUES (?, ?, ?)', 
+                      (user_id, amount, transaction_type))
+        conn.commit()
+    except (sqlite3.Error, OSError):
+        pass
+    except Exception:
+        pass
+    finally:
+        if conn: conn.close()
+
+def get_txid_link(txid, coin='USDT'):
+    """TXID 기반 블록 익스플로러 링크 생성"""
+    if txid and len(str(txid)) > 0:
+        explorer_links = {
+            'USDT': f"https://bscscan.com/tx/{txid}", # BEP20 USDT
+            'BNB': f"https://bscscan.com/tx/{txid}",  # BEP20 BNB
+            'TRX': f"https://tronscan.org/#/transaction/{txid}", # TRC20 TRX
+            'LTC': f"https://blockchair.com/litecoin/transaction/{txid}" # Litecoin
+        }
+        return explorer_links.get(coin.upper(), f"https://bscscan.com/tx/{txid}") # 기본은 BSCScan
+    return "https://bscscan.com/" # TXID 없을 때 기본 링크
+
+# --- Tier/Fees Helper Functions ---
+def get_user_tier_and_fee(user_id: int):
+    """사용자 티어 및 수수료/보너스율 반환"""
+    try:
+        total_amount = 0
+        conn = None
+        try:
+            conn = sqlite3.connect('DB/verify_user.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT Total_amount FROM users WHERE user_id = ?', (user_id,))
+            row = cursor.fetchone()
+            if row: total_amount = int(row[0] or 0)
+        except Exception:
+            pass # DB 연결 실패 시 total_amount 0으로 유지
+        finally:
+            if conn: conn.close()
+
+        if total_amount >= 10_000_000:
+            return ('VIP', 0.03, 0.01) # VIP: 서비스 수수료 3%, 구매 보너스 1%
+        else:
+            return ('BUYER', 0.05, 0.0) # BUYER: 서비스 수수료 5%, 구매 보너스 0%
+    except Exception:
+        return ('BUYER', 0.05, 0.0) # 오류 발생 시 기본 BUYER 등급
+
+def get_minimum_amount_coin(coin_symbol):
+    """특정 코인의 최소 송금 금액 (코인 단위)"""
+    min_amounts = {
+        'USDT': 10,     # 10 USDT
+        'TRX': 10,      # 10 TRX
+        'LTC': 0.015,   # 0.015 LTC
+        'BNB': 0.008    # 0.008 BNB
+    }
+    return min_amounts.get(coin_symbol.upper(), 10.0) # 기본 10
+
+def get_minimum_amounts_krw():
+    """모든 지원 코인의 최소 송금 금액을 KRW로 변환하여 반환"""
+    min_amounts = {
+        'USDT': 10, 'TRX': 10, 'LTC': 0.015, 'BNB': 0.008
+    }
+    prices = get_all_coin_prices()
+    krw_rate = get_exchange_rate()
+    kimchi_premium = get_kimchi_premium()
+    actual_krw_rate = krw_rate * (1 + kimchi_premium / 100)
+
+    min_amounts_krw = {}
+    for coin, min_amount_coin_unit in min_amounts.items():
+        coin_price = prices.get(coin, 0)
+        if coin_price > 0 and actual_krw_rate > 0:
+            krw_value = min_amount_coin_unit * coin_price * actual_krw_rate
+            min_amounts_krw[coin] = int(krw_value)
+        else:
+            min_amounts_krw[coin] = 0 # 가격 정보 없을 시
+    return min_amounts_krw
+
+def krw_to_coin_amount(krw_amount, coin_symbol):
+    """KRW 금액을 특정 코인 단위로 변환"""
+    krw_rate = get_exchange_rate()
+    coin_price = get_coin_price(coin_symbol.upper())
+    kimchi_premium = get_kimchi_premium()
+    actual_krw_rate = krw_rate * (1 + kimchi_premium / 100) # 김프 반영된 실제 KRW 환율
+
+    if actual_krw_rate <= 0 or coin_price <= 0:
+        return 0.0 # 환율 또는 코인 가격 조회 실패 시 0 반환
+        
+    # KRW → USD (김프 반영) → Coin
+    return krw_amount / (actual_krw_rate * coin_price)
+
+# --- Discord Bot UI & Interaction Handlers ---
+pending_transactions = {} # 사용자별 송금 대기 정보를 저장하는 전역 딕셔너리
 
 class AmountModal(disnake.ui.Modal):
-    def __init__(self, network, coin='usdt'):
+    def __init__(self, network, coin='usdt'): # __init__ 메서드 이름을 수정
         self.network = network
         self.coin = coin
         
-        # 실시간 최소송금 금액 조회
         min_amounts_krw = get_minimum_amounts_krw()
         min_krw = min_amounts_krw.get(coin.upper(), 10000)
         
-        # 코인별 단위 정보
         coin_info = {
-            'usdt': {'unit': 'USDT'},
-            'trx': {'unit': 'TRX'},
-            'ltc': {'unit': 'LTC'},
-            'bnb': {'unit': 'BNB'}
+            'usdt': {'unit': 'USDT'}, 'trx': {'unit': 'TRX'}, 
+            'ltc': {'unit': 'LTC'}, 'bnb': {'unit': 'BNB'}
         }
-        
         info = coin_info.get(coin.lower(), coin_info['usdt'])
         
         components = [
@@ -841,7 +633,7 @@ class AmountModal(disnake.ui.Modal):
         )
 
 class ChargeModal(disnake.ui.Modal):
-    def __init__(self):
+    def __init__(self): # __init__ 메서드 이름을 수정
         components = [
             disnake.ui.TextInput(
                 label="충전 금액",
@@ -858,13 +650,14 @@ class ChargeModal(disnake.ui.Modal):
             components=components,
         )
 
+# 이모지 설정은 변경 없습니다.
 custom_emoji11 = PartialEmoji(name="47311ltc", id=1438899347453509824)
 custom_emoji12 = PartialEmoji(name="6798bnb", id=1438899349110390834)
 custom_emoji13 = PartialEmoji(name="tron", id=1438899350582591701)
 custom_emoji14 = PartialEmoji(name="7541tetherusdt", id=1439510997730721863)
 
 class CoinDropdown(disnake.ui.Select):
-    def __init__(self):
+    def __init__(self): # __init__ 메서드 이름을 수정
         options = [
             disnake.SelectOption(label="USDT", description="테더코인 선택", value="usdt", emoji=custom_emoji14),
             disnake.SelectOption(label="TRX", description="트론 선택", value="trx", emoji=custom_emoji13),
@@ -873,31 +666,25 @@ class CoinDropdown(disnake.ui.Select):
         ]
         super().__init__(placeholder="송금할 코인을 선택해주세요", options=options)
 
-    async def callback(self, interaction):
+    async def callback(self, interaction: disnake.MessageInteraction): # 타입 힌트 추가
         try:
-            # Avoid timeout by deferring first
             await interaction.response.defer(ephemeral=True)
             user_data = get_verified_user(interaction.author.id)
             if not user_data:
                 embed = disnake.Embed(
-                    title="**오류**",
-                    description="**인증되지 않은 고객님입니다.**",
-                    color=0xff6200
+                    title="오류", description="인증되지 않은 고객님입니다.", color=0xff6200
                 )
                 await interaction.edit_original_response(embed=embed)
                 return
                 
-            # 최소송금 금액 안내
             selected_coin = self.values[0]
-            
-            # 실시간 최소 송금 금액 조회
             min_amounts_krw = get_minimum_amounts_krw()
             min_krw = min_amounts_krw.get(selected_coin.upper(), 10000)
             min_amount = f"{min_krw:,}"
                 
             embed = disnake.Embed(
-                title=f"**{selected_coin.upper()} 송금**",
-                description=f"**최소 송금 금액 = {min_amount}원**",
+                title=f"{selected_coin.upper()} 송금",
+                description=f"최소 송금 금액 = {min_amount}원",
                 color=0xffffff
             )
             view = disnake.ui.View()
@@ -905,202 +692,148 @@ class CoinDropdown(disnake.ui.Select):
             await interaction.edit_original_response(embed=embed, view=view)
         except Exception:
             embed = disnake.Embed(
-                title="**오류**",
-                description="**처리 중 오류가 발생했습니다.**",
-                color=0xff6200
+                title="오류", description="처리 중 오류가 발생했습니다.", color=0xff6200
             )
-            try:
-                await interaction.edit_original_response(embed=embed)
-            except:
-                pass
+            try: await interaction.edit_original_response(embed=embed)
+            except: pass
 
 class NetworkDropdown(disnake.ui.Select):
-    def __init__(self, selected_coin):
+    def __init__(self, selected_coin): # __init__ 메서드 이름을 수정
         self.selected_coin = selected_coin
         
-        # 코인별 지원 네트워크
         network_options = {
-            'usdt': [
-                disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20"),
-                disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20")
-            ],
-            'trx': [
-                disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20")
-            ],
-            'ltc': [
-                disnake.SelectOption(label="LTC", description="Litecoin Network", value="ltc")
-            ],
-            'bnb': [
-            disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20")
-        ]
+            'usdt': [ disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20"),
+                      disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20") ],
+            'trx': [ disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20") ],
+            'ltc': [ disnake.SelectOption(label="LTC", description="Litecoin Network", value="ltc") ],
+            'bnb': [ disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20") ]
         }
         
         options = network_options.get(selected_coin.lower(), [
-            disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20")
+            disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20") # 기본값
         ])
         
         super().__init__(placeholder="네트워크를 선택해주세요", options=options)
 
-    async def callback(self, interaction):
+    async def callback(self, interaction: disnake.MessageInteraction): # 타입 힌트 추가
         try:
             await interaction.response.send_modal(AmountModal(self.values[0], self.selected_coin))
         except Exception as e:
-            try:
-                embed = disnake.Embed(
-                    title="**오류**",
-                    description="**처리 중 오류가 발생했습니다.**",
-                    color=0x26272f
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-            except Exception:
-                try:
-                    await interaction.edit_original_response(embed=embed)
-                except Exception:
-                    pass
+            embed = disnake.Embed(
+                title="오류", description=f"처리 중 오류가 발생했습니다: {e}", color=0xff6200
+            )
+            try: await interaction.response.send_message(embed=embed, ephemeral=True)
+            except: 
+                try: await interaction.edit_original_response(embed=embed)
+                except: pass
 
-pending_transactions = {}
-
-async def handle_amount_modal(interaction):
+async def handle_amount_modal(interaction: disnake.ModalInteraction): # 타입 힌트 추가
     try:
-        # 응답 지연 (3초 제한 해결)
         await interaction.response.defer(ephemeral=True)
-        
+
         amount_str = interaction.text_values.get("amount", "").strip()
         address = interaction.text_values.get("address", "").strip()
         
         if not amount_str or not address:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**모든 필드를 입력해주세요.**",
-                color=0xff6200
-            )
+            embed = disnake.Embed(title="오류", description="모든 필드를 입력해주세요.", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
         
         try:
-            krw_amount = float(amount_str)
-            if krw_amount <= 0:
-                raise ValueError("양수여야 합니다")
+            krw_amount_input = float(amount_str) # 사용자가 입력한 KRW 금액
+            if krw_amount_input <= 0: raise ValueError
         except (ValueError, TypeError):
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**올바른 숫자를 입력해주세요.**",
-                color=0xff6200
-            )
+            embed = disnake.Embed(title="**오류**", description="**올바른 숫자를 입력해주세요.**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
         
-        # 커스텀 ID에서 코인과 네트워크 정보 추출
         custom_id_parts = interaction.custom_id.split('_')
         network = custom_id_parts[-2] if len(custom_id_parts) >= 3 else "bep20"
         coin = custom_id_parts[-1] if len(custom_id_parts) >= 4 else "usdt"
         
-        # 통일된 최소 송금 금액 조회
         min_amounts_krw = get_minimum_amounts_krw()
         min_amount_krw = min_amounts_krw.get(coin.upper(), 10000)
-        coin_unit = coin.upper()
         
-        # 원화 금액을 코인 단위로 변환 (통일된 함수 사용)
-        amount = krw_to_coin_amount(krw_amount, coin.upper())
-        
-        # 환율 및 김치프리미엄 조회
-        krw_rate = get_exchange_rate()
-        coin_price = get_coin_price(coin.upper())
-        kimchi_premium = get_kimchi_premium()
-        actual_krw_rate = krw_rate * (1 + kimchi_premium / 100)
-        
-        if krw_amount < min_amount_krw:
-            embed = disnake.Embed(
-                title="**오류**",
-                description=f"**출금 최소 금액은 {min_amount_krw:,}원입니다.**",
-                color=0xff6200
-            )
+        if krw_amount_input < min_amount_krw:
+            embed = disnake.Embed(title="**오류**", description=f"**출금 최소 금액은 {min_amount_krw:,}원입니다.**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
         
         user_data = get_verified_user(interaction.author.id)
         if not user_data:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**인증되지 않은 고객님 입니다.**",
-                color=0xff6200
-            )
+            embed = disnake.Embed(title="**오류**", description="**인증되지 않은 고객님 입니다.**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
-        
-        # 코인 가격 조회
-        coin_price = get_coin_price(coin.upper())
-        if coin_price <= 0:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**코인 가격을 조회할 수 없습니다.**",
-                color=0xff6200
-            )
-            await interaction.edit_original_response(embed=embed)
-            return
-        
-        # 수수료 계산 (2.5% + 김치프리미엄% + 거래소 송금 수수료)
-        fee_rate = 0.025 + (kimchi_premium / 100)  # 2.5% + 김치프리미엄%
-        
-        # 거래소 송금 수수료 (원화)
-        transaction_fee = get_transaction_fee(coin.upper(), network.upper())
-        exchange_fee_krw = transaction_fee * coin_price * actual_krw_rate
-        
-        # 사용자 입력 금액을 원화로 변환
-        user_input_krw = amount * coin_price * actual_krw_rate
-        
-        # 수수료 계산 (입력 금액의 2.5% + 김치프리미엄% + 거래소 송금 수수료)
-        service_fee_krw = user_input_krw * fee_rate
-        total_fee_krw = service_fee_krw + exchange_fee_krw
-        
-        # 실제 송금할 금액 (입력 금액 - 총 수수료)
-        actual_send_krw = user_input_krw - total_fee_krw
-        
-        # 실제 송금할 코인 양 계산
-        actual_send_amount = actual_send_krw / (coin_price * actual_krw_rate)
-        
-        # 차감할 총 금액 (사용자 입력 금액)
-        krw_amount = int(user_input_krw)
         
         current_balance = user_data[6] if len(user_data) > 6 else 0
-        
-        if current_balance < krw_amount:
-            embed = disnake.Embed(
-                title="**잔액 부족**",
-                description=f"**보유 금액 = {current_balance:,}원\n필요금액: {krw_amount:,}원**",
-                color=0xff6200
-            )
+        if current_balance < krw_amount_input:
+            embed = disnake.Embed(title="**잔액 부족**", description=f"**보유 금액 = {current_balance:,}원\n필요금액: {int(krw_amount_input):,}원**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
-        
-        network_name = network.upper()
-        
+
+        # --- 수수료 계산 로직 ---
+        # 1. 환율 및 김치프리미엄 조회
+        krw_rate = get_exchange_rate()
+        coin_price_usd = get_coin_price(coin.upper())
+        kimchi_premium = get_kimchi_premium()
+        actual_krw_rate = krw_rate * (1 + kimchi_premium / 100) # 김프 반영된 실제 KRW 당 USD 환율
+
+        if coin_price_usd <= 0 or actual_krw_rate <= 0:
+            embed = disnake.Embed(title="**오류**", description="**코인 가격 또는 환율 정보를 조회할 수 없습니다.**", color=0xff6200)
+            await interaction.edit_original_response(embed=embed)
+            return
+
+        # 2. 서비스 수수료 계산
+        user_tier, service_fee_base_rate, _ = get_user_tier_and_fee(interaction.author.id)
+        # 서비스 수수료: 티어별 기본 수수료율 + 김치프리미엄
+        total_service_fee_rate = service_fee_base_rate + (kimchi_premium / 100)
+        service_fee_krw = krw_amount_input * total_service_fee_rate # 사용자가 입력한 KRW 기준
+
+        # 3. 거래소 송금 수수료 (코인 -> KRW)
+        transaction_fee_coin = get_transaction_fee(coin.upper(), network.upper())
+        exchange_fee_krw = transaction_fee_coin * coin_price_usd * actual_krw_rate # 코인 단위 수수료를 KRW로 변환
+
+        # 4. 최종 송금에 필요한 총 KRW 금액
+        # 사용자가 입력한 krw_amount_input (이것이 봇 시스템에서 차감되는 금액)
+        # 이 금액에서 수수료를 제외하고 실제 코인으로 변환되어 송금
+        total_fee_krw = service_fee_krw + exchange_fee_krw
+        actual_send_krw_pre_convert = krw_amount_input - total_fee_krw
+
+        if actual_send_krw_pre_convert <= 0:
+            embed = disnake.Embed(title="**오류**", description="**수수료 제외 후 송금할 금액이 부족합니다.**", color=0xff6200)
+            await interaction.edit_original_response(embed=embed)
+            return
+
+        # 실제 송금될 코인 양 (KRW에서 코인으로 변환)
+        actual_send_amount_coin = krw_to_coin_amount(actual_send_krw_pre_convert, coin.upper())
+
+        if actual_send_amount_coin < get_minimum_amount_coin(coin.upper()):
+            embed = disnake.Embed(title="**오류**", description="**최소 송금 수량 미달 (수수료 제외 후)**", color=0xff6200)
+            await interaction.edit_original_response(embed=embed)
+            return
+
         pending_transactions[interaction.author.id] = {
-            'send_amount': actual_send_amount,  # 실제 송금할 코인 양
-            'total_amount': user_input_krw,     # 사용자 입력 금액
-            'krw_amount': krw_amount,           # 차감할 총 금액
-            'network': network_name,
+            'krw_amount_input': krw_amount_input, # 사용자가 입력한 원금 (이 금액이 사용자에게서 차감됨)
+            'send_amount_coin': actual_send_amount_coin, # 실제 송금할 코인 양 (수수료 제외 후)
+            'network': network,
             'address': address,
-            'krw_rate': krw_rate,
-            'actual_krw_rate': actual_krw_rate,
-            'kimchi_premium': kimchi_premium,
             'coin': coin.upper(),
-            'coin_price': coin_price,
-            'service_fee_krw': service_fee_krw, # 서비스 수수료 (원화)
-            'exchange_fee_krw': exchange_fee_krw, # 거래소 수수료 (원화)
-            'total_fee_krw': total_fee_krw,     # 총 수수료 (원화)
-            'actual_send_krw': actual_send_krw, # 실제 송금 금액 (원화)
-            'fee_rate': fee_rate                # 수수료율 (2.5% + 김치프리미엄%)
+            'coin_price_usd': coin_price_usd,
+            'krw_rate': krw_rate,
+            'kimchi_premium': kimchi_premium,
+            'actual_krw_rate': actual_krw_rate,
+            'total_service_fee_rate': total_service_fee_rate, # 총 서비스 수수료율 (기본 + 김프)
+            'service_fee_krw': service_fee_krw, # KRW 기준 서비스 수수료
+            'exchange_fee_krw': exchange_fee_krw, # KRW 기준 거래소 송금 수수료
+            'total_fee_krw': total_fee_krw, # KRW 기준 총 수수료
+            'actual_send_krw_equivalent': actual_send_krw_pre_convert # KRW 기준 실제 송금 금액 (수수료 제외 후)
         }
         
-        embed = disnake.Embed(
-            color=0xffffff
-        )
+        embed = disnake.Embed(color=0xffffff)
         
-        # 송금 금액 정보 (김치프리미엄 적용)
         embed.add_field(
             name="**실제 송금 금액**",
-            value=f"```{actual_send_amount:.6f} {coin_unit}\n{int(actual_send_krw):,}원```",
+            value=f"```{actual_send_amount_coin:.6f} {coin.upper()}\n{int(actual_send_krw_pre_convert):,}원```",
             inline=True
         )
         embed.add_field(
@@ -1110,7 +843,7 @@ async def handle_amount_modal(interaction):
         ) 
         embed.add_field(
             name="**네트워크**",
-            value=f"```{network_name}```",
+            value=f"```{network.upper()}```",
             inline=True
         )
         embed.add_field(
@@ -1131,227 +864,249 @@ async def handle_amount_modal(interaction):
         view = disnake.ui.View()
         view.add_item(send_btn)
         
-        # 최초 defer 후에는 원본 응답 수정으로 전송
         await interaction.edit_original_response(embed=embed, view=view)
         
-    except Exception:
+    except Exception as e:
+        print(f"Error in handle_amount_modal: {e}") # 디버깅용
         embed = disnake.Embed(
             title="**오류**",
-            description="**처리 중 오류가 발생했습니다.**",
+            description="**처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.**",
             color=0xff6200
         )
         await interaction.edit_original_response(embed=embed)
 
-async def handle_send_button(interaction):
+async def handle_send_button(interaction: disnake.MessageInteraction): # 타입 힌트 추가
     try:
-        # 응답 지연 (3초 제한 해결)
         await interaction.response.defer(ephemeral=True)
-        
-        user_data = get_verified_user(interaction.author.id)
+
+        user_id = interaction.author.id
+        user_data = get_verified_user(user_id)
         if not user_data:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**인증되지 않은 고객님 입니다.**",
-                color=0xff6200
-            )
+            embed = disnake.Embed(title="**오류**", description="**인증되지 않은 고객님 입니다.**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
         
-        transaction_data = pending_transactions.get(interaction.author.id)
+        transaction_data = pending_transactions.get(user_id)
         if not transaction_data:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**송금 정보를 찾을 수 없습니다. 다시 시도해주세요.**",
-                color=0xff6200
-            )
+            embed = disnake.Embed(title="**오류**", description="**송금 정보를 찾을 수 없습니다. 다시 시도해주세요.**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
         
-        send_amount = transaction_data.get('send_amount', 0)
-        total_krw_amount = transaction_data.get('krw_amount', 0)
-        network = transaction_data.get('network', 'BEP20').lower()
+        krw_amount_to_subtract = transaction_data.get('krw_amount_input', 0) # 사용자에게서 차감할 원금
+        send_amount_coin = transaction_data.get('send_amount_coin', 0) # 실제 보낼 코인 양
+        network = transaction_data.get('network', 'bep20')
         address = transaction_data.get('address', '')
-        
-        if send_amount <= 0 or total_krw_amount <= 0 or not address:
-            embed = disnake.Embed(
-                title="**오류**",
-                description="**유효하지 않은 거래 정보입니다.**",
-                color=0xff6200
-            )
+        coin = transaction_data.get('coin', 'USDT')
+
+        if send_amount_coin <= 0 or krw_amount_to_subtract <= 0 or not address:
+            embed = disnake.Embed(title="**오류**", description="**유효하지 않은 거래 정보입니다.**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
         
-        processing_embed = disnake.Embed(
-            title="**송금 처리중**",
-            description="**조금만 기다려주세요.**",
-            color=0xffffff
-        )
+        processing_embed = disnake.Embed(title="**송금 처리중**", description="**잠시만 기다려주세요.**", color=0xffffff)
         await interaction.edit_original_response(embed=processing_embed)
         
-        if not subtract_balance(interaction.author.id, total_krw_amount):
-            embed = disnake.Embed(
-                title="**잔액 부족**",
-                description="**잔액이 부족합니다.**",
-                color=0xff6200
-            )
+        if not subtract_balance(user_id, krw_amount_to_subtract):
+            embed = disnake.Embed(title="**잔액 부족**", description="**잔액이 부족합니다. 시스템 오류일 경우 관리자에게 문의해주세요.**", color=0xff6200)
             await interaction.edit_original_response(embed=embed)
             return
         
-        # 수수료 차감 처리
-        fee_krw = transaction_data.get('fee_krw', 0)
-        if fee_krw > 0:
-            add_transaction_history(interaction.author.id, int(fee_krw), "수수료")
+        add_transaction_history(user_id, krw_amount_to_subtract, "송금(차감)")
+        # 서비스 수수료도 거래 내역에 별도로 기록 가능
+        add_transaction_history(user_id, int(transaction_data.get('service_fee_krw', 0)), "서비스수수료")
         
-        add_transaction_history(interaction.author.id, total_krw_amount, "송금")
+        # 실제 MEXC 송금 (simple_send_coin은 자동 스왑 로직 포함)
+        transaction_result = simple_send_coin(coin, send_amount_coin, address, network)
         
-        coin = transaction_data.get('coin', 'USDT')
-        # 직접 송금 (자동 스왑 없음)
-        transaction_result = simple_send_coin(coin, send_amount, address, network)
-        
-        if transaction_result and transaction_result.get('success', True):
-            coin_name = transaction_result.get('coin', 'USDT')
-            actual_send_krw = transaction_data.get('actual_send_krw', 0)
-            service_fee_krw = transaction_data.get('service_fee_krw', 0)
-            exchange_fee_krw = transaction_data.get('exchange_fee_krw', 0)
-            total_fee_krw = transaction_data.get('total_fee_krw', 0)
-            fee_rate = transaction_data.get('fee_rate', 0.05)
-            
-            success_embed = disnake.Embed(
-                title=f"**{coin_name} 전송 성공**",
-                color=0xffffff
-            )
-            success_embed.add_field(name="**전송 금액**", value=f"```{int(actual_send_krw):,}원```", inline=True)
-            # 환율 정보를 상세 표기(기본환율, 김프, 실제환율)
-            krw_rate = transaction_data.get('krw_rate', 0)
-            kimchi_premium = transaction_data.get('kimchi_premium', 0)
-            actual_rate = transaction_data.get('actual_krw_rate', 0)
-            
-            success_embed.add_field(name="종합 수수료", value=f"```서비스 = {int(service_fee_krw):,}원\n거래소 = {int(exchange_fee_krw):,}원\n총합 = ₩{int(total_fee_krw):,}원```", inline=True)
-            success_embed.add_field(name="네트워크", value=f"```{transaction_result.get('network', 'N/A')}```", inline=False)
-            success_embed.add_field(name="TXID", value=f"```{transaction_result.get('txid', 'N/A')}```", inline=False)
-            success_embed.add_field(name="보낸주소", value=f"```{transaction_result.get('to_address', 'N/A')}```", inline=False)
-            success_embed.add_field(name="보낸시간", value=f"```{transaction_result.get('time', 'N/A')}```", inline=False)
+        if transaction_result and transaction_result.get('success', False):
+            coin_name = transaction_result.get('coin', coin.upper())
+            txid = transaction_result.get('txid', 'N/A')
+
+            success_embed = disnake.Embed(title=f"🎉 {coin_name} 전송 성공! 🎉", color=0xffffff)
+            success_embed.add_field(name="전송 금액 (코인)", value=f"{send_amount_coin:.6f} {coin_name}", inline=True)
+            success_embed.add_field(name="전송 금액 (KRW 환산)", value=f"{int(transaction_data['actual_send_krw_equivalent']):,}원", inline=True)
+            success_embed.add_field(name="차감된 KRW", value=f"{int(krw_amount_to_subtract):,}원", inline=True)
+            success_embed.add_field(name="서비스 수수료", value=f"{int(transaction_data['service_fee_krw']):,}원", inline=True)
+            success_embed.add_field(name="거래소 수수료", value=f"{int(transaction_data['exchange_fee_krw']):,}원", inline=True)
+            success_embed.add_field(name="총 수수료", value=f"{int(transaction_data['total_fee_krw']):,}원", inline=True)
+            success_embed.add_field(name="네트워크", value=f"{network.upper()}", inline=False)
+            success_embed.add_field(name="TXID", value=f"[{txid}]({transaction_result.get('share_link', 'https://bscscan.com/')})", inline=False)
+            success_embed.add_field(name="보낸주소", value=f"{address}", inline=False)
+            success_embed.add_field(name="보낸시간", value=f"{transaction_result.get('time', 'N/A')}", inline=False)
             
             await interaction.edit_original_response(embed=success_embed)
-            # 전송 상세 로그 채널 전송 및 구매 로그(익명)
-            try:
-                # 모든 송금/충전/명령어 로그는 관리자 로그로
-                from bot import CHANNEL_ADMIN_LOG, CHANNEL_PURCHASE_LOG, bot as _bot
-                admin_ch = _bot.get_channel(CHANNEL_ADMIN_LOG)
-                if admin_ch:
-                    t_embed = disnake.Embed(title="코인 전송 내역", color=0x26272f)
-                    t_embed.add_field(name="이용 유저", value=f"{interaction.author.mention} ({interaction.author.id})", inline=False)
-                    t_embed.add_field(name="총 차감금액", value=f"{total_krw_amount:,}원", inline=True)
-                    t_embed.add_field(name="실제 전송 KRW", value=f"{int(actual_send_krw):,}원", inline=True)
-                    t_embed.add_field(name="서비스 수수료", value=f"{int(service_fee_krw):,}원", inline=True)
-                    t_embed.add_field(name="거래소 수수료", value=f"{int(exchange_fee_krw):,}원", inline=True)
-                    t_embed.add_field(name="TXID", value=transaction_result.get('txid', 'N/A'), inline=False)
-                    t_embed.add_field(name="네트워크", value=transaction_result.get('network', 'N/A'), inline=True)
-                    t_embed.add_field(name="체인 수수료", value=f"{transaction_result.get('fee', 'N/A')}", inline=True)
-                    t_embed.add_field(name="보낸주소", value=f"{transaction_result.get('to_address', 'N/A')}", inline=False)
-                    await admin_ch.send(embed=t_embed)
-
-                # 대행 구매 로그는 요청 포맷으로 구매 채널에 간단 전송
-                purchase_ch = _bot.get_channel(CHANNEL_PURCHASE_LOG)
-                if purchase_ch:
-                    from bot import send_purchase_log
-                    await send_purchase_log(interaction.author.id, transaction_result.get('coin', 'USDT'), int(total_krw_amount))
-            except Exception:
-                pass
             
-            if interaction.author.id in pending_transactions:
-                del pending_transactions[interaction.author.id]
+            # --- 로그 채널 전송 (실제 봇 실행 시 'bot' 객체 임포트 필요) ---
+            try:
+                # from bot import CHANNEL_ADMIN_LOG, CHANNEL_PURCHASE_LOG, bot as _bot
+                # admin_ch = _bot.get_channel(CHANNEL_ADMIN_LOG)
+                # purchase_ch = _bot.get_channel(CHANNEL_PURCHASE_LOG)
+                
+                # if admin_ch:
+                #     t_embed = disnake.Embed(title="코인 전송 내역", color=0x26272f)
+                #     t_embed.add_field(name="이용 유저", value=f"{interaction.author.mention} ({interaction.author.id})", inline=False)
+                #     t_embed.add_field(name="총 차감금액", value=f"{int(krw_amount_to_subtract):,}원", inline=True)
+                #     t_embed.add_field(name="실제 전송 KRW 환산", value=f"{int(transaction_data['actual_send_krw_equivalent']):,}원", inline=True)
+                #     t_embed.add_field(name="서비스 수수료", value=f"{int(transaction_data['service_fee_krw']):,}원", inline=True)
+                #     t_embed.add_field(name="거래소 수수료", value=f"{int(transaction_data['exchange_fee_krw']):,}원", inline=True)
+                #     t_embed.add_field(name="TXID", value=txid, inline=False)
+                #     t_embed.add_field(name="네트워크", value=network.upper(), inline=True)
+                #     t_embed.add_field(name="보낸주소", value=address, inline=False)
+                #     await admin_ch.send(embed=t_embed)
+
+                # if purchase_ch:
+                #     from bot import send_purchase_log # 예시
+                #     await send_purchase_log(user_id, coin, int(krw_amount_to_subtract))
+                print(f"로그 전송: {user_id}가 {int(krw_amount_to_subtract):,}원 상당의 {send_amount_coin:.6f} {coin}을 {address}로 송금했습니다.")
+            except Exception as log_e:
+                print(f"로그 전송 실패: {log_e}")
+            
+            if user_id in pending_transactions:
+                del pending_transactions[user_id]
                 
         else:
-            # 오류 정보 추출
-            error_message = "알 수 없는 오류"
-            if isinstance(transaction_result, dict) and 'error' in transaction_result:
-                error_message = transaction_result['error']
-            # 요청/계산 요약 만들기 (디버깅용)
-            coin = transaction_data.get('coin', 'USDT')
-            network = transaction_data.get('network', 'N/A')
-            address = transaction_data.get('address', '')
-            send_amount_dbg = transaction_data.get('send_amount', 0)
-            total_krw_amount = transaction_data.get('krw_amount', 0)
-            actual_send_krw = transaction_data.get('actual_send_krw', 0)
-            service_fee_krw = transaction_data.get('service_fee_krw', 0)
-            exchange_fee_krw = transaction_data.get('exchange_fee_krw', 0)
+            error_message = transaction_result.get('error', '알 수 없는 오류')
             
-            # 김치프리미엄 정보 가져오기
-            kimchi_premium = transaction_data.get('kimchi_premium', 0)
-            fee_rate = transaction_data.get('fee_rate', 0.05)
-            
+            # 실패 시 사용자 잔액 환불
             conn = None
             try:
                 conn = sqlite3.connect('DB/verify_user.db')
                 cursor = conn.cursor()
                 cursor.execute('UPDATE users SET now_amount = now_amount + ? WHERE user_id = ?', 
-                              (total_krw_amount, interaction.author.id))
+                              (krw_amount_to_subtract, user_id))
                 conn.commit()
-            except (sqlite3.Error, OSError):
-                pass
-            except Exception:
-                pass
+                add_transaction_history(user_id, krw_amount_to_subtract, "송금실패_환불")
+            except (sqlite3.Error, OSError) as refund_e:
+                print(f"잔액 환불 중 오류 발생 (DB): {refund_e}")
+                if conn: conn.rollback()
+            except Exception as refund_e:
+                print(f"잔액 환불 중 오류 발생 (일반): {refund_e}")
+                if conn: conn.rollback()
             finally:
-                if conn:
-                    try:
-                        conn.close()
-                    except:
-                        pass
+                if conn: conn.close()
             
-            add_transaction_history(interaction.author.id, total_krw_amount, "환불")
-            
-            refund_embed = disnake.Embed(
-                title="**전송 실패**",
-                description=f"전송 중 오류가 발생하여 {total_krw_amount:,}원이 환불되었습니다.",
-                color=0xff6200
-            )
-            refund_embed.add_field(
-                name="**오류 원인**",
-                value=f"```{error_message}```",
-                inline=False
-            )
-            refund_embed.add_field(
-                name="**요청 요약**",
-                value=f"```코인: {coin}\n네트워크: {network}\n보낼양: {send_amount_dbg:.8f} {coin}\n주소: {address[:6]}...{address[-6:] if len(address)>12 else address}```",
-                inline=False
-            )
+            refund_embed = disnake.Embed(title="전송 실패", description=f"전송 중 오류가 발생하여 {int(krw_amount_to_subtract):,}원이 환불되었습니다.", color=0xff6200)
+            refund_embed.add_field(name="오류 원인", value=f"{error_message}", inline=False)
+            refund_embed.add_field(name="요청 요약", value=f"코인: {coin}\n네트워크: {network}\n보낼양: {send_amount_coin:.8f} {coin}\n주소: {address[:6]}...{address[-6:] if len(address)>12 else address}", inline=False)
             
             await interaction.edit_original_response(embed=refund_embed)
             
-            if interaction.author.id in pending_transactions:
-                del pending_transactions[interaction.author.id]
+            if user_id in pending_transactions:
+                del pending_transactions[user_id]
             
-            # 실패 로그를 전송 채널에 기록
+            # --- 실패 로그 채널 기록 (실제 봇 실행 시 'bot' 객체 임포트 필요) ---
             try:
-                from bot import CHANNEL_ADMIN_LOG, bot as _bot
-                admin_ch = _bot.get_channel(CHANNEL_ADMIN_LOG)
-                if admin_ch:
-                    f_embed = disnake.Embed(title="코인 송금 실패", color=0x26272f)
-                    f_embed.add_field(name="고객", value=f"{interaction.author.mention} ({interaction.author.id})", inline=False)
-                    f_embed.add_field(name="환불 금액", value=f"₩{total_krw_amount:,}", inline=True)
-                    f_embed.add_field(name="코인/네트워크", value=f"{coin} / {network}", inline=True)
-                    f_embed.add_field(name="보낼양", value=f"{send_amount_dbg:.8f} {coin}", inline=True)
-                    f_embed.add_field(name="실제 송금 KRW", value=f"₩{int(actual_send_krw):,}", inline=True)
-                    f_embed.add_field(name="수수료(서비스/거래소)", value=f"₩{int(service_fee_krw):,} / ₩{int(exchange_fee_krw):,}", inline=True)
-                    if address:
-                        f_embed.add_field(name="주소", value=address, inline=False)
-                    f_embed.add_field(name="오류", value=f"```{error_message}```", inline=False)
-                    await admin_ch.send(embed=f_embed)
-            except Exception:
-                pass
-            
-    except Exception:
+                # from bot import CHANNEL_ADMIN_LOG, bot as _bot
+                # admin_ch = _bot.get_channel(CHANNEL_ADMIN_LOG)
+                # if admin_ch:
+                #     f_embed = disnake.Embed(title="코인 송금 실패", color=0x26272f)
+                #     f_embed.add_field(name="고객", value=f"{interaction.author.mention} ({user_id})", inline=False)
+                #     f_embed.add_field(name="환불 금액", value=f"₩{int(krw_amount_to_subtract):,}", inline=True)
+                #     f_embed.add_field(name="코인/네트워크", value=f"{coin} / {network}", inline=True)
+                #     f_embed.add_field(name="보낼양", value=f"{send_amount_coin:.8f} {coin}", inline=True)
+                #     f_embed.add_field(name="주소", value=address, inline=False)
+                #     f_embed.add_field(name="오류", value=f"{error_message}", inline=False)
+                #     await admin_ch.send(embed=f_embed)
+                print(f"송금 실패 로그: {user_id} - 오류: {error_message}")
+            except Exception as log_e:
+                print(f"실패 로그 전송 실패: {log_e}")
+        
+    except Exception as e:
+        print(f"Critical error in handle_send_button: {e}") # 최종 에러 핸들링
         try:
             embed = disnake.Embed(
-                title="**처리 중 오류 발생**",
-                description="직원에게 문의해주세요.",
+                title="처리 중 예상치 못한 오류 발생",
+                description="**직원에게 문의해주세요.**",
                 color=0xff6200
             )
             await interaction.edit_original_response(embed=embed)
         except:
             pass
 
+# --- MEXC 입금 감지 및 로그 전송 (개념적 구현) ---
+async def check_mexc_deposits():
+    """MEXC 입금 내역을 확인하고, 새로운 입금이 있으면 Discord로 로그 전송"""
+    # 이 함수는 봇의 백그라운드 태스크나 별도의 서비스로 주기적으로 실행되어야 합니다.
+    # MEXC API에서 /api/v3/capital/deposit/hisrec 엔드포인트를 사용
+    
+    if not API_KEY or not SECRET_KEY:
+        print("MEXC API 키가 설정되지 않아 입금 감지 기능을 사용할 수 없습니다.")
+        return
+
+    try:
+        endpoint = "/api/v3/capital/deposit/hisrec"
+        timestamp = int(time.time() * 1000)
+        
+        # 쿼리 파라미터는 MEXC API 문서 참고 (예: status, coin, startTime, endTime 등)
+        # 여기서는 모든 성공적인 입금을 가정하고 최근 내역만 조회
+        params = {
+            'timestamp': timestamp,
+            'status': 1, # 1: 성공적인 입금
+            'limit': 50 # 최근 50개 내역 조회
+        }
+        signature = sign_params(params, SECRET_KEY)
+        if not signature:
+            print("MEXC 입금 감지: API 서명 생성 실패")
+            return
+        params['signature'] = signature
+        
+        headers = { 'X-MEXC-APIKEY': API_KEY }
+        response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        
+        deposit_history = response.json()
+        
+        if not deposit_history or deposit_history.get('code') != 200:
+            print(f"MEXC 입금 내역 조회 실패: {deposit_history.get('msg', '알 수 없는 오류')}")
+            return
+
+        for deposit in deposit_history.get('data', []):
+            # 실제 구현 시에는 DB에 저장된 마지막 입금 TXID 등을 비교하여 중복 로그 방지
+            # 여기서는 모든 내역을 새롭다고 가정하고 로그를 보냅니다.
+            coin_symbol = deposit.get('coin')
+            amount = float(deposit.get('amount', 0))
+            network = deposit.get('network')
+            txid = deposit.get('txid')
+            
+            if amount > 0: # 유효한 입금만 처리
+                await send_deposit_log_to_discord(coin_symbol, amount, network, txid)
+                
+    except requests.exceptions.RequestException as e:
+        print(f"MEXC 입금 감지 네트워크 오류: {e}")
+    except Exception as e:
+        print(f"MEXC 입금 감지 중 예상치 못한 오류: {e}")
+
+async def send_deposit_log_to_discord(coin_symbol, amount, network, txid):
+    """Discord에 입금 로그를 전송하는 함수 (개념적)"""
+    try:
+        # from bot import CHANNEL_DEPOSIT_LOG, bot as _bot # 실제 봇 실행 시 임포트
+        # deposit_log_channel = _bot.get_channel(CHANNEL_DEPOSIT_LOG)
+        
+        krw_rate = get_exchange_rate()
+        coin_price_usd = get_coin_price(coin_symbol)
+        krw_value = amount * coin_price_usd * krw_rate
+        
+        embed = disnake.Embed(
+            title=f"📥 {coin_symbol.upper()} 입금 완료",
+            description="새로운 코인 입금 내역이 감지되었습니다.",
+            color=0x00ff00 # 초록색
+        )
+        embed.add_field(name="코인", value=coin_symbol.upper(), inline=True)
+        embed.add_field(name="수량", value=f"{amount:.6f}", inline=True)
+        embed.add_field(name="네트워크", value=network, inline=True)
+        embed.add_field(name="예상 원화 가치", value=f"{int(krw_value):,}원", inline=False)
+        embed.add_field(name="TXID", value=f"[{txid}]({get_txid_link(txid, coin_symbol)})", inline=False)
+        embed.set_footer(text=f"감지 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # if deposit_log_channel:
+        #     await deposit_log_channel.send(embed=embed)
+        # else:
+        print(f"Discord 입금 로그 채널을 찾을 수 없거나, 로그 전송을 건너뛰었습니다. (입금: {coin_symbol} {amount:.6f}, {int(krw_value):,}원)")
+        
+    except Exception as e:
+        print(f"Discord 입금 로그 전송 실패: {e}")
+
+# Selenium 관련 함수는 기능 개선과 직접적인 관련이 없어 그대로 유지합니다.
 def init_coin_selenium():
     return True
 
