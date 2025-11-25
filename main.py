@@ -1,7 +1,7 @@
-async def send_deposit_log_to_discord(coin_symbol, amount, network, txid):
-    """Discord에 입금 로그를 전송하는 함수 (개념적)"""
+async def send_deposit_log_to_discord(bot_instance, channel_id, coin_symbol, amount, network, txid):
+    """Discord에 입금 로그를 전송하는 함수 (bot 인스턴스와 채널 ID를 인자로 받음)"""
     try:
-        deposit_log_channel = _bot.get_channel(CHANNEL_DEPOSIT_LOG)
+        deposit_log_channel = bot_instance.get_channel(channel_id)
         
         krw_rate = get_exchange_rate()
         coin_price_usd = get_coin_price(coin_symbol)
@@ -27,7 +27,7 @@ async def send_deposit_log_to_discord(coin_symbol, amount, network, txid):
     except Exception as e:
         print(f"Discord 입금 로그 전송 실패: {e}")
 
-# Selenium 관련 함수는 기능 개선과 직접적인 관련이 없어 그대로 유지합니다.
+# Selenium 관련 함수는 그대로 유지
 def init_coin_selenium():
     return True
 
