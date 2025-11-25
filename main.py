@@ -1,35 +1,69 @@
-async def send_deposit_log_to_discord(bot_instance, channel_id, coin_symbol, amount, network, txid):
-    """Discord에 입금 로그를 전송하는 함수 (bot 인스턴스와 채널 ID를 인자로 받음)"""
-    try:
-        deposit_log_channel = bot_instance.get_channel(channel_id)
-        
-        krw_rate = get_exchange_rate()
-        coin_price_usd = get_coin_price(coin_symbol)
-        krw_value = amount * coin_price_usd * krw_rate
-        
-        embed = disnake.Embed(
-            title=f"📥 {coin_symbol.upper()} 입금 완료",
-            description="새로운 코인 입금 내역이 감지되었습니다.",
-            color=0x00ff00  # 초록색
+class AmountModal(disnake.ui.Modal):
+    def __init__(self, network, coin='usdt'):
+        self.network = network
+        self.coin = coin
+
+        min_amounts_krw = get_minimum_amounts_krw()
+        min_krw = min_amounts_krw.get(coin.upper(), 10000)
+
+        components = [
+            disnake.ui.TextInput(
+                label="금액",
+                placeholder=f"금액을 입력해주세요 (최소 {min_krw:,}원)",
+                custom_id="amount",
+                style=disnake.TextInputStyle.short,
+                min_length=1,
+                max_length=15,
+            ),
+            disnake.ui.TextInput(
+                label="코인 주소",
+                placeholder="송금 받으실 지갑 주소를 입력해주세요",
+                custom_id="address",
+                style=disnake.TextInputStyle.short,
+                min_length=10,
+                max_length=100,
+            )
+        ]
+        super().__init__(
+            title=f"{coin.upper()} 송금 정보",
+            custom_id=f"amount_modal_{network}_{coin}",
+            components=components,
         )
-        embed.add_field(name="**코인**", value=coin_symbol.upper(), inline=True)
-        embed.add_field(name="**수량**", value=f"{amount:.6f}", inline=True)
-        embed.add_field(name="**네트워크**", value=network, inline=True)
-        embed.add_field(name="**예상 원화 가치**", value=f"{int(krw_value):,}원", inline=False)
-        embed.add_field(name="**TXID**", value=f"[`{txid}`]({get_txid_link(txid, coin_symbol)})", inline=False)  # TXID 링크로 표시
-        embed.set_footer(text=f"감지 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        if deposit_log_channel:
-            await deposit_log_channel.send(embed=embed)
-        else:
-            print(f"Discord 입금 로그 채널을 찾을 수 없거나, 로그 전송을 건너뛰었습니다. (입금: {coin_symbol} {amount:.6f}, {int(krw_value):,}원, TXID: {txid})")
-            
-    except Exception as e:
-        print(f"Discord 입금 로그 전송 실패: {e}")
 
-# Selenium 관련 함수는 그대로 유지
-def init_coin_selenium():
-    return True
 
-def quit_driver():
-    pass
+class CoinDropdown(disnake.ui.Select):
+    def __init__(self):
+        options = [
+            disnake.SelectOption(label="USDT", description="테더코인 선택", value="usdt", emoji=custom_emoji14),
+            disnake.SelectOption(label="TRX", description="트론 선택", value="trx", emoji=custom_emoji13),
+            disnake.SelectOption(label="LTC", description="라이트코인 선택", value="ltc", emoji=custom_emoji11),
+            disnake.SelectOption(label="BNB", description="바이낸스코인 선택", value="bnb", emoji=custom_emoji12)
+        ]
+        super().__init__(placeholder="송금할 코인을 선택해주세요", options=options)
+
+
+class NetworkDropdown(disnake.ui.Select):
+    def __init__(self, selected_coin):
+        self.selected_coin = selected_coin
+
+        network_options = {
+            'usdt': [
+                disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20"),
+                disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20")
+            ],
+            'trx': [
+                disnake.SelectOption(label="TRC20", description="TRON Network", value="trc20")
+            ],
+            'ltc': [
+                disnake.SelectOption(label="LTC", description="Litecoin Network", value="ltc")
+            ],
+            'bnb': [
+                disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20")
+            ]
+        }
+
+        options = network_options.get(selected_coin.lower(), [
+            disnake.SelectOption(label="BEP20", description="BSC Network", value="bep20")
+        ])
+
+        super().__init__(placeholder="네트워크를 선택해주세요", options=options)
