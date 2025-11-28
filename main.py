@@ -8,8 +8,8 @@ from datetime import datetime
 from disnake import PartialEmoji, ui
 
 # MEXC API 설정
-API_KEY = "mx0vglLX8707xyrHda"
-SECRET_KEY = "135aa503ad0345b68c311db17697521b"
+API_KEY = ""
+SECRET_KEY = ""
 BASE_URL = "https://api.mexc.com"
 
 # 입고 로그 채널 ID 
