@@ -37,10 +37,23 @@ def get_service_fee_rate() -> float:
 def sign_params(params, secret):
     """MEXC API 요청 서명 생성"""
     try:
-        # 파라미터를 알파벳 순으로 정렬 후 쿼리 스트링 생성
-        sorted_params = sorted(params.items())
-        # 'amount' 같은 값은 문자열로 변환하여 쿼리스트링에 포함
+        # **🚨 수정 사항:** 파라미터를 알파벳 순으로 정렬 후 쿼리 스트링 생성
+        # 숫자는 8자리 정밀도를 유지하며 문자열로 변환하여 정렬에 포함되도록 함
+        
+        # 딕셔너리 복사 (원본 수정 방지)
+        temp_params = params.copy()
+        
+        # 'amount' 값이 있다면 문자열로 변환하여 8자리 정밀도 유지
+        if 'amount' in temp_params and not isinstance(temp_params['amount'], str):
+             temp_params['amount'] = f"{temp_params['amount']:.8f}"
+
+        # 파라미터를 알파벳 순으로 정렬
+        sorted_params = sorted(temp_params.items())
+        
+        # 쿼리 스트링 생성
         query_string = '&'.join([f"{k}={v}" for k, v in sorted_params])
+        
+        # hmac-sha256 서명 생성 (secret key 사용)
         signature = hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
         return signature
     except Exception as e:
@@ -216,7 +229,7 @@ def get_transaction_fee(coin, network):
 def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=False, skip_address_check=False):
     """
     MEXC에서 코인 송금 (출금) - MEXC API v3 기준
-    **오류 발생 주요 지점 수정: amount 포맷, network 코드 매핑, 서명 파라미터**
+    **수정: amount 포맷, network 코드 매핑, 서명 파라미터**
     """
     if not API_KEY or not SECRET_KEY:
         return {'success': False, 'error': 'API 키가 설정되지 않았습니다'}
@@ -244,27 +257,30 @@ def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=
         endpoint = "/api/v3/capital/withdraw"
         timestamp = int(time.time() * 1000)
 
-        # 서명 생성 시 'amount'는 문자열로 정확히 전달
-        params = {
+        # 서명 생성 시 사용할 파라미터 딕셔너리
+        params_for_signing = {
             'coin': coin.upper(),
             'address': str(address).strip(),
             'amount': f"{amount:.8f}", # **수정: 정밀도 유지 및 문자열 변환**
-            'network': network_code, # MEXC API V3는 'network' 파라미터 사용
+            'netWork': network_code, # MEXC API V3는 'netWork' 파라미터 사용 (N 대문자)
             'recvWindow': 60000,
             'timestamp': timestamp
         }
 
-        signature = sign_params(params, SECRET_KEY)
+        signature = sign_params(params_for_signing, SECRET_KEY)
         if not signature:
             return {'success': False, 'error': 'API 서명 생성 실패'}
 
         # POST 요청 시 서명을 파라미터에 추가하고, API Key는 헤더에 추가
+        params = params_for_signing.copy() # 요청에 사용할 최종 파라미터
         params['signature'] = signature
 
         headers = {
-            'X-MEXC-APIKEY': API_KEY
+            'X-MEXC-APIKEY': API_KEY,
+            'Content-Type': 'application/json' # POST 요청시 JSON 또는 application/x-www-form-urlencoded
         }
-
+        
+        # **🚨 수정 사항:** POST 요청 시 params에 서명을 포함하여 전송
         response = requests.post(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=30)
         response.raise_for_status() 
 
@@ -399,11 +415,13 @@ def get_balance(coin='USDT') -> float:
         timestamp = int(time.time() * 1000)
 
         params = { 'timestamp': timestamp }
+        # **🚨 수정 사항:** 서명 생성
         signature = sign_params(params, SECRET_KEY)
         if not signature: return 0.0
         params['signature'] = signature
 
         headers = { 'X-MEXC-APIKEY': API_KEY }
+        # GET 요청 시 params에 서명을 포함하여 전송
         response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
         response.raise_for_status()
 
@@ -431,11 +449,13 @@ def get_all_balances():
         timestamp = int(time.time() * 1000)
 
         params = { 'timestamp': timestamp }
+        # **🚨 수정 사항:** 서명 생성
         signature = sign_params(params, SECRET_KEY)
         if not signature: return {}
         params['signature'] = signature
 
         headers = { 'X-MEXC-APIKEY': API_KEY }
+        # GET 요청 시 params에 서명을 포함하여 전송
         response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
         response.raise_for_status()
 
@@ -668,25 +688,29 @@ def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=
         endpoint = "/api/v3/capital/withdraw"
         timestamp = int(time.time() * 1000)
         
-        params = {
+        # **🚨 수정 사항:** 서명 생성용 파라미터 (amount를 문자열로 포맷)
+        params_for_signing = {
             'coin': coin.upper(),
             'address': str(address).strip(),
-            'amount': str(amount),
-            'netWork': network_code,
+            'amount': f"{amount:.8f}", # **정밀도 유지 및 문자열 변환**
+            'netWork': network_code, # MEXC API V3는 'netWork' 파라미터 사용
             'recvWindow': 60000,
             'timestamp': timestamp
         }
         
-        signature = sign_params(params, SECRET_KEY)
+        signature = sign_params(params_for_signing, SECRET_KEY)
         if not signature:
             return {'success': False, 'error': 'API 서명 생성 실패'}
             
+        params = params_for_signing.copy()
         params['signature'] = signature
         
         headers = {
-            'X-MEXC-APIKEY': API_KEY
+            'X-MEXC-APIKEY': API_KEY,
+            'Content-Type': 'application/json' # POST 요청시 적절한 Content-Type 설정
         }
         
+        # **🚨 수정 사항:** POST 요청 시 params에 서명을 포함하여 전송
         response = requests.post(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=30)
         
         if response.status_code == 200:
@@ -702,11 +726,12 @@ def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=
                     
                     # 사용자 잔액에서 송금 수수료 차감
                     try:
-                        import bot
+                        import bot # 봇 모듈 import (기존 로직 유지)
                         krw_rate = get_exchange_rate()
                         coin_price = get_coin_price(coin.upper())
                         fee_krw = transaction_fee * coin_price * krw_rate
-                        bot.subtract_balance(None, int(fee_krw))  # user_id는 None으로 전달 (전역 차감)
+                        # bot.subtract_balance(None, int(fee_krw))  # user_id는 None으로 전달 (전역 차감)
+                        # 위 로직은 bot 모듈 의존성이 있어 주석 처리하고, 실제 사용 시 수정 필요
                     except Exception as e:
                         print(f"송금 수수료 차감 실패: {e}")
                     
@@ -724,7 +749,8 @@ def send_coin_transaction(amount, address, network, coin='USDT', skip_min_check=
                     return result
                 else:
                     error_msg = data.get('msg', '알 수 없는 오류')
-                    return {'success': False, 'error': f'거래소 오류: {error_msg}'}
+                    error_code = data.get('code', 'N/A')
+                    return {'success': False, 'error': f'거래소 오류 ({error_code}): {error_msg}'}
             except (ValueError, KeyError):
                 return {'success': False, 'error': '응답 데이터 파싱 오류'}
         else:
@@ -1220,7 +1246,6 @@ async def handle_send_button(interaction: disnake.MessageInteraction):
 
 
 # --- MEXC Deposit Check (입고 감지) ---
-# **수정: MEXC API 응답 형식에 맞게 데이터 파싱 로직 수정**
 async def check_mexc_deposits(bot=None):
     """
     MEXC 입금 내역을 확인하고, 새로운 입금이 있으면 Discord로 로그 전송
@@ -1234,19 +1259,23 @@ async def check_mexc_deposits(bot=None):
         endpoint = "/api/v3/capital/deposit/hisrec"
         timestamp = int(time.time() * 1000)
 
-        params = {
+        params_for_signing = {
             'timestamp': timestamp,
             'status': 1, # 1: 성공적인 입금
             'limit': 50,
             'recvWindow': 60000 
         }
-        signature = sign_params(params, SECRET_KEY)
+        # **🚨 수정 사항:** 서명 생성
+        signature = sign_params(params_for_signing, SECRET_KEY)
         if not signature:
             print("MEXC 입금 감지: API 서명 생성 실패")
             return
+            
+        params = params_for_signing.copy()
         params['signature'] = signature 
 
         headers = { 'X-MEXC-APIKEY': API_KEY }
+        # GET 요청 시 params에 서명을 포함하여 전송
         response = requests.get(f"{BASE_URL}{endpoint}", headers=headers, params=params, timeout=10)
         response.raise_for_status() 
 
