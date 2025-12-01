@@ -4,18 +4,18 @@ import os
 import logging
 from datetime import datetime
 
-# 로깅 설정 (파일 상단에서 한 번만 호출)
 logger = logging.getLogger(__name__)
-# 필요하면 아래 기본 설정 추가:
+# 필요 시 아래처럼 로깅 기본 설정을 추가해 주세요.
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# 상수
+# 상수 정의
 DEFAULT_ADMIN_ID = 1402654236570812467
 ADMIN_DB_PATH = 'DB/admin.db'
 VERIFY_USER_DB_PATH = 'DB/verify_user.db'
 VERIFIED_USERS_JSON_PATH = 'DB/verified_users.json'
 HISTORY_DB_PATH = 'DB/history.db'
 
+# JSON 데이터 로드
 def _load_json_data() -> dict:
     if os.path.exists(VERIFIED_USERS_JSON_PATH):
         try:
@@ -26,6 +26,7 @@ def _load_json_data() -> dict:
             return {}
     return {}
 
+# JSON 데이터 저장
 def _save_json_data(data: dict):
     try:
         os.makedirs(os.path.dirname(VERIFIED_USERS_JSON_PATH), exist_ok=True)
@@ -36,6 +37,7 @@ def _save_json_data(data: dict):
     except Exception as e:
         logger.error(f"JSON 저장 오류: {e}", exc_info=True)
 
+# 관리자 확인
 def check_admin(user_id: int) -> bool:
     if user_id == DEFAULT_ADMIN_ID:
         return True
@@ -50,6 +52,7 @@ def check_admin(user_id: int) -> bool:
         logger.error(f"직원 확인 오류: {e}", exc_info=True)
         return False
 
+# 관리자 추가
 def add_admin(user_id: int, username: str):
     try:
         conn = sqlite3.connect(ADMIN_DB_PATH)
@@ -61,6 +64,7 @@ def add_admin(user_id: int, username: str):
     except Exception as e:
         logger.error(f"직원 추가 오류: {e}", exc_info=True)
 
+# 관리자 삭제
 def remove_admin(user_id: int) -> bool:
     if user_id == DEFAULT_ADMIN_ID:
         logger.warning(f"기본 관리자({DEFAULT_ADMIN_ID})는 삭제할 수 없습니다.")
@@ -77,6 +81,7 @@ def remove_admin(user_id: int) -> bool:
         logger.error(f"직원 삭제 오류: {e}", exc_info=True)
         return False
 
+# JSON에 사용자 정보 저장
 def save_to_json(user_id: int, phone: str, dob: str, name: str, telecom: str):
     try:
         data = _load_json_data()
@@ -98,6 +103,7 @@ def save_to_json(user_id: int, phone: str, dob: str, name: str, telecom: str):
     except Exception as e:
         logger.error(f"JSON 저장 오류: {e}", exc_info=True)
 
+# 인증된 사용자 추가
 def add_verified_user(user_id: int, phone: str, dob: str, name: str, telecom: str):
     try:
         conn = sqlite3.connect(VERIFY_USER_DB_PATH)
@@ -114,6 +120,7 @@ def add_verified_user(user_id: int, phone: str, dob: str, name: str, telecom: st
     except Exception as e:
         logger.error(f"인증고객 추가 오류: {e}", exc_info=True)
 
+# 인증된 사용자 삭제
 def remove_verified_user(user_id: int):
     try:
         conn = sqlite3.connect(VERIFY_USER_DB_PATH)
@@ -129,6 +136,7 @@ def remove_verified_user(user_id: int):
     except Exception as e:
         logger.error(f"인증고객 삭제 오류: {e}", exc_info=True)
 
+# 거래내역 추가 (JSON + SQLite)
 def add_transaction(user_id: int, transaction_type: str, amount: int, coin_type: str='KRW', address: str=None, txid: str=None, api_txid: str=None, fee: int=0):
     try:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -165,6 +173,7 @@ def add_transaction(user_id: int, transaction_type: str, amount: int, coin_type:
     except Exception as e:
         logger.error(f"거래내역 저장 오류: {e}", exc_info=True)
 
+# 거래내역 조회 (JSON)
 def get_transaction_history(user_id: int, limit: int=100):
     try:
         data = _load_json_data()
@@ -174,6 +183,7 @@ def get_transaction_history(user_id: int, limit: int=100):
         logger.error(f"거래내역 조회 오류: {e}", exc_info=True)
         return []
 
+# JSON 잔액 업데이트
 def update_balance_in_json(user_id: int, total_amount: int, now_amount: int):
     try:
         data = _load_json_data()
@@ -187,6 +197,7 @@ def update_balance_in_json(user_id: int, total_amount: int, now_amount: int):
     except Exception as e:
         logger.error(f"JSON 잔액 업데이트 오류: {e}", exc_info=True)
 
+# 사용자 잔액 정보 조회 (SQLite)
 def get_user_balance_info(user_id: int):
     conn = None
     try:
@@ -200,6 +211,7 @@ def get_user_balance_info(user_id: int):
     finally:
         if conn: conn.close()
 
+# 잔액 추가 (충전)
 def add_balance(user_id: int, amount: int, transaction_type: str="충전"):
     conn = None
     try:
@@ -222,6 +234,7 @@ def add_balance(user_id: int, amount: int, transaction_type: str="충전"):
     finally:
         if conn: conn.close()
 
+# 잔액 차감
 def subtract_balance(user_id: int, amount: int) -> bool:
     conn = None
     try:
@@ -237,7 +250,7 @@ def subtract_balance(user_id: int, amount: int) -> bool:
             conn.commit()
             return True
         else:
-            logger.warning(f"{user_id} 잔액 부족")
+            logger.warning(f"잔액 부족: user_id={user_id}")
             return False
     except Exception as e:
         logger.error(f"잔액 차감 오류: {e}", exc_info=True)
