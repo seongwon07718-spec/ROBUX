@@ -1,259 +1,293 @@
-import sqlite3
+import discord
+from discord.ext import commands
+from discord import app_commands
+import requests
 import json
-import os
-import logging
-from datetime import datetime
+import os # config.json 파일 관리를 위해 필요합니다.
 
-logger = logging.getLogger(__name__)
-# 필요 시 아래처럼 로깅 기본 설정을 추가해 주세요.
-# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# ====================================================================
+# 봇 설정 및 전역 변수
+# ====================================================================
 
-# 상수 정의
-DEFAULT_ADMIN_ID = 1402654236570812467
-ADMIN_DB_PATH = 'DB/admin.db'
-VERIFY_USER_DB_PATH = 'DB/verify_user.db'
-VERIFIED_USERS_JSON_PATH = 'DB/verified_users.json'
-HISTORY_DB_PATH = 'DB/history.db'
+# 튜어오오오옹님의 요청대로, TOKEN은 .env 파일을 사용하지 않고 직접 코드에 입력합니다.
+# **주의: 이 토큰은 외부에 노출되지 않도록 각별히 주의해주세요.**
+TOKEN = '' # 여기에 봇 토큰을 직접 입력해주세요! (예: "YOUR_BOT_TOKEN_HERE")
 
-# JSON 데이터 로드
-def _load_json_data() -> dict:
-    if os.path.exists(VERIFIED_USERS_JSON_PATH):
+GUILD_ID = 1323599222423031902  # 서버 ID를 입력하세요.
+ALLOWED_USER_IDS = {502862517043724288, 1402654236570812467}  # 허용된 사용자 ID 목록
+
+# 설정 파일 경로
+CONFIG_FILE = 'config.json'
+
+# 초기 수수료율 설정 (config.json이 없거나 읽을 수 없을 경우 사용될 기본값)
+FEE_RATE = 0.015  # 1.5%
+
+# ====================================================================
+# 설정 파일 로드 및 저장 함수
+# ====================================================================
+
+def load_config():
+    global FEE_RATE
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            FEE_RATE = config.get('fee_rate', 0.015)
+            print(f"config.json에서 수수료율을 {FEE_RATE*100:.1f}%로 불러왔습니다.")
+    else:
+        # 파일이 없으면 기본값으로 초기화 후 저장
+        save_config({'fee_rate': FEE_RATE})
+        print(f"config.json 파일이 없어 기본 수수료율 {FEE_RATE*100:.1f}%로 새 파일을 생성했습니다.")
+
+
+def save_config(config_data):
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=4)
+        print(f"수수료율 {config_data['fee_rate']*100:.1f}%를 config.json에 저장했습니다.")
+    except Exception as e:
+        print(f"config.json 저장 중 오류가 발생했습니다: {e}")
+
+# ====================================================================
+# 헬퍼 함수들 (환율, 김프, 수수료 계산)
+# ====================================================================
+
+def get_kimchi_premium():
+    """김치 프리미엄을 계산하여 반환합니다. 오류 시 기본값 5%를 반환합니다."""
+    try:
+        upbit_response = requests.get("https://api.upbit.com/v1/ticker?markets=KRW-BTC").json()
+        if not upbit_response: # 응답이 비어있을 경우 예외 처리
+            raise ValueError("Upbit API 응답이 비어있습니다.")
+        upbit_price = upbit_response[0]['trade_price']
+
+        binance_response = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT").json()
+        if 'price' not in binance_response: # 응답에 'price' 키가 없을 경우 예외 처리
+             raise ValueError("Binance API 응답에 'price'가 없습니다.")
+        binance_price_usd = float(binance_response['price'])
+        
+        exchange_rate_response = requests.get("https://api.exchangerate-api.com/v4/latest/USD").json()
+        if 'rates' not in exchange_rate_response or 'KRW' not in exchange_rate_response['rates']:
+            raise ValueError("ExchangeRate API 응답에 'KRW' 환율 정보가 없습니다.")
+        dollar_to_krw_rate = exchange_rate_response['rates']['KRW']
+        
+        binance_price_krw = binance_price_usd * dollar_to_krw_rate
+        kimchi_premium = ((upbit_price - binance_price_krw) / binance_price_krw) # 소수점 형태
+        return kimchi_premium
+    except Exception as e:
+        print(f"김치 프리미엄 계산 중 오류 발생: {e}")
+        return 0.05  # 오류 발생 시 기본값 5%
+
+def get_exchange_rate():
+    """실시간 달러-원 환율을 가져오는 함수"""
+    try:
+        response = requests.get("https://api.exchangerate-api.com/v4/latest/USD").json()
+        return response['rates']['KRW']
+    except Exception as e:
+        print(f"환율 정보 가져오는 중 오류 발생: {e}")
+        return 1450  # 기본 환율 (예비 값)
+
+def calculate_fees(amount, is_dollar=False):
+    """
+    주어진 금액에 수수료와 김프를 적용하여 필요한 금액과 받을 금액을 계산합니다.
+    FEE_RATE는 전역 변수에서 가져옵니다.
+    """
+    global FEE_RATE # 전역 FEE_RATE 사용
+    kimchi_premium = get_kimchi_premium()
+    exchange_rate = get_exchange_rate()
+    
+    if is_dollar:
+        amount_krw = amount * exchange_rate  # 달러 -> 원화 변환
+    else:
+        amount_krw = amount
+    
+    # 송금 시 필요한 금액: (받고자 하는 금액) / (1 - 수수료율 - 김프)
+    amount_needed_for_transfer = amount_krw / (1 - FEE_RATE - kimchi_premium)
+    
+    # 송금 받은 후 최종 금액: (가지고 있는 금액) * (1 - 수수료율 - 김프)
+    amount_after_fee_deduction = amount_krw * (1 - FEE_RATE - kimchi_premium) 
+    
+    # 반환 값은 원화 기준 (is_dollar가 True일 때 amount_krw에 이미 달러-원 변환이 적용됨)
+    return round(amount_needed_for_transfer, 2), round(amount_after_fee_deduction, 2)
+
+# ====================================================================
+# Discord UI 구성 요소 (Modal, View)
+# ====================================================================
+
+class FeeModal(discord.ui.Modal, title="수수료 계산"):
+    """
+    수수료 계산을 위한 모달입니다. 원화 또는 달러 입력을 받습니다.
+    """
+    def __init__(self, is_dollar: bool):
+        super().__init__()
+        self.is_dollar = is_dollar
+
+        label = "달러" if self.is_dollar else "원화"
+        placeholder = f"계산할 금액을 {label} 기준으로 입력해주세요!"
+        
+        self.amount = discord.ui.TextInput(
+            label=label, 
+            placeholder=placeholder, 
+            required=True
+        )
+        self.add_item(self.amount)
+
+    async def on_submit(self, interaction: discord.Interaction):
         try:
-            with open(VERIFIED_USERS_JSON_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON 로드 오류: {e}", exc_info=True)
-            return {}
-    return {}
+            amount = float(self.amount.value)
+            
+            # calculate_fees 함수에서 is_dollar에 따라 amount가 원화로 처리되거나, 
+            # 원화 입력을 받은 amount가 그대로 사용됩니다.
+            amount_needed_krw, amount_after_fee_krw = calculate_fees(amount, self.is_dollar)
+            
+            # 여기서 중요한 것은 amount_needed_krw와 amount_after_fee_krw는 항상 '원화' 단위라는 것입니다.
+            # 사용자에게 입력된 amount의 단위는 그대로 표시해주어야 합니다.
 
-# JSON 데이터 저장
-def _save_json_data(data: dict):
-    try:
-        os.makedirs(os.path.dirname(VERIFIED_USERS_JSON_PATH), exist_ok=True)
-        temp_file = VERIFIED_USERS_JSON_PATH + '.tmp'
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(temp_file, VERIFIED_USERS_JSON_PATH)
-    except Exception as e:
-        logger.error(f"JSON 저장 오류: {e}", exc_info=True)
+            embed = discord.Embed(title="💰 수수료 계산 결과 💰", color=discord.Color.gold())
+            
+            # 첫 번째 필드는 입력받은 단위와 금액으로 시작하여 '수수료 제외 후 받을 금액'이 원화로 얼마인지 보여줍니다.
+            embed.add_field(
+                name=f"{amount:,.2f} {'달러(USD)' if self.is_dollar else '원(KRW)'}이 있다면", 
+                value=f"최종적으로 약 `{amount_after_fee_krw:,.2f}` 원을 송금 받을 수 있습니다.", 
+                inline=False
+            )
+            # 두 번째 필드는 특정 금액을 원화로 받고 싶을 때 얼마가 필요한지 보여줍니다.
+            embed.add_field(
+                name=f"원하는 금액을 `{amount:,.2f}` {'달러(USD)' if self.is_dollar else '원(KRW)'}만큼 받는다면", 
+                value=f"약 `{amount_needed_krw:,.2f}` 원이 필요합니다.", 
+                inline=False
+            )
 
-# 관리자 확인
-def check_admin(user_id: int) -> bool:
-    if user_id == DEFAULT_ADMIN_ID:
-        return True
-    try:
-        conn = sqlite3.connect(ADMIN_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM admins WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
-        conn.close()
-        return result is not None
-    except Exception as e:
-        logger.error(f"직원 확인 오류: {e}", exc_info=True)
-        return False
+            global FEE_RATE # 현재 설정된 수수료율을 사용
+            embed.set_footer(text=f"실시간 김프 값과 {FEE_RATE*100:.1f}% 수수료가 적용되어 계산되었습니다.")
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ 유효한 숫자를 입력해주세요.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ 계산 중 오류가 발생했습니다: {e}", ephemeral=True)
 
-# 관리자 추가
-def add_admin(user_id: int, username: str):
-    try:
-        conn = sqlite3.connect(ADMIN_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('INSERT OR IGNORE INTO admins (user_id, username) VALUES (?, ?)', (user_id, username))
-        conn.commit()
-        conn.close()
-        logger.info(f"관리자 추가 완료: {username} ({user_id})")
-    except Exception as e:
-        logger.error(f"직원 추가 오류: {e}", exc_info=True)
+class CalculatorView(discord.ui.View):
+    """
+    슬래시 커맨드 `/수수료계산`을 통해 표시될 버튼들을 담는 View입니다.
+    """
+    def __init__(self, allowed_user_ids: set):
+        super().__init__(timeout=None)
+        self.allowed_user_ids = allowed_user_ids
 
-# 관리자 삭제
-def remove_admin(user_id: int) -> bool:
-    if user_id == DEFAULT_ADMIN_ID:
-        logger.warning(f"기본 관리자({DEFAULT_ADMIN_ID})는 삭제할 수 없습니다.")
-        return False
-    try:
-        conn = sqlite3.connect(ADMIN_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM admins WHERE user_id = ?', (user_id,))
-        conn.commit()
-        conn.close()
-        logger.info(f"관리자 삭제 완료: {user_id}")
-        return True
-    except Exception as e:
-        logger.error(f"직원 삭제 오류: {e}", exc_info=True)
-        return False
+    @discord.ui.button(label="원화로 계산", style=discord.ButtonStyle.primary, emoji="💸")
+    async def calculate_krw_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(FeeModal(False))
+    
+    @discord.ui.button(label="달러로 계산", style=discord.ButtonStyle.success, emoji="💵")
+    async def calculate_dollar_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(FeeModal(True))
+    
+    @discord.ui.button(label="현재 환율 및 김프", style=discord.ButtonStyle.secondary, emoji="📊")
+    async def show_exchange_rate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.allowed_user_ids:
+            await interaction.response.send_message("❌ 이 버튼은 관리자 전용 기능입니다.", ephemeral=True)
+            return
+        
+        exchange_rate = get_exchange_rate()
+        kimchi_premium = get_kimchi_premium() * 100  # % 단위 변환
+        
+        embed = discord.Embed(title="📊 실시간 환율 및 김치 프리미엄", color=discord.Color.green())
+        embed.add_field(name="💲 USD/KRW 환율", value=f"`{exchange_rate:,.2f}` 원", inline=False)
+        embed.add_field(name="🔥 김치 프리미엄", value=f"`{kimchi_premium:.2f}`%", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# JSON에 사용자 정보 저장
-def save_to_json(user_id: int, phone: str, dob: str, name: str, telecom: str):
-    try:
-        data = _load_json_data()
-        str_uid = str(user_id)
-        prev = data.get(str_uid, {})
-        data[str_uid] = {
-            'user_id': user_id,
-            'phone': phone,
-            'dob': dob,
-            'name': name,
-            'telecom': telecom,
-            'verified_at': datetime.now().isoformat(),
-            'total_amount': prev.get('total_amount', 0),
-            'now_amount': prev.get('now_amount', 0),
-            'transactions': prev.get('transactions', []),
-        }
-        _save_json_data(data)
-        logger.info(f"JSON 유저 정보 저장/업데이트 완료: {user_id}")
-    except Exception as e:
-        logger.error(f"JSON 저장 오류: {e}", exc_info=True)
+# ====================================================================
+# Discord 봇 및 Cog 정의
+# ====================================================================
 
-# 인증된 사용자 추가
-def add_verified_user(user_id: int, phone: str, dob: str, name: str, telecom: str):
-    try:
-        conn = sqlite3.connect(VERIFY_USER_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT Total_amount, now_amount FROM users WHERE user_id = ?', (user_id,))
-        row = cursor.fetchone()
-        total, now = row if row else (0,0)
-        cursor.execute('INSERT OR REPLACE INTO users (user_id, phone, DOB, name, telecom, Total_amount, now_amount) VALUES (?, ?, ?, ?, ?, ?, ?)', 
-                      (user_id, phone, dob, name, telecom, total, now))
-        conn.commit()
-        conn.close()
-        save_to_json(user_id, phone, dob, name, telecom)
-        logger.info(f"인증고객 추가 완료: {user_id}")
-    except Exception as e:
-        logger.error(f"인증고객 추가 오류: {e}", exc_info=True)
+# 필요한 intents 설정
+intents = discord.Intents.default()
+intents.messages = True
+intents.guilds = True
+intents.members = True
+intents.message_content = True # 메시지 내용 접근 활성화
 
-# 인증된 사용자 삭제
-def remove_verified_user(user_id: int):
-    try:
-        conn = sqlite3.connect(VERIFY_USER_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
-        conn.commit()
-        conn.close()
-        data = _load_json_data()
-        if str(user_id) in data:
-            del data[str(user_id)]
-            _save_json_data(data)
-        logger.info(f"인증고객 삭제 완료: {user_id}")
-    except Exception as e:
-        logger.error(f"인증고객 삭제 오류: {e}", exc_info=True)
+# 봇 설정
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-# 거래내역 추가 (JSON + SQLite)
-def add_transaction(user_id: int, transaction_type: str, amount: int, coin_type: str='KRW', address: str=None, txid: str=None, api_txid: str=None, fee: int=0):
-    try:
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        trans = {
-            'type': transaction_type,
-            'amount': amount,
-            'coin_type': coin_type,
-            'address': address or '',
-            'txid': txid or '',
-            'api_txid': api_txid or '',
-            'fee': fee,
-            'timestamp': timestamp
-        }
-        data = _load_json_data()
-        str_uid = str(user_id)
-        if str_uid not in data:
-            data[str_uid] = {
-                'total_amount': 0,
-                'now_amount': 0,
-                'transactions': []
-            }
-        data[str_uid].setdefault('transactions', []).append(trans)
-        if len(data[str_uid]['transactions']) > 100:
-            data[str_uid]['transactions'] = data[str_uid]['transactions'][-100:]
-        _save_json_data(data)
-        logger.info(f"JSON 거래내역 저장: {user_id} {transaction_type} {amount}")
-        conn_history = sqlite3.connect(HISTORY_DB_PATH)
-        cursor_history = conn_history.cursor()
-        cursor_history.execute('CREATE TABLE IF NOT EXISTS transaction_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, type TEXT, amount INTEGER, coin_type TEXT, address TEXT, txid TEXT, api_txid TEXT, fee INTEGER, timestamp TEXT)')
-        cursor_history.execute('INSERT INTO transaction_history (user_id, type, amount, coin_type, address, txid, api_txid, fee, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', (user_id, transaction_type, amount, coin_type, address, txid, api_txid, fee, timestamp))
-        conn_history.commit()
-        conn_history.close()
-        logger.info(f"SQLite 거래내역 저장: {user_id} {transaction_type} {amount}")
-    except Exception as e:
-        logger.error(f"거래내역 저장 오류: {e}", exc_info=True)
+class Calculator(commands.Cog):
+    """
+    수수료 계산 및 설정 관련 명령어를 포함하는 Cog입니다.
+    """
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
 
-# 거래내역 조회 (JSON)
-def get_transaction_history(user_id: int, limit: int=100):
-    try:
-        data = _load_json_data()
-        transactions = data.get(str(user_id), {}).get('transactions', [])
-        return sorted(transactions, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
-    except Exception as e:
-        logger.error(f"거래내역 조회 오류: {e}", exc_info=True)
-        return []
+    # /수수료계산 슬래시 커맨드
+    @app_commands.command(name="수수료계산", description="수수료를 포함한 송금 금액을 계산합니다.")
+    async def calculate_fee_command(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="❄ 수수료 계산기", 
+            description="계산할 금액의 단위를 선택해주세요!", 
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="계산 중 약간의 오차가 발생할 수 있습니다.")
+        
+        # CalculatorView를 인스턴스화할 때 ALLOWED_USER_IDS를 전달합니다.
+        view = CalculatorView(ALLOWED_USER_IDS) 
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True) # ephemeral=True로 메시지를 보낸 사람에게만 보이도록
 
-# JSON 잔액 업데이트
-def update_balance_in_json(user_id: int, total_amount: int, now_amount: int):
-    try:
-        data = _load_json_data()
-        if str(user_id) in data:
-            data[str(user_id)]['total_amount'] = total_amount
-            data[str(user_id)]['now_amount'] = now_amount
-            _save_json_data(data)
-            logger.info(f"JSON 잔액 업데이트: {user_id}")
-        else:
-            logger.warning(f"JSON에 없는 유저 잔액 업데이트 시도: {user_id}")
-    except Exception as e:
-        logger.error(f"JSON 잔액 업데이트 오류: {e}", exc_info=True)
+    # /수수료설정 슬래시 커맨드 (관리자 전용)
+    @app_commands.command(name="수수료설정", description="봇의 수수료율을 설정합니다. (관리자 전용)")
+    @app_commands.describe(new_fee_rate="새로운 수수료율 (예: 0.015는 1.5%)")
+    async def set_fee_command(self, interaction: discord.Interaction, new_fee_rate: float):
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("❌ 이 명령어를 사용할 권한이 없습니다.", ephemeral=True)
+            return
 
-# 사용자 잔액 정보 조회 (SQLite)
-def get_user_balance_info(user_id: int):
-    conn = None
-    try:
-        conn = sqlite3.connect(VERIFY_USER_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, phone, DOB, name, telecom, Total_amount, now_amount FROM users WHERE user_id = ?', (user_id,))
-        return cursor.fetchone()
-    except Exception as e:
-        logger.error(f"DB 조회 오류: {e}", exc_info=True)
-        return None
-    finally:
-        if conn: conn.close()
+        if not (0 <= new_fee_rate < 0.1): # 0% ~ 10% 범위로 제한 (원하는대로 조절 가능)
+            await interaction.response.send_message("❌ 수수료율은 0%에서 10% 사이의 값으로 설정해야 합니다. (예: 0.015)", ephemeral=True)
+            return
 
-# 잔액 추가 (충전)
-def add_balance(user_id: int, amount: int, transaction_type: str="충전"):
-    conn = None
-    try:
-        conn = sqlite3.connect(VERIFY_USER_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT Total_amount, now_amount FROM users WHERE user_id = ?', (user_id,))
-        current = cursor.fetchone()
-        if current:
-            new_total = current[0] + amount
-            new_now = current[1] + amount
-            cursor.execute('UPDATE users SET Total_amount = ?, now_amount = ? WHERE user_id = ?', (new_total, new_now, user_id))
-            update_balance_in_json(user_id, new_total, new_now)
-        else:
-            cursor.execute('INSERT INTO users (user_id, Total_amount, now_amount) VALUES (?, ?, ?)', (user_id, amount, amount))
-            update_balance_in_json(user_id, amount, amount)
-        add_transaction(user_id, transaction_type, amount, "KRW")
-        conn.commit()
-    except Exception as e:
-        logger.error(f"잔액 추가 오류: {e}", exc_info=True)
-    finally:
-        if conn: conn.close()
+        global FEE_RATE
+        FEE_RATE = new_fee_rate
+        
+        # 설정 파일에 저장
+        config = {'fee_rate': FEE_RATE}
+        save_config(config)
 
-# 잔액 차감
-def subtract_balance(user_id: int, amount: int) -> bool:
-    conn = None
+        await interaction.response.send_message(
+            f"✅ 수수료율이 `{FEE_RATE*100:.1f}%`로 성공적으로 변경되었습니다.", 
+            ephemeral=True
+        )
+
+# ====================================================================
+# 봇 이벤트 핸들러
+# ====================================================================
+
+@bot.event
+async def on_ready():
+    """봇이 준비되었을 때 실행되는 함수입니다."""
+    print(f'봇이 준비되었습니다. {bot.user}로 로그인했습니다.')
     try:
-        conn = sqlite3.connect(VERIFY_USER_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT now_amount FROM users WHERE user_id = ?', (user_id,))
-        current = cursor.fetchone()
-        if current and current[0] >= amount:
-            new_now = current[0] - amount
-            cursor.execute('UPDATE users SET now_amount = ? WHERE user_id = ?', (new_now, user_id))
-            update_balance_in_json(user_id, None, new_now)
-            add_transaction(user_id, "잔액차감", amount, "KRW")
-            conn.commit()
-            return True
-        else:
-            logger.warning(f"잔액 부족: user_id={user_id}")
-            return False
+        # Cog 로드
+        await bot.add_cog(Calculator(bot))
+
+        # 봇 상태 메시지 설정
+        activity = discord.Game(name="튜어오오오옹님의 프로젝트")
+        await bot.change_presence(activity=activity)
+        print("봇 상태 메시지를 설정했습니다.")
+
+        # 슬래시 커맨드 동기화 (특정 길드에만 동기화)
+        if GUILD_ID:
+            guild = discord.Object(id=GUILD_ID)
+            synced = await bot.tree.sync(guild=guild)
+            print(f'길드 {GUILD_ID}에 {len(synced)}개의 슬래시 커맨드를 동기화했습니다.')
+        else: # 모든 길드에 동기화 (봇이 가입된 모든 서버)
+            synced = await bot.tree.sync()
+            print(f'모든 길드에 {len(synced)}개의 슬래시 커맨드를 동기화했습니다.')
+
     except Exception as e:
-        logger.error(f"잔액 차감 오류: {e}", exc_info=True)
-        return False
-    finally:
-        if conn: conn.close()
+        print(f"봇 초기화 중 오류가 발생했습니다: {e}")
+
+# ====================================================================
+# 봇 실행
+# ====================================================================
+
+if __name__ == '__main__':
+    load_config() # 봇 시작 시 설정 파일 로드
+    bot.run(TOKEN)
