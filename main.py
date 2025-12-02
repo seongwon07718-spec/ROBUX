@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import requests
 import json
+from discord import PartialEmoji, ui
 import os # config.json 파일 관리를 위해 필요합니다.
 
 # ====================================================================
@@ -16,7 +17,7 @@ TOKEN = '' # 여기에 봇 토큰을 직접 입력해주세요! (예: "YOUR_BOT_
 # GUILD_ID를 설정하지 않고 전역 동기화를 수행합니다.
 # ALLOWED_USER_IDS는 슬래시 커맨드의 관리자 권한과는 별개로, 
 # 특정 버튼이나 명령어의 사용 권한을 부여할 때 사용됩니다.
-ALLOWED_USER_IDS = {502862517043724288, 1402654236570812467}  # 허용된 사용자 ID 목록
+ALLOWED_USER_IDS = {1402654236570812467}  # 허용된 사용자 ID 목록
 
 # 설정 파일 경로
 CONFIG_FILE = 'config.json'
@@ -143,7 +144,7 @@ class FeeModal(discord.ui.Modal, title="수수료 계산"):
             # 여기서 중요한 것은 amount_needed_krw와 amount_after_fee_krw는 항상 '원화' 단위라는 것입니다.
             # 사용자에게 입력된 amount의 단위는 그대로 표시해주어야 합니다.
 
-            embed = discord.Embed(title="💰 수수료 계산 결과 💰", color=discord.Color.gold())
+            embed = discord.Embed(title="수수료 계산 결과", color=0xffffff)
             
             # 첫 번째 필드는 입력받은 단위와 금액으로 시작하여 '수수료 제외 후 받을 금액'이 원화로 얼마인지 보여줍니다.
             embed.add_field(
@@ -175,28 +176,15 @@ class CalculatorView(discord.ui.View):
         super().__init__(timeout=None)
         self.allowed_user_ids = allowed_user_ids
 
-    @discord.ui.button(label="원화로 계산", style=discord.ButtonStyle.primary, emoji="💸")
+    custom_emoji1 = PartialEmoji(name="calculate", id=1441604996519956554)
+
+    @discord.ui.button(label="원화", style=discord.ButtonStyle.gray, emoji="💸")
     async def calculate_krw_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(FeeModal(False))
     
-    @discord.ui.button(label="달러로 계산", style=discord.ButtonStyle.success, emoji="💵")
+    @discord.ui.button(label="달러", style=discord.ButtonStyle.gray, emoji="💵")
     async def calculate_dollar_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(FeeModal(True))
-    
-    @discord.ui.button(label="현재 환율 및 김프", style=discord.ButtonStyle.secondary, emoji="📊")
-    async def show_exchange_rate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id not in self.allowed_user_ids:
-            await interaction.response.send_message("❌ 이 버튼은 관리자 전용 기능입니다.", ephemeral=True)
-            return
-        
-        exchange_rate = get_exchange_rate()
-        kimchi_premium = get_kimchi_premium() * 100  # % 단위 변환
-        
-        embed = discord.Embed(title="📊 실시간 환율 및 김치 프리미엄", color=discord.Color.green())
-        embed.add_field(name="💲 USD/KRW 환율", value=f"`{exchange_rate:,.2f}` 원", inline=False)
-        embed.add_field(name="🔥 김치 프리미엄", value=f"`{kimchi_premium:.2f}`%", inline=False)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ====================================================================
 # Discord 봇 및 Cog 정의
@@ -220,22 +208,22 @@ class Calculator(commands.Cog):
         self.bot = bot
 
     # /수수료계산 슬래시 커맨드
-    @app_commands.command(name="수수료계산", description="수수료를 포함한 송금 금액을 계산합니다.")
+    @app_commands.command(name="수수료계산", description="수수료 송금 금액을 계산")
     async def calculate_fee_command(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="❄ 수수료 계산기", 
-            description="계산할 금액의 단위를 선택해주세요!", 
-            color=discord.Color.blue()
+            title="계산기", 
+            description="아래 버튼을 눌려 이용해주세요", 
+            color=0xffffff
         )
         embed.set_footer(text="계산 중 약간의 오차가 발생할 수 있습니다.")
         
         # CalculatorView를 인스턴스화할 때 ALLOWED_USER_IDS를 전달합니다.
         view = CalculatorView(ALLOWED_USER_IDS) 
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True) # ephemeral=True로 메시지를 보낸 사람에게만 보이도록
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=None) # ephemeral=True로 메시지를 보낸 사람에게만 보이도록
 
     # /수수료설정 슬래시 커맨드 (관리자 전용)
-    @app_commands.command(name="수수료설정", description="봇의 수수료율을 설정합니다. (관리자 전용)")
-    @app_commands.describe(new_fee_rate="새로운 수수료율 (예: 0.015는 1.5%)")
+    @app_commands.command(name="수수료설정", description="수수료율을 설정")
+    @app_commands.describe(new_fee_rate="수수료율 (예: 0.015는 1.5%)")
     async def set_fee_command(self, interaction: discord.Interaction, new_fee_rate: float):
         if interaction.user.id not in ALLOWED_USER_IDS:
             await interaction.response.send_message("❌ 이 명령어를 사용할 권한이 없습니다.", ephemeral=True)
@@ -270,7 +258,7 @@ async def on_ready():
         await bot.add_cog(Calculator(bot))
 
         # 봇 상태 메시지 설정
-        activity = discord.Game(name="튜어오오오옹님의 프로젝트")
+        activity = discord.Game(name="(24) BITHUMB 코인대행 서비스")
         await bot.change_presence(activity=activity)
         print("봇 상태 메시지를 설정했습니다.")
 
