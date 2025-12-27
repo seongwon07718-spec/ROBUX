@@ -1,41 +1,38 @@
-import discord
-from discord import ui
-from discord.ext import commands
-from discord import app_commands # 슬래시 명령어 사용을 위해 추가
+import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.interactions.components.buttons.Button;
+import net.dv8tion.jda.api.requests.GatewayIntent;
 
-intents = discord.Intents.all()
+public class DiscordBot extends ListenerAdapter {
 
-class MyBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix=".", intents=intents)
+    public static void main(String[] args) {
+        // 봇 토큰을 입력하세요
+        String token = "YOUR_NEW_TOKEN_HERE";
 
-    # 슬래시 명령어를 디스코드 서버에 동기화하는 설정
-    async def setup_hook(self):
-        await self.tree.sync()
-        print(f"Synced slash commands for {self.user}")
+        JDABuilder builder = JDABuilder.createDefault(token);
+        builder.enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT);
+        builder.addEventListeners(new DiscordBot());
+        
+        var jda = builder.build();
 
-bot = MyBot()
+        // 슬래시 명령어 등록
+        jda.updateCommands().addCommands(
+            Commands.slash("쿠키체커기", "로블록스 쿠키 체커기 컴포넌트 전송")
+        ).queue();
+    }
 
-class MeuLayout(ui.View):
-    def __init__(self):
-        super().__init__()
+    @Override
+    public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
+        if (event.getName().equals("쿠키체커기")) {
+            // 버튼 생성
+            Button startButton = Button.secondary("start_checker", "로블록스 쿠키 체커기 시작");
 
-        # 요청하신 컨테이너 구조 (기존 코드 유지)
-        container = ui.Container(ui.TextDisplay("**로블록스 쿠키 체커기**"))
-        container.add_item(ui.Button(label="로블록스 쿠키 체커기 시작", style=discord.ButtonStyle.gray, custom_id="start_checker"))
-        self.add_item(container)
-
-# /쿠키체커기 슬래시 명령어 추가
-@bot.tree.command(name="쿠키체커기", description="로블록스 쿠키 체커기 컨테이너를 보여줍니다.")
-async def cookie_checker(interaction: discord.Interaction):
-    layout = MeuLayout()
-    await interaction.response.send_message(view=layout)
-
-# 기존 .teste 명령어 유지
-@bot.command()
-async def teste(ctx: commands.Context):
-    layout = MeuLayout()
-    await ctx.reply(view=layout)
-
-# 토큰을 입력하세요
-bot.run("YOUR_TOKEN_HERE")
+            // 메시지 전송 (텍스트 + 버튼)
+            event.reply("**로블록스 쿠키 체커기**")
+                 .addActionRow(startButton) // 파이썬의 Container 역할을 하는 ActionRow
+                 .queue();
+        }
+    }
+}
