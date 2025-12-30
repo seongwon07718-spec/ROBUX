@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로그인 페이지</title>
+    <title>login</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <style>
@@ -139,11 +139,9 @@
 
             <button type="submit" class="login-btn">로그인</button>
             
-            <a href="#" class="forgot-link">비밀번호를 잊으셨나요?</a>
+            <a href="#" class="forgot-link">계정이 없으신가요?</a>
         </form>
     </div>
-
-    <div class="footer-text">swnx.shop</div>
 
 </body>
 </html>
