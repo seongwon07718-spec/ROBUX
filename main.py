@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login Page</title>
+    <title>로그인 페이지</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         /* 기본 배경 설정 */
@@ -117,27 +117,27 @@
 <body>
 
     <div class="login-container">
-        <h1>LOGIN</h1>
+        <h1>로그인</h1>
         
         <form action="#">
             <div class="input-group">
                 <i class="fas fa-user"></i>
-                <input type="text" placeholder="Username" required>
+                <input type="text" placeholder="사용자 아이디" required>
             </div>
             
             <div class="input-group">
                 <i class="fas fa-lock"></i>
-                <input type="password" placeholder="Password" required>
+                <input type="password" placeholder="비밀번호" required>
             </div>
 
             <div class="remember-me">
                 <input type="checkbox" id="rem">
-                <label for="rem">Remember me</label>
+                <label for="rem">로그인 상태 유지</label>
             </div>
 
-            <button type="submit" class="login-btn">LOGIN</button>
+            <button type="submit" class="login-btn">로그인</button>
             
-            <a href="#" class="forgot-link">Forgot your password?</a>
+            <a href="#" class="forgot-link">비밀번호를 잊으셨나요?</a>
         </form>
     </div>
 
