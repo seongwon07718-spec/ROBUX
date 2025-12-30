@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>로그인 페이지</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <style>
-        /* 기본 배경 설정 */
         body {
             margin: 0;
             padding: 0;
@@ -14,36 +14,37 @@
             justify-content: center;
             align-items: center;
             height: 100vh;
-            background-color: #121212; /* 어두운 배경색 */
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
         }
 
-        /* 메인 로그인 박스 */
+        /* 로그인 박스: 모바일에서 꽉 차지 않게 width 85%와 max-width 설정 */
         .login-container {
             background-color: #1e1e1e;
-            padding: 50px 40px;
-            border-radius: 40px; /* 둥근 모서리 */
-            width: 380px;
+            padding: 40px 30px;
+            border-radius: 40px;
+            width: 85%;
+            max-width: 350px; /* 기존 380px에서 살짝 줄여 더 깔끔하게 조절 */
             text-align: center;
             box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+            box-sizing: border-box;
         }
 
         h1 {
             color: #ffffff;
-            font-size: 28px;
-            margin-bottom: 35px;
+            font-size: 24px;
+            margin-bottom: 30px;
             letter-spacing: 2px;
         }
 
-        /* 입력창 그룹 (아이콘 + 인풋) */
         .input-group {
             position: relative;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
         }
 
         .input-group i {
             position: absolute;
-            left: 20px;
+            left: 18px;
             top: 50%;
             transform: translateY(-50%);
             color: #aaa;
@@ -51,38 +52,43 @@
 
         .input-group input {
             width: 100%;
-            padding: 15px 15px 15px 50px;
+            padding: 14px 14px 14px 45px;
             background-color: #333;
             border: none;
             border-radius: 25px;
             color: white;
-            font-size: 16px;
-            box-sizing: border-box; /* 패딩 포함 너비 계산 */
+            font-size: 15px;
+            box-sizing: border-box;
             outline: none;
         }
 
-        /* 체크박스 영역 */
         .remember-me {
             display: flex;
             align-items: center;
             color: #ccc;
-            font-size: 14px;
-            margin: 15px 0 25px 5px;
+            font-size: 13px;
+            margin: 15px 0 20px 5px;
         }
 
         .remember-me input {
-            margin-right: 10px;
+            margin-right: 8px;
             cursor: pointer;
         }
 
-        /* 로그인 버튼 */
+        /* 캡차(Turnstile) 중앙 정렬 및 여백 */
+        .cf-turnstile {
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
         .login-btn {
             background-color: #3498db;
             color: white;
             border: none;
-            padding: 10px 35px;
+            padding: 10px 40px;
             border-radius: 20px;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: bold;
             cursor: pointer;
             transition: background 0.3s;
@@ -92,25 +98,19 @@
             background-color: #2980b9;
         }
 
-        /* 비밀번호 찾기 링크 */
         .forgot-link {
             display: block;
-            margin-top: 20px;
+            margin-top: 18px;
             color: #3498db;
             text-decoration: none;
             font-size: 13px;
         }
 
-        .forgot-link:hover {
-            text-decoration: underline;
-        }
-
-        /* 하단 도메인 텍스트 */
         .footer-text {
             position: absolute;
             bottom: 30px;
-            color: #555;
-            font-size: 14px;
+            color: #444;
+            font-size: 13px;
         }
     </style>
 </head>
@@ -134,6 +134,8 @@
                 <input type="checkbox" id="rem">
                 <label for="rem">로그인 상태 유지</label>
             </div>
+
+            <div class="cf-turnstile" data-sitekey="0x4AAAAAAACJuAjiUyHT8jhqw"></div>
 
             <button type="submit" class="login-btn">로그인</button>
             
