@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>login</title>
+    <title>swnx - 접속</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <style>
@@ -18,13 +18,12 @@
             font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
         }
 
-        /* 로그인 박스: 모바일에서 꽉 차지 않게 width 85%와 max-width 설정 */
         .login-container {
             background-color: #1e1e1e;
             padding: 40px 30px;
             border-radius: 40px;
             width: 85%;
-            max-width: 350px; /* 기존 380px에서 살짝 줄여 더 깔끔하게 조절 */
+            max-width: 350px;
             text-align: center;
             box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
             box-sizing: border-box;
@@ -75,7 +74,6 @@
             cursor: pointer;
         }
 
-        /* 캡차(Turnstile) 중앙 정렬 및 여백 */
         .cf-turnstile {
             margin-bottom: 20px;
             display: flex;
@@ -104,6 +102,12 @@
             color: #3498db;
             text-decoration: none;
             font-size: 13px;
+            cursor: pointer;
+        }
+
+        /* 회원가입 폼은 처음에 숨김 처리 */
+        #signup-form {
+            display: none;
         }
 
         .footer-text {
@@ -117,31 +121,79 @@
 <body>
 
     <div class="login-container">
-        <h1>로그인</h1>
-        
-        <form action="#">
-            <div class="input-group">
-                <i class="fas fa-user"></i>
-                <input type="text" placeholder="사용자 아이디" required>
-            </div>
-            
-            <div class="input-group">
-                <i class="fas fa-lock"></i>
-                <input type="password" placeholder="비밀번호" required>
-            </div>
+        <div id="login-box">
+            <h1>로그인</h1>
+            <form action="#">
+                <div class="input-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" placeholder="사용자 아이디" required>
+                </div>
+                
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" placeholder="비밀번호" required>
+                </div>
 
-            <div class="remember-me">
-                <input type="checkbox" id="rem">
-                <label for="rem">로그인 상태 유지</label>
-            </div>
+                <div class="remember-me">
+                    <input type="checkbox" id="rem">
+                    <label for="rem">로그인 상태 유지</label>
+                </div>
 
-            <div class="cf-turnstile" data-sitekey="0x4AAAAAAACJuAjiUyHT8jhqw"></div>
+                <div class="cf-turnstile" data-sitekey="0x4AAAAAAACJuAjiUyHT8jhqw"></div>
 
-            <button type="submit" class="login-btn">로그인</button>
-            
-            <a href="#" class="forgot-link">계정이 없으신가요?</a>
-        </form>
+                <button type="submit" class="login-btn">로그인</button>
+                
+                <a onclick="toggleForm('signup')" class="forgot-link">계정이 없으신가요?</a>
+            </form>
+        </div>
+
+        <div id="signup-form">
+            <h1>회원가입</h1>
+            <form action="#">
+                <div class="input-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" placeholder="사용할 아이디" required>
+                </div>
+                
+                <div class="input-group">
+                    <i class="fas fa-envelope"></i>
+                    <input type="email" placeholder="이메일 주소" required>
+                </div>
+
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" placeholder="비밀번호 설정" required>
+                </div>
+
+                <div class="input-group">
+                    <i class="fas fa-check-double"></i>
+                    <input type="password" placeholder="비밀번호 확인" required>
+                </div>
+
+                <button type="submit" class="login-btn">가입 완료</button>
+                
+                <a onclick="toggleForm('login')" class="forgot-link">이미 계정이 있으신가요?</a>
+            </form>
+        </div>
     </div>
+
+    <div class="footer-text">swnx.shop</div>
+
+    <script>
+        // 로그인 <-> 회원가입 전환 함수
+        function toggleForm(formType) {
+            const loginBox = document.getElementById('login-box');
+            const signupBox = document.getElementById('signup-form');
+
+            if (formType === 'signup') {
+                loginBox.style.display = 'none';
+                signupBox.style.display = 'block';
+            } else {
+                signupBox.style.display = 'none';
+                loginBox.style.display = 'block';
+            }
+        }
+    </script>
 
 </body>
 </html>
