@@ -1,10 +1,11 @@
 import discord
+import asyncio
 from discord import app_commands
 from discord.ext import commands
 
 # 설정
 CATEGORY_ID = 1455820042368450580  # 중개 티켓이 생성될 카테고리 ID
-ADMIN_ROLE_ID = 1454398431996018724  # 중개 관리자 역할 ID
+ADMIN_ROLE_ID = 1455824154283606195  # 중개 관리자 역할 ID
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -24,12 +25,28 @@ class MyBot(commands.Bot):
                 try:
                     target_user = await message.guild.fetch_member(int(message.content))
                     await message.channel.set_permissions(target_user, read_messages=True, send_messages=True, embed_links=True, attach_files=True)
-                    await message.channel.send(embed=discord.Embed(description=f"✅ {target_user.mention}님이 초대되었습니다.", color=0x00ff00))
+                    await message.channel.send(embed=discord.Embed(description=f"**{target_user.mention}님이 초대되었습니다**", color=0xffffff))
                 except:
                     pass
         await self.process_commands(message)
 
 bot = MyBot()
+
+class TicketControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        @discord.ui.button(label="티켓닫기", style=discord.ButtonStyle.red, custom_id="close_ticket")
+        async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_message("**티켓이 5초 후에 삭제됩니다**")
+            await asyncio.sleep(5)
+            await interaction.channel.delete()
+
+        @discord.ui.button(label="거래진행", style=discord.ButtonStyle.green, custom_id="continue_trade")
+        async def continue_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_message("**거래가 계속 진행됩니다**")
+            button.disabled = True
+            await interaction.message.edit(view=self)
 
 class EscrowView(discord.ui.View):
     def __init__(self):
@@ -54,26 +71,27 @@ class EscrowView(discord.ui.View):
         }
         
         ticket_channel = await guild.create_text_channel(name=f"중개-{user.name}", category=category, overwrites=overwrites)
-        await interaction.response.send_message(f"✅ {ticket_channel.mention} 채널이 생성되었습니다.", ephemeral=True)
+        await interaction.response.send_message(f"**{ticket_channel.mention} 채널이 생성되었습니다**", ephemeral=True)
 
         # 임베드 1: 이용 안내
         embed1 = discord.Embed(
-            title="🛡️ 중개 거래 안내",
-            description="본 시스템은 봇이 아이템을 보관한 뒤 거래를 확정하는 방식입니다.\n관리자의 지시가 있기 전까지 아이템을 넘기지 마세요.",
+            title="중개 티켓 안내",
+            description=f"**티켓 생성자 = {user.mention}\n\n티켓 생성 완료\n┗ 10분동안 거래 미진행시 자동으로 채널 삭제됩니다**",
             color=0xffffff
         )
         # 임베드 2: 유저 초대 안내
         embed2 = discord.Embed(
-            title="👤 거래 상대방 초대",
-            description="거래를 진행할 **상대방의 유저 ID(숫자)**를 입력해주세요.\n봇이 자동으로 상대방을 이 채널에 초대합니다.",
+            description="**상대방의 유저 ID를 입력해주세요\n┗ 유저 ID는 상대방 프로필 우클릭 후 'ID 복사'로 확인 가능합니다\n┗ 숫자만 입력해주세요 (예: 123456789012345678)**",
             color=0xffffff
         )
-        
-        await ticket_channel.send(embed=embed1)
-        await ticket_channel.send(content=f"{user.mention}", embed=embed2)
+        img_url = "https://cdn.discordapp.com/attachments/1455759161039261791/1455875683703193711/IMG_0728.png?ex=69565163&is=6954ffe3&hm=cfe6eb46fbdded19351688d874402fa4b8ceaf1d7624aec0a3d4594f07656793&"
+        embed2.set_image(url=img_url)
+
+        await ticket_channel.send(content=f"@everyone", embed=embed1)
+        await ticket_channel.send(view=TicketControlView(), embed=embed2)
 
 # 중개 커맨드 설정
-@bot.tree.command(name="입양중개", description="입양 중개 패널 전송")
+@bot.tree.command(name="muddleman", description="중개 패널 전송")
 async def escrow_panel(interaction: discord.Interaction):
     embed = discord.Embed(
         title="자동중개 - AMP 전용",
@@ -82,9 +100,10 @@ async def escrow_panel(interaction: discord.Interaction):
         ),
         color=0xffffff
     )
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1455759161039261791/1455811337937747989/IMG_0723.png?ex=69561576&is=6954c3f6&hm=daf60069947d93e54dcb3b85facb151b9ecea1de76c234b91e68c36d997384b2&")
-    
+    img_url = "https://cdn.discordapp.com/attachments/1455759161039261791/1455875683703193711/IMG_0728.png?ex=69565163&is=6954ffe3&hm=cfe6eb46fbdded19351688d874402fa4b8ceaf1d7624aec0a3d4594f07656793&"
+    embed.set_image(url=img_url)
+
     await interaction.response.send_message(embed=embed, view=EscrowView())
 
 if __name__ == "__main__":
-    bot.run('YOUR_TOKEN_HERE') # 토큰을 입력하세요
+    bot.run('') # 토큰을 입력하세요
