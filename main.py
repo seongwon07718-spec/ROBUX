@@ -2,60 +2,100 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-# 1. 봇 설정 클래스
+# 설정
+CATEGORY_ID = 1455820042368450580  # 중개 티켓이 생성될 카테고리 ID
+ADMIN_ROLE_ID = 1454398431996018724  # 중개 관리자 역할 ID
+
 class MyBot(commands.Bot):
     def __init__(self):
-        # 모든 인텐트 활성화 (필요에 따라 조정 가능)
         intents = discord.Intents.default()
         intents.message_content = True 
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # 슬래시 커맨드를 디스코드 서버에 등록(동기화)
         await self.tree.sync()
-        print(f"✅ 커맨드 동기화 완료: {self.user.name}")
+        print(f"커맨드 동기화 완료: {self.user.name}")
 
 bot = MyBot()
 
-# 2. 버튼이 포함된 뷰 클래스
 class EscrowView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None) # 버튼이 사라지지 않도록 설정
+        super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="중개 시작", 
-        style=discord.ButtonStyle.primary, 
+        label="중개문의 티켓열기", 
+        style=discord.ButtonStyle.gray, 
         custom_id="start_escrow",
-        emoji="<:1_:1455806365053489297>" # 요청하신 특수 이모지
+        emoji="<:emoji_2:1455814454490038305>"
     )
-    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 버튼 클릭 시 작동할 응답
-        await interaction.response.send_message(
-            f"{interaction.user.mention}님, 중개 절차를 시작합니다. 판매하실 아이템 정보를 준비해주세요!", 
-            ephemeral=True
-        )
 
-# 3. /중개패널 커맨드 설정
-@bot.tree.command(name="중개패널", description="로블록스 아이템 중개 거래 패널을 생성합니다.")
+# 중개 커맨드 설정
+@bot.tree.command(name="입양중개", description="입양 중개 패널 전송")
 async def escrow_panel(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🛡️ ROBLOX 안전 중개 시스템",
+        title="자동중개 - AMP 전용",
         description=(
-            "**안전한 아이템 거래를 위해 봇이 중개역할을 수행합니다.**\n\n"
-            "**[진행 순서]**\n"
-            "1️⃣ 아래의 **중개 시작** 버튼을 클릭합니다.\n"
-            "2️⃣ 판매자가 봇에게 아이템을 먼저 전달합니다.\n"
-            "3️⃣ 구매자가 확인 후 대금을 입금합니다.\n"
-            "4️⃣ 입금 확인 시 봇이 구매자에게 아이템을 전달합니다."
+            "**안전 거래하기 위해서는 중개가 필수입니다\n아래 버튼을 눌려 중개 절차를 시작해주세요\n\n┗ 티켓 여시면 중개봇이 안내해줍니다\n┗ 상호작용 오류시 문의부탁드려요\n\n[중개 이용약관](https://swnx.shop)      [디스코드 TOS](https://discord.com/terms)**"
         ),
-        color=discord.Color.from_rgb(43, 45, 49) # 다크 테마 색상
+        color=0xffffff
     )
-    embed.set_image(url="https://i.imgur.com/your_banner_image.png") # (선택사항) 배너 이미지 주소
-    embed.set_footer(text="보안을 위해 모든 거래 내역은 기록됩니다.")
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1455759161039261791/1455811337937747989/IMG_0723.png?ex=69561576&is=6954c3f6&hm=daf60069947d93e54dcb3b85facb151b9ecea1de76c234b91e68c36d997384b2&") # (선택사항) 배너 이미지 주소
     
     # 뷰와 함께 메시지 전송
     await interaction.response.send_message(embed=embed, view=EscrowView())
 
 # 4. 봇 실행 (토큰 입력)
 if __name__ == "__main__":
-    bot.run('YOUR_BOT_TOKEN_HERE')
+    bot.run('import discord')
+from discord import app_commands
+from discord.ext import commands
+
+# 설정
+CATEGORY_ID = 1455820042368450580  # 중개 티켓이 생성될 카테고리 ID
+ADMIN_ROLE_ID = 1454398431996018724  # 중개 관리자 역할 ID
+
+class MyBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True 
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self):
+        await self.tree.sync()
+        print(f"커맨드 동기화 완료: {self.user.name}")
+
+bot = MyBot()
+
+class EscrowView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="중개문의 티켓열기", 
+        style=discord.ButtonStyle.gray, 
+        custom_id="start_escrow",
+        emoji="<:emoji_2:1455814454490038305>"
+    )
+    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 버튼 클릭 시 작동할 응답
+        guild = interaction.guild
+        user = interaction.user
+
+# 중개 커맨드 설정
+@bot.tree.command(name="입양중개", description="입양 중개 패널 전송")
+async def escrow_panel(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="자동중개 - AMP 전용",
+        description=(
+            "**안전 거래하기 위해서는 중개가 필수입니다\n아래 버튼을 눌려 중개 절차를 시작해주세요\n\n┗ 티켓 여시면 중개봇이 안내해줍니다\n┗ 상호작용 오류시 문의부탁드려요\n\n[중개 이용약관](https://swnx.shop)      [디스코드 TOS](https://discord.com/terms)**"
+        ),
+        color=0xffffff
+    )
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1455759161039261791/1455811337937747989/IMG_0723.png?ex=69561576&is=6954c3f6&hm=daf60069947d93e54dcb3b85facb151b9ecea1de76c234b91e68c36d997384b2&") # (선택사항) 배너 이미지 주소
+    
+    # 뷰와 함께 메시지 전송
+    await interaction.response.send_message(embed=embed, view=EscrowView())
+
+# 4. 봇 실행 (토큰 입력)
+if __name__ == "__main__":
+    bot.run('')
