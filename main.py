@@ -1,101 +1,77 @@
 import discord
 from discord.ext import commands
+from fastapi import FastAPI, Request
+import uvicorn
 import json
 import aiohttp
-import time
-import pymem
-import pymem.process
-from datetime import datetime, timedelta
-from database import save_verified_user
+import threading
+from datetime import datetime
 
-# --- 설정 및 파일 경로 ---
+# --- [1. 설정 및 에러 수정 섹션] ---
 TOKEN = 'YOUR_BOT_TOKEN'
-ADMIN_WEBHOOK_URL = "YOUR_WEBHOOK_URL"
-VERIFIED_USERS_FILE = "verified_users.json"
+ADMIN_WEBHOOK_URL = "여기에_새로_만든_웹훅_주소" # 사진 2, 4의 401 에러 해결용
+VERIFIED_USERS_FILE = "verified_users.json" # 사진 3, 5의 Pylance 에러 해결
 RECHARGE_LOG_FILE = "recharge_logs.json"
-
-# --- 메모리 주소 설정 (MM2 전용) ---
-# 이 주소들은 예시이며, Cheat Engine을 통해 실제 'AutoAccept' 플래그 주소를 찾아야 합니다.
-ROBLOX_PROCESS = "RobloxPlayerBeta.exe"
-MEM_AUTO_ACCEPT_OFFSET = 0x3A2B1C0  # 거래 자동 수락 플래그 주소 (예시)
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
-start_time = time.time()
+app = FastAPI()
 
-# --- 메모리 조작 함수 ---
-def toggle_roblox_auto_accept(state: bool):
-    """로블록스 프로세스 메모리에 자동 수락 상태 기록"""
-    try:
-        pm = pymem.Pymem(ROBLOX_PROCESS)
-        client = pymem.process.module_from_name(pm.process_handle, ROBLOX_PROCESS).lpBaseOfDll
-        target_addr = client + MEM_AUTO_ACCEPT_OFFSET
-        
-        # 1: 켜짐(True), 0: 꺼짐(False)
-        val = 1 if state else 0
-        pm.write_int(target_addr, val)
-        return True
-    except Exception as e:
-        print(f"❌ 메모리 조작 실패: {e}")
-        return False
-
-# --- 유틸리티 함수 ---
-def get_verified_user_by_roblox_id(roblox_id):
+# --- [2. 데이터베이스 처리] ---
+def get_user_data(roblox_id):
     try:
         with open(VERIFIED_USERS_FILE, "r", encoding="utf-8") as f:
-            users = json.load(f)
-            return users.get(str(roblox_id))
-    except: return None
+            return json.load(f).get(str(roblox_id))
+    except Exception: return None
 
-# --- 거래 완료 처리 (인게임 봇 -> 디스코드 API 수신부 가정) ---
-async def process_trade_success(roblox_id, roblox_name, items):
-    user_data = get_verified_user_by_roblox_id(roblox_id)
-    
-    if user_data:
-        # DB 저장 및 알림
-        discord_id = user_data['discord_id']
-        await send_recharge_webhook(discord_id, roblox_name, items)
-        # 로그 파일 저장 로직 추가 가능
-    else:
-        print(f"⚠️ 비인증 유저({roblox_name})와 거래 완료. 기록되지 않음.")
-
-# --- 관리자 웹훅 (Discohook 스타일) ---
-async def send_recharge_webhook(discord_id, roblox_name, items):
-    async with aiohttp.ClientSession() as session:
-        webhook = discord.Webhook.from_url(ADMIN_WEBHOOK_URL, session=session)
-        embed = discord.Embed(title="💰 MM2 아이템 자동 수령 완료", color=0x00ff00)
-        embed.add_field(name="기부/충전자", value=f"<@{discord_id}>", inline=True)
-        embed.add_field(name="로블록스 계정", value=roblox_name, inline=True)
-        embed.add_field(name="수령 아이템", value=f"```\n{items}\n```", inline=False)
-        embed.set_footer(text="Der System Auto-Trade")
-        await webhook.send(embed=embed)
-
-# --- 봇 상태 확인 명령어 ---
-@bot.tree.command(name="bot_info")
-async def bot_info(interaction: discord.Interaction):
-    uptime = str(timedelta(seconds=int(time.time() - start_time)))
-    ping = round(bot.latency * 1000)
-    
-    embed = discord.Embed(title="🤖 봇 시스템 상태", color=discord.Color.blue())
-    embed.add_field(name="가동 시간", value=f"`{uptime}`", inline=True)
-    embed.add_field(name="지연 시간", value=f"`{ping}ms`", inline=True)
-    
-    # 메모리 자동화 상태 확인 (프로세스 체크)
+def log_transaction(action, discord_id, roblox_name, items):
     try:
-        pymem.Pymem(ROBLOX_PROCESS)
-        mem_status = "🟢 로블록스 연결됨 (자동화 활성)"
-    except:
-        mem_status = "🔴 로블록스 미실행"
+        with open(RECHARGE_LOG_FILE, "r", encoding="utf-8") as f:
+            logs = json.load(f)
+    except: logs = []
     
-    embed.add_field(name="자동화 엔진", value=mem_status, inline=False)
-    await interaction.response.send_message(embed=embed)
+    logs.append({
+        "action": action,
+        "discord_id": discord_id,
+        "roblox_name": roblox_name,
+        "items": items,
+        "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    })
+    with open(RECHARGE_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(logs, f, indent=4, ensure_ascii=False)
 
+# --- [3. API 엔드포인트: Bloxluck 방식] ---
+@app.post("/trade/event")
+async def handle_trade(request: Request):
+    data = await request.json()
+    action = data.get("action") # "deposit" 또는 "withdraw"
+    r_id = data.get("roblox_id")
+    r_name = data.get("roblox_name")
+    items = data.get("items")
+
+    user_info = get_user_data(r_id)
+    if user_info:
+        d_id = user_info['discord_id']
+        log_transaction(action, d_id, r_name, items)
+        
+        # [사진 1] 에러 해결: discord.Webhook.from_url 사용
+        async with aiohttp.ClientSession() as session:
+            webhook = discord.Webhook.from_url(ADMIN_WEBHOOK_URL, session=session)
+            embed = discord.Embed(title=f"📦 {action.upper()} 감지", color=0x00ff00)
+            embed.add_field(name="유저", value=f"<@{d_id}>", inline=True)
+            embed.add_field(name="아이템", value=f"```\n{items}\n```")
+            await webhook.send(embed=embed)
+            
+    return {"status": "ok"}
+
+# --- [4. 봇 및 서버 실행] ---
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
-    # 봇이 켜지면 로블록스 메모리 자동 수락 On
-    toggle_roblox_auto_accept(True)
-    print(f"✅ {bot.user.name} 가동 및 MM2 메모리 엔진 로드 완료")
+    print(f"✅ 시스템 가동: {bot.user}")
+
+def run_api():
+    uvicorn.run(app, host="0.0.0.0", port=5000)
 
 if __name__ == "__main__":
+    threading.Thread(target=run_api, daemon=True).start()
     bot.run(TOKEN)
