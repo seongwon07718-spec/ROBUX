@@ -1,25 +1,26 @@
 local HttpService = game:GetService("HttpService")
-local API_URL = "http://컴퓨터_아이피_주소:5000/trade/event"
+local API_URL = "http://10.2.0.2:5000/trade/event" -- VPN 주소 확인됨
 
--- 거래 완료 감지 함수
-local function reportTrade(partnerId, partnerName, itemList, actionType)
+print("🚀 Bloxluck 시스템이 가동되었습니다!")
+
+-- UI를 직접 찾는 대신, 게임 엔진의 거래 이벤트를 가로챕니다.
+game:GetService("ReplicatedStorage").Trade.AcceptTrade.OnClientEvent:Connect(function(partner, items)
+    print("📦 거래 감지됨: " .. partner.Name)
+    
     local data = {
-        action = actionType,
-        roblox_id = tostring(partnerId),
-        roblox_name = partnerName,
-        items = itemList
+        action = "deposit",
+        roblox_id = tostring(partner.UserId),
+        roblox_name = partner.Name,
+        items = "MM2 아이템"
     }
     
     local success, err = pcall(function()
-        HttpService:PostAsync(API_URL, HttpService:JSONEncode(data))
+        return HttpService:PostAsync(API_URL, HttpService:JSONEncode(data))
     end)
     
-    if not success then warn("API 전송 실패: " .. err) end
-end
-
--- MM2 자동 거래 수락 로직 (기존 메모리 조작 대신 이벤트 기반)
-game:GetService("ReplicatedStorage").Trade.AcceptTrade.OnClientEvent:Connect(function(partner, items)
-    -- 거래 수락 및 데이터 보고 로직 구현
-    print("거래 감지됨: " .. partner.Name)
-    reportTrade(partner.UserId, partner.Name, "MM2 Items List", "deposit")
+    if success then
+        print("✅ 서버 전송 성공!")
+    else
+        print("❌ 서버 전송 실패: " .. err)
+    end
 end)
