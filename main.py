@@ -1,26 +1,38 @@
-import sqlite3
-from datetime import datetime
+import json
+import os
 
-conn = sqlite3.connect('verified_users.db')
-cursor = conn.cursor()
+DB_FILE = "verified_users.json"
 
-# 테이블 생성 (한 번만)
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS verified_users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    verified_at TEXT
-)
-''')
-conn.commit()
+# DB 초기화 및 로드 함수
+def load_db():
+    if not os.path.exists(DB_FILE):
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f)
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return []
 
-def save_verified_user(user_id: int, username: str):
-    verified_at = datetime.utcnow().isoformat()
-    cursor.execute('''
-    INSERT INTO verified_users(user_id, username, verified_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-    username=excluded.username,
-    verified_at=excluded.verified_at
-    ''', (user_id, username, verified_at))
-    conn.commit()
+# 유저 저장 함수 (비동기)
+async def save_verified_user(user_id, discord_name, roblox_name):
+    db = load_db()
+    
+    # 중복 저장 방지 및 정보 업데이트
+    found = False
+    for user in db:
+        if user['discord_id'] == user_id:
+            user['discord_name'] = discord_name # 디스코드 이름 업데이트
+            user['roblox_name'] = roblox_name   # 로블록스 이름 업데이트
+            found = True
+            break
+            
+    if not found:
+        db.append({
+            "discord_id": user_id,
+            "discord_name": discord_name,
+            "roblox_name": roblox_name
+        })
+    
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(db, f, indent=4, ensure_ascii=False)
