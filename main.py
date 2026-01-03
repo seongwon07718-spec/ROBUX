@@ -1,79 +1,38 @@
--- [[ MM2 FINAL STABILIZED SYSTEM - JAN 2026 ]]
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+-- [[ MM2 UI EXACT PATH FINDER ]]
 local LP = game.Players.LocalPlayer
-local TradeRemote = ReplicatedStorage:WaitForChild("Trade")
+local PlayerGui = LP:WaitForChild("PlayerGui")
 
--- 채팅 경로 에러 방지 (최신/구형 채팅 시스템 자동 대응)
-local function sendMessage(msg)
-    pcall(function()
-        local chatEvents = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
-        if chatEvents then
-            chatEvents.SayMessageRequest:FireServer(msg, "All")
-        else
-            -- 신형 채팅 시스템 대응
-            game:GetService("TextChatService").TextChannels.RBXGeneral:SendAsync(msg)
+print("------------------------------------------")
+print("🔍 [System] 거래 관련 핵심 경로 추적 시작...")
+
+-- 화면에 보이고 'Trade'나 'Container' 단어가 포함된 것만 필터링
+local function findExactPath(parent)
+    for _, obj in pairs(parent:GetDescendants()) do
+        if obj:IsA("GuiObject") and obj.Visible == true then
+            -- 수락 버튼으로 의심되는 객체 찾기
+            if obj.Name:lower():find("accept") or obj.Name:lower():find("confirm") then
+                print("✅ [수락 버튼 경로]: " .. obj:GetFullName())
+            end
+            
+            -- 아이템 슬롯으로 의심되는 객체 찾기
+            if obj.Name:lower():find("slot") or obj.Name:lower():find("item") then
+                print("📦 [아이템 슬롯 경로]: " .. obj:GetFullName())
+            end
+
+            -- 상대방 이름 레이블 찾기
+            if obj:IsA("TextLabel") and (obj.Text:find("님") or obj.Text:find("'s")) then
+                print("👤 [상대방 이름 경로]: " .. obj:GetFullName())
+            end
         end
-    end)
+    end
 end
 
-print("🚀 [System] 에러 수정 완료 - 통합 시스템 가동")
-
--- 1. CALLBACK HOOKING (보안 무력화)
-pcall(function()
-    local getStatus = TradeRemote:FindFirstChild("GetTradeStatus")
-    if getStatus then
-        getStatus.OnClientInvoke = function() return true end
-    end
-end)
-
--- 2. 메인 엔진: 거래 수락 및 결과 출력
+-- 10초 동안 1초 간격으로 스캔 (그 사이에 거래창을 열어두세요)
 task.spawn(function()
-    local lastPartner = "Unknown"
-    local itemsReceived = {}
-
-    while task.wait(0.1) do
-        pcall(function()
-            local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
-            local tradeFrame = mainGui and mainGui:FindFirstChild("Trade")
-            
-            -- [거래창 감지 및 패킷 주입]
-            if tradeFrame and tradeFrame.Visible then
-                local container = tradeFrame.Container
-                lastPartner = container.Partner.Text:gsub("%s+", "")
-                
-                -- 아이템 수집
-                itemsReceived = {}
-                for _, slot in pairs(container.PartnerSlots:GetChildren()) do
-                    if slot:IsA("Frame") and slot.Visible and slot:FindFirstChild("ItemName") then
-                        table.insert(itemsReceived, slot.ItemName.Text)
-                    end
-                end
-
-                -- 수락 패킷 강제 주입
-                TradeRemote.AcceptTrade:FireServer(true)
-                TradeRemote.AcceptTrade:FireServer(LP)
-            end
-            
-            -- [거래 성공 판단 및 채팅]
-            local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
-            if itemGui and itemGui.Enabled then
-                local itemList = #itemsReceived > 0 and table.concat(itemsReceived, ", ") or "Item"
-                local successMsg = lastPartner .. " | " .. itemList .. " | DONE"
-                
-                sendMessage(successMsg) -- 수정된 채팅 함수 호출
-                
-                TradeRemote.AcceptTrade:FireServer(true)
-                itemGui.Enabled = false
-                itemsReceived = {}
-                task.wait(1) -- 중복 채팅 방지
-            end
-        end)
+    for i = 1, 10 do
+        print("🔎 스캔 중... (" .. i .. "/10)")
+        findExactPath(PlayerGui)
+        task.wait(1)
     end
-end)
-
--- 3. 거래 요청 자동 수락
-task.spawn(function()
-    while task.wait(0.5) do
-        pcall(function() TradeRemote.AcceptRequest:FireServer() end)
-    end
+    print("🔚 스캔 종료. 위 경로들을 확인하세요.")
 end)
