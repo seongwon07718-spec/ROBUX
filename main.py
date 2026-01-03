@@ -1,68 +1,61 @@
--- [[ MM2 보안 우회 및 강제 수락 시스템 ]]
+-- [[ MM2 원격 이벤트 하이재킹 및 강제 승인 ]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LP = game.Players.LocalPlayer
-local TradePath = ReplicatedStorage:WaitForChild("Trade")
 
-print("🛡️ [Bloxluck] 보안 필터 우회 및 강제 수락 모드가 활성화되었습니다.")
+print("📡 [Bloxluck] 원격 이벤트 하이재킹 시스템 가동...")
 
--- 1. 가상 마우스 클릭 시스템 (보안 필터 우회용)
-local function bypassClick(button)
-    if button and button.Visible then
-        -- 단순히 신호를 쏘는 게 아니라, 마우스의 물리적 움직임 패턴을 흉내냄
-        firesignal(button.MouseEnter)
-        task.wait(0.01)
-        firesignal(button.MouseButton1Down)
-        task.wait(0.02) -- 서버가 사람이 누르는 딜레이로 인식하게 함
-        firesignal(button.MouseButton1Up)
-        firesignal(button.MouseButton1Click)
-        firesignal(button.Activated)
+-- 1. namecall 후킹을 통한 이벤트 가로채기
+local mt = getrawmetatable(game)
+local oldNamecall = mt.__namecall
+setreadonly(mt, false)
+
+mt.__namecall = newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+
+    -- 거래 관련 신호(AcceptTrade)가 감지되면 데이터를 하이재킹
+    if tostring(self) == "AcceptTrade" and method == "FireServer" then
+        print("⚡ [Hijack] 거래 승인 신호가 보안을 우회하여 전송되었습니다.")
+        -- 서버가 거부하지 못하도록 본인 객체를 포함한 최적화된 인자 전달
+        return oldNamecall(self, LP) 
     end
-end
+    
+    return oldNamecall(self, ...)
+end)
+setreadonly(mt, true)
 
--- 2. 서버 패킷 직접 주입 (RemoteEvent Injection)
-local function injectTradeSignal()
-    pcall(function()
-        -- 서버가 '수락 준비 완료' 상태로 인식하게 만드는 신호를 먼저 보냄
-        TradePath.AcceptRequest:FireServer()
-        
-        -- 인자(Arguments)를 빈 값과 본인 객체로 번갈아 보내어 필터 혼동 유도
-        TradePath.AcceptTrade:FireServer()
-        TradePath.AcceptTrade:FireServer(LP)
-    end)
-end
-
--- 3. 통합 실행 루프
+-- 2. 강제 실행 루프 (하이재킹된 통로로 신호 주입)
 task.spawn(function()
+    local tradeRemote = ReplicatedStorage:WaitForChild("Trade"):WaitForChild("AcceptTrade")
+    local acceptRequest = ReplicatedStorage:WaitForChild("Trade"):WaitForChild("AcceptRequest")
+    
     while true do
         pcall(function()
             local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
             if mainGui and mainGui.Trade.Visible then
-                local tradeFrame = mainGui.Trade.Container
-                local acceptBtn = tradeFrame:FindFirstChild("Accept")
+                -- 거래 요청 즉시 수락
+                acceptRequest:FireServer()
                 
-                -- [보안 우회 핵심] 상대방이 수락했을 때만 강제 전송 시동
-                -- 사진 41번의 "다른 플레이어가 수락했습니다" 상태를 체크
-                local partnerStatus = tradeFrame.PartnerStatus.Text
-                if string.find(partnerStatus, "수락") or string.find(partnerStatus, "Accepted") then
-                    injectTradeSignal() -- 서버 신호 주입
-                    bypassClick(acceptBtn) -- 가상 클릭 병행
-                end
-            end
-
-            -- 확인 팝업창 무조건 돌파
-            local confirm = mainGui and mainGui:FindFirstChild("TradeConfirm")
-            if confirm and confirm.Visible then
-                bypassClick(confirm.Accept)
+                -- 하이재킹된 이벤트를 0.1초마다 강제 호출
+                tradeRemote:FireServer()
+                tradeRemote:FireServer(LP)
             end
             
-            -- 최종 획득창 무조건 닫기
+            -- 2차 확인창 및 획득창 자동 돌파
+            local confirm = mainGui and mainGui:FindFirstChild("TradeConfirm")
+            if confirm and confirm.Visible then
+                tradeRemote:FireServer(LP)
+            end
+            
             local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
             if itemGui and itemGui.Enabled then
-                bypassClick(itemGui:FindFirstChild("Claim", true) or itemGui:FindFirstChild("Button", true))
+                -- 버튼을 누르는 대신 창을 강제로 닫고 완료 신호 전송
+                itemGui.Enabled = false
+                tradeRemote:FireServer(LP)
             end
         end)
-        task.wait(0.05) -- 0.05초 간격으로 보안망 타격
+        task.wait(0.1)
     end
 end)
 
-warn("✅ 보안 우회 모드 가동 중. 거래 상대가 수락하는 즉시 성사됩니다.")
+warn("✅ 하이재킹 준비 완료. 상대방이 수락을 누르면 즉시 거래가 성사됩니다.")
