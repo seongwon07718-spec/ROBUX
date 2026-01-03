@@ -31,7 +31,9 @@ TradeRemote.UpdateTrade.OnClientEvent:Connect(function(data)
             canFinalAccept = true
             print("✅ 타이머 종료 - 수락 가능 상태")
         elseif not data.LockTime then
-            print("⚠️ LockTime 데이터 없음")
+            -- LockTime이 없는 경우 타이머 종료로 간주
+            canFinalAccept = true
+            print("✅ LockTime 없음 - 수락 가능 상태")
         end
     end)
 end)
@@ -44,6 +46,7 @@ task.spawn(function()
             if canFinalAccept and partnerAccepted then
                 print("🚀 모든 조건 충족! 최종 수락 신호 전송")
                 
+                -- 수락을 전송
                 TradeRemote.AcceptTrade:FireServer(true)
                 
                 -- 수락 후 잠시 대기하여 중복 전송 방지 (6초 리셋 방지)
