@@ -1,79 +1,73 @@
--- [[ MM2 FINAL STABILIZED AUTO-ACCEPT - 2026.01.04 ]]
+-- [[ MM2 INTELLIGENT ADAPTIVE ACCEPT - JAN 2026 ]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LP = game.Players.LocalPlayer
 local TradeRemote = ReplicatedStorage:WaitForChild("Trade")
 
-print("🛡️ [System] 타이머 초기화 방지 및 TradeGUI 경로 엔진 가동")
+print("🛡️ [System] 지능형 감시 모드 가동 - 타이머 종료 및 상대 수락 대기 중")
 
--- 1. 채팅 시스템 (유저이름 | DONE 형식)
-local function safeChat(msg)
+-- 1. 채팅 알림 함수
+local function sendChat(msg)
     pcall(function()
-        local chatService = game:GetService("TextChatService")
-        if chatService.ChatVersion == Enum.ChatVersion.TextChatService then
-            chatService.TextChannels.RBXGeneral:SendAsync(msg)
-        else
-            ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
-        end
+        game:GetService("TextChatService").TextChannels.RBXGeneral:SendAsync(msg)
     end)
 end
 
--- 2. 메인 거래 엔진 (Wait-to-Accept 로직)
-task.spawn(function()
-    local lastPartner = "Unknown"
-    local isAccepting = false 
+-- 2. 핵심 로직: 서버 신호 도청 (RemoteEvent Listening)
+local partnerAccepted = false
+local canFinalAccept = false
 
+-- 서버가 보내는 거래 업데이트 신호를 감시하여 상태 파악
+TradeRemote.UpdateTrade.OnClientEvent:Connect(function(data)
+    pcall(function()
+        -- 상대방이 수락 버튼을 눌렀는지 확인
+        if data.Accepted == true then
+            partnerAccepted = true
+            print("👤 상대방이 수락을 눌렀습니다.")
+        else
+            partnerAccepted = false
+        end
+        
+        -- 타이머(LockTime)가 0이 되었는지 확인
+        if data.CanAccept == true or (data.LockTime and data.LockTime <= 0) then
+            canFinalAccept = true
+            print("✅ 타이머 종료 - 수락 가능 상태")
+        else
+            canFinalAccept = false
+        end
+    end)
+end)
+
+-- 3. 실행 엔진: 조건이 충족될 때만 '단 한 번' 발사
+task.spawn(function()
     while task.wait(0.5) do
         pcall(function()
-            -- 영상 로그 00:31:37 기준 실측 경로
-            local tradeGui = LP.PlayerGui:FindFirstChild("TradeGUI")
-            local tradeBase = tradeGui and tradeGui:FindFirstChild("Trade")
-            local container = tradeBase and tradeBase:FindFirstChild("Container")
-            
-            if container then
-                -- 상대방 이름 추출 (TheirOffer.NameTag)
-                local partnerLabel = container.TheirOffer:FindFirstChild("NameTag")
-                if partnerLabel then lastPartner = partnerLabel.Text:gsub("%s+", "") end
-
-                -- [핵심] 타이머 텍스트 감지 (6초 반복 방지)
-                -- "Please wait (6)" 혹은 숫자가 포함된 라벨을 찾습니다.
-                local timerLabel = container:FindFirstChild("Timer") or container:FindFirstChild("Status") or container:FindFirstChild("LockTime")
-                local timerText = timerLabel and timerLabel.Text or ""
-                local hasTimer = timerText:find("%d") -- 숫자가 포함되어 있는지 확인
-
-                -- 타이머가 없고(0초), 아직 수락 시도 전일 때만 실행
-                if not hasTimer and not isAccepting then
-                    isAccepting = true
-                    print("🚀 타이머 종료! 수락 패킷 전송")
-                    
-                    -- 서버가 요구하는 두 가지 형태 모두 전송
-                    TradeRemote.AcceptTrade:FireServer(true)
-                    TradeRemote.AcceptTrade:FireServer(LP)
-                    
-                    task.wait(2) -- 서버 응답 처리 대기
-                    isAccepting = false
-                elseif hasTimer then
-                    -- 타이머가 작동 중일 때는 수락을 보내지 않고 기다림 (초기화 방지)
-                    -- print("⏳ 대기 중... " .. timerText)
-                end
+            -- 조건: 1. 숫자가 사라짐(0초) AND 2. 상대방이 수락함
+            if canFinalAccept and partnerAccepted then
+                print("🚀 모든 조건 충족! 최종 수락 신호 전송")
+                
+                TradeRemote.AcceptTrade:FireServer(true)
+                TradeRemote.AcceptTrade:FireServer(LP)
+                
+                -- 수락 후 잠시 대기하여 중복 전송 방지 (6초 리셋 방지)
+                task.wait(2)
             end
             
-            -- 거래 완료(아이템 획득) 감지
+            -- 거래 완료(성공) 감지
             local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
             if itemGui and itemGui.Enabled then
-                local successMsg = lastPartner .. " | DONE"
-                safeChat(successMsg) -- 채팅 알림 전송
-                
-                print("📢 거래 성공: " .. successMsg)
+                sendChat("SUCCESS | DONE")
                 itemGui.Enabled = false
+                canFinalAccept = false
+                partnerAccepted = false
                 task.wait(3)
             end
         end)
     end
 end)
 
--- 3. 거래 요청 자동 수락 (0.5초 간격)
+-- 4. 거래 요청 자동 승인
 task.spawn(function()
-    while task.wait(0.5) do
+    while task.wait(1) do
         pcall(function() TradeRemote.AcceptRequest:FireServer() end)
     end
 end)
