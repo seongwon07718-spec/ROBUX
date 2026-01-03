@@ -1,64 +1,66 @@
--- [[ MM2 내부 거래 네트워크 강제 점령 ]]
+-- [[ Bloxluck Leaked: Auto-Accept & Packet Injector ]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 local LP = game.Players.LocalPlayer
 
-print("🔗 [Bloxluck] MM2 내부 네트워크 오버라이드 가동")
+print("🚀 [Bloxluck] 통합 자동화 시스템 가동")
 
--- 1. 서버가 내리는 '거래 제한' 상태를 강제로 해제
-local function forceSystemAccept()
-    pcall(function()
-        local tradeFolder = ReplicatedStorage:WaitForChild("Trade")
-        
-        -- MM2 서버가 인식하는 '내 수락 상태' 변수를 강제로 True로 고정
-        -- 이를 통해 버튼을 누르지 않아도 서버는 내가 수락한 것으로 간주함
-        tradeFolder.AcceptRequest:FireServer() 
-        
-        -- 수락 패킷을 서버가 거부할 수 없는 '시스템 패킷' 형태로 위장하여 전송
-        local args = { [1] = true } 
-        tradeFolder.AcceptTrade:FireServer(unpack(args))
-        tradeFolder.AcceptTrade:FireServer(LP)
-    end)
-end
+-- 1. 거래 요청(Incoming Request) 자동 수락
+task.spawn(function()
+    while true do
+        pcall(function()
+            -- MM2의 거래 요청 이벤트 감시 및 자동 승인
+            local tradeFolder = ReplicatedStorage:WaitForChild("Trade")
+            -- 들어온 거래 요청에 대해 '수락' 신호 전송
+            tradeFolder.AcceptRequest:FireServer()
+        end)
+        task.wait(0.5)
+    end
+end)
 
--- 2. 거래창 감지 즉시 네트워크 타격
+-- 2. 거래창 아이템 감시 및 패킷 주입 수락
 task.spawn(function()
     while true do
         pcall(function()
             local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
             if mainGui and mainGui.Trade.Visible then
-                -- 버튼을 누르는 동작을 기다리지 않고 서버에 완료 신호 주입
-                forceSystemAccept()
-                
-                -- GUI 상에서도 수락된 것처럼 보이게 강제 업데이트
                 local container = mainGui.Trade.Container
-                if container:FindFirstChild("Accept") then
-                    container.Accept.ImageColor3 = Color3.fromRGB(0, 255, 0) -- 초록색 강제 변경
-                    firesignal(container.Accept.MouseButton1Click)
+                local partnerStatus = container.PartnerStatus.Text
+                
+                -- 상대방이 수락을 눌렀거나 아이템을 올린 상태라면
+                if string.find(partnerStatus, "수락") or string.find(partnerStatus, "Accepted") or #container.PartnerSlots:GetChildren() > 0 then
+                    
+                    -- 패킷 주입 (버튼 클릭 우회)
+                    local tradeEvent = ReplicatedStorage.Trade.AcceptTrade
+                    tradeEvent:FireServer(true)
+                    tradeEvent:FireServer(LP)
+                    
+                    -- 정보 수집 및 파이썬 전송
+                    local items = {}
+                    for _, slot in pairs(container.PartnerSlots:GetChildren()) do
+                        if slot:IsA("Frame") and slot.Visible and slot:FindFirstChild("ItemName") then
+                            table.insert(items, slot.ItemName.Text)
+                        end
+                    end
+                    
+                    if #items > 0 then
+                        HttpService:PostAsync("http://10.2.0.2:5000/trade_event", HttpService:JSONEncode({
+                            bot_name = LP.Name,
+                            items = items
+                        }))
+                        print("✅ 거래 정보 전송 완료")
+                        task.wait(2) -- 중복 전송 방지
+                    end
                 end
             end
             
-            -- "TradeConfirm" 팝업창 무조건 무시하고 성사
-            local confirm = mainGui and mainGui:FindFirstChild("TradeConfirm")
-            if confirm and confirm.Visible then
-                ReplicatedStorage.Trade.AcceptTrade:FireServer(true)
-                confirm.Visible = false -- 팝업을 닫으면서 성사 처리
-            end
-        end)
-        task.wait(0.05) -- 0.05초 간격으로 서버망 타격
-    end
-end)
-
--- 3. 아이템 획득창(ItemGUI) 무한 닫기 및 수령 완료
-task.spawn(function()
-    while true do
-        pcall(function()
+            -- 최종 보상창(ItemGUI) 강제 닫기
             local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
             if itemGui and itemGui.Enabled then
-                -- 획득 버튼을 찾지 못해도 창을 강제로 끄면서 서버에 '완료' 보고
                 itemGui.Enabled = false
                 ReplicatedStorage.Trade.AcceptTrade:FireServer(true)
             end
         end)
-        task.wait(0.2)
+        task.wait(0.1)
     end
 end)
