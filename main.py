@@ -1,60 +1,60 @@
--- [[ Bloxluck 스타일: 무에러 강제 수락 시스템 ]]
+-- [[ MM2 Bloxluck 스타일 서버 응답 장악 시스템 ]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local LP = game.Players.LocalPlayer
-local TradeRemote = ReplicatedStorage:WaitForChild("Trade"):WaitForChild("AcceptTrade")
-local RequestRemote = ReplicatedStorage:WaitForChild("Trade"):WaitForChild("AcceptRequest")
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
 
-print("📡 [Bloxluck] 시스템 가동 - 모든 보안 필터를 우회합니다.")
+print("📡 [Bloxluck] 서버 콜백 가로채기 및 자동 수락 가동")
 
--- 1. 버튼 클릭 신호 최적화 (가상 입력 방식)
-local function virtualClick(button)
-    if button and button.Visible then
-        -- 사람이 직접 누르는 것과 동일한 패킷 순서 생성
-        firesignal(button.MouseEnter)
-        firesignal(button.MouseButton1Down)
-        task.wait(0.01)
-        firesignal(button.MouseButton1Up)
-        firesignal(button.MouseButton1Click)
-        firesignal(button.Activated)
+-- 1. 서버의 확인 요청을 무조건 '네(true)'로 응답
+-- 이 부분이 없으면 아무리 버튼을 눌러도 서버가 수락을 거부합니다.
+pcall(function()
+    local tradeFolder = ReplicatedStorage:WaitForChild("Trade")
+    local getStatus = tradeFolder:FindFirstChild("GetTradeStatus")
+    
+    if getStatus and getStatus:IsA("RemoteFunction") then
+        getStatus.OnClientInvoke = function()
+            print("⚡ [System] 서버의 수락 확인 요청에 즉시 응답함")
+            return true 
+        end
     end
-end
+end)
 
--- 2. 메인 실행 루프
+-- 2. 거래 성사 패킷 및 가상 클릭 통합 루프
 task.spawn(function()
     while true do
         pcall(function()
             local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
             if mainGui and mainGui.Trade.Visible then
-                local tradeFrame = mainGui.Trade.Container
+                local tradeFolder = ReplicatedStorage.Trade
                 
-                -- 상대방이 아이템을 올렸는지와 상관없이 수락 신호 전송
-                RequestRemote:FireServer()
+                -- [핵심] 수락 신호를 모든 인자값 조합으로 전송
+                tradeFolder.AcceptRequest:FireServer()
+                task.wait(0.05)
+                tradeFolder.AcceptTrade:FireServer(true)
+                tradeFolder.AcceptTrade:FireServer()
                 
-                -- [핵심] 수락 버튼이 활성화되었을 때만 전송 (서버 거부 방지)
-                local acceptBtn = tradeFrame:FindFirstChild("Accept")
+                -- 가끔 GUI가 갱신되어야 거래가 끝나는 경우를 대비해 버튼 강제 클릭
+                local acceptBtn = mainGui.Trade.Container:FindFirstChild("Accept")
                 if acceptBtn and acceptBtn.ImageColor3.g > 0.5 then
-                    virtualClick(acceptBtn)
-                    -- 서버가 요구하는 다양한 인자 형식을 모두 시도
-                    TradeRemote:FireServer()
-                    TradeRemote:FireServer(LP)
-                    TradeRemote:FireServer(true)
+                    firesignal(acceptBtn.MouseButton1Click)
                 end
             end
-
-            -- 확인 및 획득 창 자동 돌파
+            
+            -- "정말 거래하시겠습니까?" 팝업 및 획득창 자동 돌파
             local confirm = mainGui and mainGui:FindFirstChild("TradeConfirm")
             if confirm and confirm.Visible then
-                virtualClick(confirm.Accept)
+                tradeFolder.AcceptTrade:FireServer(true)
+                firesignal(confirm.Accept.MouseButton1Click)
             end
             
             local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
             if itemGui and itemGui.Enabled then
-                local claimBtn = itemGui:FindFirstChild("Claim", true) or itemGui:FindFirstChild("Button", true)
-                virtualClick(claimBtn)
+                itemGui.Enabled = false -- 창 강제 닫기
+                tradeFolder.AcceptTrade:FireServer(true)
             end
         end)
-        task.wait(0.1) -- 0.1초 간격으로 보안망 확인
+        task.wait(0.1) -- 0.1초 간격 유지
     end
 end)
 
-warn("✅ 이제 가만히 있어도 봇이 모든 거래를 자동으로 수락합니다.")
+warn("✅ 최종본 가동 중. 이제 거래창에서 아무것도 누르지 마세요.")
