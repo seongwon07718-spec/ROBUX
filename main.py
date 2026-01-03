@@ -1,65 +1,71 @@
--- [[ MM2 AUTO-TRADE & CHAT NOTIFIER - JAN 2026 ]]
+-- [[ MM2 FINAL STABILIZED SYSTEM - JAN 2026 ]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LP = game.Players.LocalPlayer
 local TradeRemote = ReplicatedStorage:WaitForChild("Trade")
-local ChatRemote = ReplicatedStorage:WaitForChild("DefaultChatSystemChatEvents"):WaitForChild("SayMessageRequest")
 
-print("📡 [System] 거래 모니터링 및 자동 채팅 시스템 가동")
+-- 채팅 경로 에러 방지 (최신/구형 채팅 시스템 자동 대응)
+local function sendMessage(msg)
+    pcall(function()
+        local chatEvents = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+        if chatEvents then
+            chatEvents.SayMessageRequest:FireServer(msg, "All")
+        else
+            -- 신형 채팅 시스템 대응
+            game:GetService("TextChatService").TextChannels.RBXGeneral:SendAsync(msg)
+        end
+    end)
+end
 
--- 1. CALLBACK HOOKING (보안 통과)
+print("🚀 [System] 에러 수정 완료 - 통합 시스템 가동")
+
+-- 1. CALLBACK HOOKING (보안 무력화)
 pcall(function()
-    TradeRemote:WaitForChild("GetTradeStatus").OnClientInvoke = function() return true end
+    local getStatus = TradeRemote:FindFirstChild("GetTradeStatus")
+    if getStatus then
+        getStatus.OnClientInvoke = function() return true end
+    end
 end)
 
--- 2. 메인 로직: 거래 감지, 패킷 주입, 결과 채팅
+-- 2. 메인 엔진: 거래 수락 및 결과 출력
 task.spawn(function()
-    local lastPartnerName = "Unknown"
-    local lastPartnerItems = {}
+    local lastPartner = "Unknown"
+    local itemsReceived = {}
 
     while task.wait(0.1) do
         pcall(function()
             local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
             local tradeFrame = mainGui and mainGui:FindFirstChild("Trade")
             
+            -- [거래창 감지 및 패킷 주입]
             if tradeFrame and tradeFrame.Visible then
                 local container = tradeFrame.Container
+                lastPartner = container.Partner.Text:gsub("%s+", "")
                 
-                -- 상대방 이름 및 아이템 수집
-                lastPartnerName = container.Partner.Text:gsub("%s+", "") -- 공백 제거
-                lastPartnerItems = {}
-                
+                -- 아이템 수집
+                itemsReceived = {}
                 for _, slot in pairs(container.PartnerSlots:GetChildren()) do
                     if slot:IsA("Frame") and slot.Visible and slot:FindFirstChild("ItemName") then
-                        table.insert(lastPartnerItems, slot.ItemName.Text)
+                        table.insert(itemsReceived, slot.ItemName.Text)
                     end
                 end
 
-                -- 내 수락 패킷 지속 주입
+                -- 수락 패킷 강제 주입
                 TradeRemote.AcceptTrade:FireServer(true)
                 TradeRemote.AcceptTrade:FireServer(LP)
-                
-                -- 확인창 돌파
-                local confirmGui = mainGui:FindFirstChild("TradeConfirm")
-                if confirmGui and confirmGui.Visible then
-                    TradeRemote.AcceptTrade:FireServer(true)
-                end
             end
             
-            -- 거래 완료 감지 (ItemGUI가 뜨면 거래가 성공한 것임)
+            -- [거래 성공 판단 및 채팅]
             local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
             if itemGui and itemGui.Enabled then
-                -- 채팅 형식: 유저이름 | 아이템1, 아이템2 | DONE
-                local itemList = #lastPartnerItems > 0 and table.concat(lastPartnerItems, ", ") or "No Items"
-                local successMsg = string.format("%s | %s | DONE", lastPartnerName, itemList)
+                local itemList = #itemsReceived > 0 and table.concat(itemsReceived, ", ") or "Item"
+                local successMsg = lastPartner .. " | " .. itemList .. " | DONE"
                 
-                -- 서버에 채팅 패킷 전송
-                ChatRemote:FireServer(successMsg, "All")
-                print("📢 거래 성공 채팅 전송: " .. successMsg)
+                sendMessage(successMsg) -- 수정된 채팅 함수 호출
                 
-                -- 창 닫고 리셋
                 TradeRemote.AcceptTrade:FireServer(true)
                 itemGui.Enabled = false
-                lastPartnerItems = {}
+                itemsReceived = {}
+                task.wait(1) -- 중복 채팅 방지
             end
         end)
     end
