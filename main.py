@@ -1,4 +1,3 @@
--- [[ MM2 INTELLIGENT ADAPTIVE ACCEPT - JAN 2026 ]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LP = game.Players.LocalPlayer
 local TradeRemote = ReplicatedStorage:WaitForChild("Trade")
@@ -31,8 +30,8 @@ TradeRemote.UpdateTrade.OnClientEvent:Connect(function(data)
         if data.CanAccept == true or (data.LockTime and data.LockTime <= 0) then
             canFinalAccept = true
             print("✅ 타이머 종료 - 수락 가능 상태")
-        else
-            canFinalAccept = false
+        elseif not data.LockTime then
+            print("⚠️ LockTime 데이터 없음")
         end
     end)
 end)
@@ -46,7 +45,6 @@ task.spawn(function()
                 print("🚀 모든 조건 충족! 최종 수락 신호 전송")
                 
                 TradeRemote.AcceptTrade:FireServer(true)
-                TradeRemote.AcceptTrade:FireServer(LP)
                 
                 -- 수락 후 잠시 대기하여 중복 전송 방지 (6초 리셋 방지)
                 task.wait(2)
@@ -66,8 +64,15 @@ task.spawn(function()
 end)
 
 -- 4. 거래 요청 자동 승인
+local lastRequestTime = 0
 task.spawn(function()
     while task.wait(1) do
-        pcall(function() TradeRemote.AcceptRequest:FireServer() end)
+        -- 1초 간격으로 반복 호출하는 대신 조건을 넣어서 불필요한 호출 방지
+        if tick() - lastRequestTime > 5 then  -- 5초 이상 간격이 있을 때만 요청
+            pcall(function() 
+                TradeRemote.AcceptRequest:FireServer() 
+            end)
+            lastRequestTime = tick()
+        end
     end
 end)
