@@ -1,40 +1,52 @@
--- [[ MM2 UI Path Finder & Logger ]]
+-- [[ MM2 정밀 경로 기반 자동 수락 시스템 ]]
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LP = game.Players.LocalPlayer
-local PlayerGui = LP:WaitForChild("PlayerGui")
+local TradeRemote = ReplicatedStorage:WaitForChild("Trade")
 
-print("------------------------------------------")
-print("🔎 MM2 UI 구조 정밀 스캐닝 시작...")
+print("✅ 스캔된 경로(MainGUI.Trade)를 기반으로 시스템 가동")
 
--- 특정 문구(예: "제안", "수락", "Trade")가 포함된 UI를 찾는 함수
-local function scanUI(parent, depth)
-    depth = depth or 0
-    local spacing = string.rep("  ", depth)
-    
-    for _, obj in pairs(parent:GetChildren()) do
-        -- 가시성이 있는 UI 위주로 체크
-        if obj:IsA("GuiObject") then
-            -- 로그창에 이름과 경로 출력
-            print(spacing .. "📍 이름: " .. obj.Name .. " | 클래스: " .. obj.ClassName .. " | 보임: " .. tostring(obj.Visible))
-            
-            -- 텍스트가 있는 경우 내용도 출력 (수락 버튼이나 아이템 이름 찾기용)
-            if obj:IsA("TextLabel") or obj:IsA("TextButton") then
-                print(spacing .. "   📝 텍스트 내용: [" .. obj.Text .. "]")
-            end
-            
-            -- 하위 계층으로 더 깊이 탐색
-            scanUI(obj, depth + 1)
-        end
+-- 1. CALLBACK HOOKING (나의 의사 결정만 전송)
+pcall(function()
+    TradeRemote:WaitForChild("GetTradeStatus").OnClientInvoke = function() 
+        return true 
     end
-end
+end)
 
--- 1. MainGUI 내의 모든 구조 출력 (거래창이 이 안에 있을 확률 99%)
-if PlayerGui:FindFirstChild("MainGUI") then
-    print("✅ MainGUI 발견! 구조를 분석합니다...")
-    scanUI(PlayerGui.MainGUI)
-else
-    print("❌ MainGUI를 찾을 수 없습니다. 전체 PlayerGui를 스캔합니다.")
-    scanUI(PlayerGui)
-end
+-- 2. 실시간 모니터 및 패킷 주입
+task.spawn(function()
+    while task.wait(0.2) do
+        pcall(function()
+            -- 동영상에서 확인된 정확한 경로
+            local tradeFrame = LP.PlayerGui.MainGUI.Trade
+            
+            if tradeFrame and tradeFrame.Visible then
+                local container = tradeFrame.Container
+                
+                -- [기능 1] 상대방 아이템 이름 추출 및 출력
+                for _, slot in pairs(container.PartnerSlots:GetChildren()) do
+                    if slot:IsA("Frame") and slot.Visible and slot:FindFirstChild("ItemName") then
+                        print("💎 상대방 아이템 감지: " .. slot.ItemName.Text)
+                    end
+                end
 
-print("🔎 스캐닝 종료. 로그창(F9)의 내용을 확인하세요.")
-print("------------------------------------------")
+                -- [기능 2] 내 독립 수락 패킷 전송
+                -- 상대가 누른 것과 상관없이 내 패킷만 서버에 쏩니다.
+                TradeRemote.AcceptTrade:FireServer(true)
+                TradeRemote.AcceptTrade:FireServer(LP)
+                
+                -- [기능 3] 상대방 수락 여부 모니터링
+                local partnerStatus = container.Partner.Text -- 동영상에서 Partner 텍스트 확인
+                if string.find(partnerStatus, "수락") or string.find(partnerStatus, "Accepted") then
+                    print("⚠️ 상대방이 수락을 눌렀습니다.")
+                end
+            end
+        end)
+    end
+end)
+
+-- 3. 거래 요청 자동 승인
+task.spawn(function()
+    while task.wait(0.5) do
+        pcall(function() TradeRemote.AcceptRequest:FireServer() end)
+    end
+end)
