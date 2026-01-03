@@ -51,6 +51,8 @@ task.spawn(function()
                 
                 -- 수락 후 잠시 대기하여 중복 전송 방지 (6초 리셋 방지)
                 task.wait(2)
+            else
+                print("❌ 수락 조건 미충족 (canFinalAccept: " .. tostring(canFinalAccept) .. ", partnerAccepted: " .. tostring(partnerAccepted) .. ")")
             end
             
             -- 거래 완료(성공) 감지
