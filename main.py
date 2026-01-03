@@ -1,62 +1,87 @@
-from discord.ext import tasks
-import discord
-from datetime import datetime
+-- [[ MM2 완전 자동 거래 수락 및 데이터 전송 스크립트 ]]
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+local API_URL = "http://10.2.0.2:5000/trade/event" -- 사용자님의 파이썬 서버 주소
 
-# 자동 업데이트를 관리할 전역 변수
-status_msg = None
+print("🚀 [Bloxluck] 머더 자동 수락 시스템이 활성화되었습니다.")
 
-# 1. 자동 업데이트 루프 정의 (반드시 @tasks.loop를 사용해야 합니다)
-@tasks.loop(seconds=10)
-async def bot_status_loop():
-    global status_msg
-    if status_msg:
-        try:
-            # 새로운 실시간 상태 임베드 생성
-            new_embed = await create_bot_state_embed()
-            # 기존 메시지 수정 (새 메시지를 보내지 않고 내용만 교체)
-            await status_msg.edit(embed=new_embed)
-        except Exception as e:
-            print(f"자동 업데이트 중 오류 발생: {e}")
-            bot_status_loop.stop()
+-- 1. 상대방 아이템 리스트 추출 함수
+local function getPartnerItems()
+    local itemNames = {}
+    pcall(function()
+        local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
+        local partnerOffer = mainGui.Trade.Container.PartnerOffer
+        for _, slot in pairs(partnerOffer:GetChildren()) do
+            if slot:IsA("Frame") and slot:FindFirstChild("ItemName") then
+                table.insert(itemNames, slot.ItemName.Text)
+            end
+        end
+    end)
+    return #itemNames > 0 and table.concat(itemNames, ", ") or "아이템 없음"
+end
 
-# 2. 실시간 상태 임베드 생성 함수
-async def create_bot_state_embed():
-    embed = discord.Embed(
-        title="📡 실시간 봇 가동 생중계",
-        description="이 메시지는 **10초마다** 자동으로 업데이트됩니다.",
-        color=0x2F3136
-    )
-    
-    # 사진 36번의 BOT_DATA (머더, 입양) 구조에 맞춰 실시간 체크
-    for category, bots in BOT_DATA.items():
-        status_lines = []
-        for bot in bots:
-            # 로블록스 API를 통한 실시간 온라인 여부 확인
-            is_online = await get_bot_status(bot["id"])
-            emoji = "🟢 **온라인**" if is_online else "🔴 **오프라인**"
-            status_lines.append(f"{bot['name']}: {emoji}")
-        
-        embed.add_field(
-            name=f"🎮 {category}",
-            value="\n".join(status_lines) if status_lines else "등록된 봇 없음",
-            inline=False
-        )
-    
-    embed.set_footer(text=f"마지막 자동 갱신: {datetime.now().strftime('%H:%M:%S')}")
-    return embed
+-- 2. 메인 자동화 루프 (0.1초 간격)
+task.spawn(function()
+    while true do
+        pcall(function()
+            local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
+            
+            -- [단계 1] 거래 요청 팝업 자동 수락
+            local requestGui = LP.PlayerGui:FindFirstChild("TradeRequest")
+            if requestGui and requestGui.Enabled then
+                local acceptBtn = requestGui:FindFirstChild("Accept", true)
+                if acceptBtn then firesignal(acceptBtn.MouseButton1Click) end
+            end
 
-# 3. /bot_state 명령어 정의
-@bot.tree.command(name="bot_state", description="채널에 실시간 봇 상태 메시지를 고정합니다.")
-async def bot_state_cmd(interaction: discord.Interaction):
-    global status_msg
+            -- [단계 2] 거래창 내부 수락 로직
+            if mainGui and mainGui.Trade.Visible then
+                -- 아이템 고정 및 기본 수락
+                ReplicatedStorage.Trade.AcceptRequest:FireServer()
+                
+                -- 상대방이 수락했다면 나도 최종 수락 강제 실행
+                local partnerStatus = mainGui.Trade.Container.PartnerStatus.Text
+                if string.find(partnerStatus, "수락") or string.find(partnerStatus, "Accepted") then
+                    ReplicatedStorage.Trade.AcceptTrade:FireServer()
+                end
+            end
+
+            -- [단계 3] "확인하겠습니까?" 팝업 돌파
+            local confirmGui = mainGui and mainGui:FindFirstChild("TradeConfirm")
+            if confirmGui and confirmGui.Visible then
+                ReplicatedStorage.Trade.AcceptTrade:FireServer()
+            end
+
+            -- [단계 4] 최종 "획득(Claim)" 버튼 자동 클릭
+            local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
+            if itemGui and itemGui.Enabled then
+                local claimBtn = itemGui:FindFirstChild("Claim", true) or itemGui:FindFirstChild("Button", true)
+                if claimBtn then firesignal(claimBtn.MouseButton1Click) end
+            end
+        end)
+        task.wait(0.1)
+    end
+end)
+
+-- 3. 거래 완료 감지 및 파이썬 서버 전송
+ReplicatedStorage.Trade.AcceptTrade.OnClientEvent:Connect(function(partner)
+    local items = getPartnerItems()
+    task.wait(1) -- 획득 처리 시간 대기
     
-    # [에러 방지] 사진 36번의 중복 응답 에러를 막기 위해 지연 응답 사용
-    await interaction.response.defer(ephemeral=False) 
+    local mainGui = LP.PlayerGui:FindFirstChild("MainGUI")
+    local itemGui = LP.PlayerGui:FindFirstChild("ItemGUI")
     
-    # 초기 임베드 생성 및 전송
-    embed = await create_bot_state_embed()
-    status_msg = await interaction.followup.send(embed=embed)
-    
-    # [사진 37번 에러 해결] 함수가 아닌 loop 객체의 상태를 확인하여 시작
-    if not bot_status_loop.is_running():
-        bot_status_loop.start()
+    -- 거래창과 획득창이 모두 닫혔을 때만 성공으로 간주
+    if (not mainGui.Trade.Visible) and (not itemGui.Enabled) then
+        pcall(function()
+            HttpService:PostAsync(API_URL, HttpService:JSONEncode({
+                action = "deposit",
+                roblox_id = tostring(partner.UserId),
+                roblox_name = tostring(partner.Name),
+                items = items
+            }))
+        end)
+        warn("✅ 거래 완료 보고 성공: " .. items)
+    end
+end)
