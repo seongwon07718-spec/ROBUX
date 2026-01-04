@@ -1,25 +1,36 @@
--- [[ 2026 MM2 무한 리모트 스팸 (초단순 버전) ]] --
-local TradeRemote = game:GetService("ReplicatedStorage"):WaitForChild("Trade"):WaitForChild("AcceptTrade")
+-- [[ UI 경로 추적기: 거래창을 열고 화면을 보세요 ]] --
+local player = game.Players.LocalPlayer
+local sg = Instance.new("ScreenGui", player.PlayerGui)
+local label = Instance.new("TextLabel", sg)
+label.Size = UDim2.new(0, 400, 0, 100)
+label.Position = UDim2.new(0, 10, 0, 10)
+label.BackgroundColor3 = Color3.new(0, 0, 0)
+label.TextColor3 = Color3.new(0, 1, 0) -- 초록색 글씨
+label.TextSize = 15
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.Text = "거래창을 열면 경로가 여기에 표시됩니다..."
 
-print("🔥 무한 수락 신호 전송 시작! (UI 체크 없음)")
-
--- 화면에 작동 중인지 표시해주는 작은 글자 (모바일 확인용)
-local sg = Instance.new("ScreenGui", game:GetService("Players").LocalPlayer.PlayerGui)
-local txt = Instance.new("TextLabel", sg)
-txt.Size = UDim2.new(0, 200, 0, 30)
-txt.Position = UDim2.new(0, 10, 0, 10)
-txt.Text = "RUNNING: Accept Spammer"
-txt.BackgroundTransparency = 0.5
-
-task.spawn(function()
-    while true do
-        -- 서버에 수락 신호를 무한 반복해서 보냄
-        -- pcall은 에러가 나도 스크립트가 멈추지 않게 방어해줍니다.
-        pcall(function()
-            TradeRemote:FireServer()
-        end)
-        
-        -- 너무 빠르면 킥당할 수 있으니 아주 미세한 간격을 둡니다.
-        task.wait(0.2) 
+game:GetService("RunService").RenderStepped:Connect(function()
+    local found = false
+    -- PlayerGui 안의 모든 것을 뒤져서 'Trade' 단어가 들어간 UI를 찾습니다.
+    for _, v in pairs(player.PlayerGui:GetDescendants()) do
+        if v:IsA("Frame") and v.Visible and (v.Name:find("Trade") or v.Name:find("Accept")) then
+            label.Text = "📍 찾은 경로: \n" .. v:GetFullName()
+            found = true
+            break
+        end
     end
+    if not found then label.Text = "거래창을 찾고 있습니다... (열어주세요)" end
 end)
+
+-- [[ 모든 UI 버튼 이름 출력 ]] --
+local player = game.Players.LocalPlayer
+print("--- [현재 로드된 모든 버튼 목록] ---")
+for _, v in pairs(player.PlayerGui:GetDescendants()) do
+    if v:IsA("TextButton") or v:IsA("ImageButton") then
+        if v.Visible then
+            print("버튼 이름: " .. v.Name .. " | 경로: " .. v:GetFullName())
+        end
+    end
+end
+print("---------------------------------")
