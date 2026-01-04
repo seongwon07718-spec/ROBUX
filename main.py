@@ -1,36 +1,53 @@
--- [[ UI 경로 추적기: 거래창을 열고 화면을 보세요 ]] --
-local player = game.Players.LocalPlayer
-local sg = Instance.new("ScreenGui", player.PlayerGui)
+-- [[ 영상 데이터 분석 기반: 모바일 MM2 전용 자동화 ]] --
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- 서버로 보낼 리모트 신호 (이건 동일함)
+local AcceptRemote = ReplicatedStorage:WaitForChild("Trade"):WaitForChild("AcceptTrade")
+
+-- [시각화 상태창]
+local sg = Instance.new("ScreenGui", LocalPlayer.PlayerGui)
 local label = Instance.new("TextLabel", sg)
-label.Size = UDim2.new(0, 400, 0, 100)
+label.Size = UDim2.new(0, 250, 0, 50)
 label.Position = UDim2.new(0, 10, 0, 10)
-label.BackgroundColor3 = Color3.new(0, 0, 0)
-label.TextColor3 = Color3.new(0, 1, 0) -- 초록색 글씨
-label.TextSize = 15
-label.TextXAlignment = Enum.TextXAlignment.Left
-label.Text = "거래창을 열면 경로가 여기에 표시됩니다..."
+label.Text = "🤖 봇 대기 중 (영상 경로 적용됨)"
 
-game:GetService("RunService").RenderStepped:Connect(function()
-    local found = false
-    -- PlayerGui 안의 모든 것을 뒤져서 'Trade' 단어가 들어간 UI를 찾습니다.
-    for _, v in pairs(player.PlayerGui:GetDescendants()) do
-        if v:IsA("Frame") and v.Visible and (v.Name:find("Trade") or v.Name:find("Accept")) then
-            label.Text = "📍 찾은 경로: \n" .. v:GetFullName()
-            found = true
-            break
-        end
+task.spawn(function()
+    while task.wait(0.5) do
+        pcall(function()
+            -- 영상 로그에서 확인된 모바일 전용 실제 경로 적용
+            local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
+            local tradeContainer = mainGui.Lobby.Screens.Trading.Container
+            local tradeFrame = tradeContainer:FindFirstChild("Trade")
+            local requestFrame = tradeContainer:FindFirstChild("TradeRequest")
+
+            -- 1. 들어오는 거래 요청 자동 수락
+            if requestFrame and requestFrame.Visible then
+                AcceptRemote:FireServer()
+                label.Text = "✅ 거래 요청 수락함!"
+            end
+
+            -- 2. 거래창 안에서 1차/2차 자동 수락
+            if tradeFrame and tradeFrame.Visible then
+                label.Text = "📍 거래 감지! 수락 시작..."
+                AcceptRemote:FireServer() -- 1차 수락
+
+                -- 2026 보안 대기 시간 (5초)
+                task.wait(5.1)
+
+                -- 2차 최종 수락 (3번 연속 전송으로 확실히 처리)
+                AcceptRemote:FireServer()
+                task.wait(0.1)
+                AcceptRemote:FireServer()
+                task.wait(0.1)
+                AcceptRemote:FireServer()
+                
+                label.Text = "✨ 최종 수락 완료!"
+                repeat task.wait(1) until not tradeFrame.Visible
+            else
+                label.Text = "🤖 거래 대기 중..."
+            end
+        end)
     end
-    if not found then label.Text = "거래창을 찾고 있습니다... (열어주세요)" end
 end)
-
--- [[ 모든 UI 버튼 이름 출력 ]] --
-local player = game.Players.LocalPlayer
-print("--- [현재 로드된 모든 버튼 목록] ---")
-for _, v in pairs(player.PlayerGui:GetDescendants()) do
-    if v:IsA("TextButton") or v:IsA("ImageButton") then
-        if v.Visible then
-            print("버튼 이름: " .. v.Name .. " | 경로: " .. v:GetFullName())
-        end
-    end
-end
-print("---------------------------------")
