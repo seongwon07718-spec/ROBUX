@@ -1,32 +1,62 @@
+-- [[ MM2 2026 AUTO TRADE BOT - 2nd Confirm & Webhook ]] --
+
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Player = game.Players.LocalPlayer
-local TradeAPI = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("TradeAPI") -- 경로 확인 필요
+local WebhookURL = "여기에_디스코드_웹훅_주소_입력"
 
--- 거래창 데이터에서 현재 TradeID를 가져오는 함수 (가장 핵심)
-local function getTradeId()
-    local tradeGui = Player.PlayerGui:FindFirstChild("TradeGUI") -- 이름은 다를 수 있음
-    if tradeGui and tradeGui:FindFirstChild("TradeID") then
-        return tradeGui.TradeID.Value
-    end
-    return nil
+-- 1. 최신 리모트 경로 탐색 (2026년 가변 경로 대응)
+local TradeRemote = ReplicatedStorage:FindFirstChild("TradeAPI", true) or ReplicatedStorage:FindFirstChild("TradeEvent", true)
+
+-- 2. 데이터 전송 함수 (유저 이름, 아이템 리스트)
+local function sendTradeLog(targetName, items)
+    local data = {
+        ["embeds"] = {{
+            ["title"] = "✅ 거래 완료 리포트",
+            ["description"] = "**" .. targetName .. "** 님과 거래를 마쳤습니다.",
+            ["fields"] = {
+                {["name"] = "획득한 아이템", ["value"] = items, ["inline"] = false}
+            },
+            ["color"] = 5814783
+        }}
+    }
+    pcall(function()
+        HttpService:PostAsync(WebhookURL, HttpService:JSONEncode(data))
+    end)
 end
 
--- 자동 수락 메인 루프
+-- 3. 거래 ID 및 아이템 정보 추출 후 수락 로직
 task.spawn(function()
     while task.wait(0.5) do
-        local currentId = getTradeId()
-        
         pcall(function()
-            -- 1. 일단 요청이 오면 무조건 수락
-            TradeAPI:FireServer("AcceptRequest")
+            local mainGui = Player.PlayerGui:FindFirstChild("MainGUI")
+            local tradeGui = mainGui and mainGui:FindFirstChild("Trade")
             
-            -- 2. 거래창이 열려 있고 ID가 있다면 1, 2차 수락 진행
-            if currentId then
-                TradeAPI:FireServer("AcceptTrade", currentId)
-                task.wait(1.5) -- 서버 검증 대기 시간
-                TradeAPI:FireServer("ConfirmTrade", currentId)
-                print("거래 ID [" .. tostring(currentId) .. "] 최종 수락 시도")
+            if tradeGui and tradeGui.Visible then
+                -- 거래 상대방 이름 및 아이템 텍스트 추출
+                local targetUser = tradeGui.Container.Target.PlayerName.Text
+                local receivedItems = tradeGui.Container.Target.Offer.Items.Text -- 실제 GUI 구조에 따라 수정 필요
+                local tradeID = tradeGui:GetAttribute("TradeID") -- 2026년 방식: 속성값에 ID 저장
+
+                -- 1차 수락 (Accept)
+                TradeRemote:FireServer("AcceptTrade", tradeID)
+                
+                -- 서버 검증을 위한 딜레이 (너무 빠르면 킥당함)
+                task.wait(2.5) 
+                
+                -- 2차 최종 확인 (Confirm)
+                TradeRemote:FireServer("ConfirmTrade", tradeID)
+                
+                -- 로그 전송
+                sendTradeLog(targetUser, receivedItems)
+                print("거래 수락 및 로그 전송 완료: " .. targetUser)
+                
+                -- 거래가 끝날 때까지 대기
+                repeat task.wait(1) until not tradeGui.Visible
             end
+            
+            -- 들어오는 요청 자동 수락
+            TradeRemote:FireServer("AcceptRequest")
         end)
     end
 end)
