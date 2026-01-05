@@ -2,77 +2,71 @@ from PIL import Image
 import math
 import os
 
-def create_smooth_vertical_flip(h_path, t_path, output_name="coinflip_smooth.gif"):
+def create_ultimate_smooth_gif(h_path, t_path, output_name="coinflip_ultra.gif"):
     if not os.path.exists(h_path) or not os.path.exists(t_path):
-        print("❌ H.png 또는 T.png 파일이 없습니다.")
+        print("❌ H.png 또는 T.png 파일을 찾을 수 없습니다.")
         return
 
-    # 이미지 로드 및 고품질 변환
+    # 원본 로드
     h_img = Image.open(h_path).convert("RGBA")
     t_img = Image.open(t_path).convert("RGBA")
     w, h = h_img.size
     
     frames = []
-    # 80프레임으로 대폭 늘려 끊김 현상 제거
-    total_frames = 80 
+    # 200프레임: 움짤이 가질 수 있는 물리적 한계치까지 생성
+    total_frames = 200 
     
-    print("✨ 초고화질 렌더링 시작 (80 Frames)...")
+    print("💎 초고주사율 렌더링 중 (200 Frames)... 이 작업은 시간이 좀 걸릴 수 있습니다.")
 
     for i in range(total_frames):
-        # 1. 자연스러운 감속을 위한 진행도 계산 (S-Curve 방식)
+        # 1. 큐빅 베지에(Cubic Bezier) 스타일의 부드러운 감속 곡선
         t = i / total_frames
-        # 부드러운 회전 각도 (마지막에 아주 천천히 멈춤)
-        angle = (1 - (1 - t)**3) * 1440 
+        # 초반엔 폭발적으로 회전, 후반엔 아주 부드럽게 안착
+        progress = 1 - (1 - t)**4 
+        angle = progress * 2880 # 총 8바퀴 회전으로 속도감 극대화
         
         rad = math.radians(angle)
         cos_val = math.cos(rad)
-        sin_val = math.sin(rad)
         
-        # 2. 위아래 회전 및 원근감 수치 조절
-        # 높이가 0이 될 때 앞뒤가 바뀌는 입체 연출
+        # 2. 수직 회전 (너비 고정, 높이만 정밀 조절)
         height_scale = abs(cos_val)
-        # 회전 시 크기 변화를 주어 원근감 극대화
-        perspective = 1.0 + (0.12 * abs(sin_val)) 
         
-        # 3. 부드러운 포물선 점프 (바운스)
-        jump = 60 * (4 * t * (1 - t)) 
-        
-        # 앞/뒤 면 결정
+        # 면 결정
         current_base = t_img if 90 < (angle % 360) < 270 else h_img
         
-        # 4. 고품질 리사이징 (LANCZOS 필터로 계단 현상 방지)
-        new_w = int(w * perspective)
-        new_h = max(int(h * height_scale * perspective), 1)
-        resized = current_base.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        # 3. 고품질 리사이징 및 캔버스 합성
+        new_h = max(int(h * height_scale), 1)
+        # Resampling.LANCZOS로 프레임 간 계단 현상 제거
+        resized = current_base.resize((w, new_h), Image.Resampling.LANCZOS)
         
-        # 캔버스 배치 (여유 공간 확보)
-        canvas_w, canvas_h = w + 60, h + 120
-        canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-        
-        x_pos = (canvas_w - new_w) // 2
-        y_pos = int((canvas_h - new_h) // 2 - jump)
-        canvas.paste(resized, (x_pos, y_pos))
+        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        y_pos = (h - new_h) // 2
+        canvas.paste(resized, (0, y_pos))
         frames.append(canvas)
 
-    # 마지막 결과 고정 (2.5초)
-    for _ in range(30):
+    # 결과 고정 프레임 (충분히 길게 3초)
+    for _ in range(50):
         frames.append(frames[-1])
 
-    # 5. 프레임 간격(duration) 미세 조정
-    # 처음엔 초고속(12ms), 마지막엔 천천히 멈추도록 설정
+    # 4. 프레임 타이밍 조절 (ms 단위)
     durations = []
     for i in range(total_frames):
-        # 자연스러운 속도 변화 곡선 적용
-        d = 12 + int(350 * (i / total_frames)**5)
+        if i < 100:
+            # 초반 100프레임은 무조건 최속(10ms)으로 돌려 렉처럼 보이는 구간 삭제
+            d = 10 
+        else:
+            # 후반 100프레임 동안 아주 세밀하게 속도를 늦춤 (드르륵 소리가 들리는 듯한 연출)
+            ease_t = (i - 100) / 100
+            d = 10 + int(600 * (ease_t**5)) # 5제곱 곡선으로 마지막에 아주 천천히 멈춤
         durations.append(d)
-    durations.extend([2500] * 30)
+    durations.extend([3000] * 50)
 
-    # 6. 최종 저장 (disposal=2로 잔상 완벽 제거)
+    # 최종 저장 (disposal=2 필수: 프레임 찌꺼기 제거)
     frames[0].save(
         output_name, format='GIF', save_all=True,
         append_images=frames[1:], duration=durations, loop=0, disposal=2
     )
-    print(f"✅ 자연스러운 GIF 저장 완료: {output_name}")
+    print(f"✅ 압도적 부드러움 완성: {output_name}")
 
 if __name__ == "__main__":
-    create_smooth_vertical_flip("H.png", "T.png")
+    create_ultimate_smooth_gif("H.png", "T.png")
