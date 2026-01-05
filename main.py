@@ -1,9 +1,8 @@
 from PIL import Image, ImageDraw
 import math
-import io
 
-def create_super_smooth_gif(side, bg_path, h_path, t_path):
-    # 고화질 안티앨리어싱 마스크 처리
+def create_bloxy_style_drop_gif(side, bg_path, h_path, t_path):
+    # 고화질 샘플링 함수
     def get_smooth_img(img_path, size):
         img = Image.open(img_path).convert("RGBA")
         upscale = size * 4
@@ -21,28 +20,34 @@ def create_super_smooth_gif(side, bg_path, h_path, t_path):
     t_img = get_smooth_img(t_path, coin_size)
 
     frames = []
-    # 1. 프레임 수를 120개로 늘려 60FPS에 가깝게 구현 (끊김 방지)
-    total_frames = 120 
+    # 프레임 수를 대폭 늘려 끊김 현상 제거 (디바이스 한계치인 100~120 프레임)
+    total_frames = 150 
     
-    target_y = bg.height // 2
-    start_y = bg.height + 150 # 화면 밖 아래에서 시작
+    target_y = bg.height // 2  # 중앙 멈춤 지점
+    start_y = -200             # 화면 위쪽 밖에서 시작
 
     for i in range(total_frames):
         t = i / (total_frames - 1)
         
-        # 2. Quintic Out 이징: Cubic보다 더 급격하게 올라와서 아주 부드럽게 감속
-        progress = 1 - pow(1 - t, 5) 
+        # --- 핵심: 위에서 떨어지는 Bounce 효과 (Elastic Out 이징) ---
+        if t == 0: progress = 0
+        elif t == 1: progress = 1
+        else:
+            p = 0.3
+            progress = pow(2, -10 * t) * math.sin((t - p / 4) * (2 * math.pi) / p) + 1
         
-        # 위치 및 회전 계산
+        # 현재 Y 위치 (위에서 중앙으로)
         current_y = start_y + (target_y - start_y) * progress
-        total_rotation = 7200 if side == "H" else 7380
-        angle = progress * total_rotation
+        
+        # 회전 속도 조절 (초반에 빠르게 돌다가 멈춤)
+        total_rotation = 10800 if side == "H" else 10980
+        angle = (1 - pow(1 - t, 3)) * total_rotation
         
         rad = math.radians(angle)
         scale = abs(math.cos(rad))
         current_coin = t_img if 90 < (angle % 360) < 270 else h_img
         
-        # 부드러운 리사이징
+        # 코인 크기 변형 (회전 효과)
         new_h = max(int(coin_size * scale), 1)
         resized_coin = current_coin.resize((coin_size, new_h), Image.Resampling.LANCZOS)
         
@@ -53,20 +58,19 @@ def create_super_smooth_gif(side, bg_path, h_path, t_path):
         frame.paste(resized_coin, (coin_x, coin_y), resized_coin)
         frames.append(frame)
 
-    # 마지막 정지 화면 유지
-    for _ in range(15):
+    # 멈춤 상태 유지
+    for _ in range(20):
         frames.append(frames[-1])
 
-    # 3. duration을 15ms~20ms로 설정하여 매우 빠르게 재생 (부드러움의 핵심)
+    # 10ms (0.01초) 간격으로 저장 (디스코드 GIF가 지원하는 가장 빠른 속도)
     frames[0].save(
         f"final_fix_{side}.gif",
         save_all=True,
         append_images=frames[1:],
-        duration=18, 
+        duration=10, 
         loop=0,
-        disposal=2 # 잔상 방지 설정
+        disposal=2
     )
 
-# 실행 (H, T 각각 생성)
-create_super_smooth_gif("H", "BloxF_background.png", "H.png", "T.png")
-create_super_smooth_gif("T", "BloxF_background.png", "H.png", "T.png")
+# 실행
+# create_bloxy_style_drop_gif("H", "BloxF_background.png", "H.png", "T.png")
