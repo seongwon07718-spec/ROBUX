@@ -1,88 +1,72 @@
-import discord
-from discord import app_commands
-from discord.ext import commands
-import random
-import os
+from PIL import Image, ImageDraw
+import math
+import io
 
-# 전역 변수 설정
-IMG_BANNER_URL = "https://cdn.discordapp.com/attachments/1455759161039261791/1457613650276782154/IMG_0845.png"
+def create_super_smooth_gif(side, bg_path, h_path, t_path):
+    # 고화질 안티앨리어싱 마스크 처리
+    def get_smooth_img(img_path, size):
+        img = Image.open(img_path).convert("RGBA")
+        upscale = size * 4
+        img = img.resize((upscale, upscale), Image.Resampling.LANCZOS)
+        mask = Image.new('L', (upscale, upscale), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0, upscale, upscale), fill=255)
+        output = Image.new('RGBA', (upscale, upscale), (0, 0, 0, 0))
+        output.paste(img, (0, 0), mask=mask)
+        return output.resize((size, size), Image.Resampling.LANCZOS)
 
-# 1. 결과보기 버튼 뷰 (timeout=None 설정)
-class ResultShowView(discord.ui.View):
-    def __init__(self, result_side, is_win):
-        super().__init__(timeout=None) # 타임아웃 제거
-        self.result_side = result_side
-        self.is_win = is_win
+    bg = Image.open(bg_path).convert("RGBA")
+    coin_size = int(bg.height * 0.45)
+    h_img = get_smooth_img(h_path, coin_size)
+    t_img = get_smooth_img(t_path, coin_size)
 
-    @discord.ui.button(label="결과보기", style=discord.ButtonStyle.success)
-    async def show_result(self, interaction: discord.Interaction, button: discord.ui.Button):
-        filename = f"final_fix_{self.result_side}.gif"
+    frames = []
+    # 1. 프레임 수를 120개로 늘려 60FPS에 가깝게 구현 (끊김 방지)
+    total_frames = 120 
+    
+    target_y = bg.height // 2
+    start_y = bg.height + 150 # 화면 밖 아래에서 시작
+
+    for i in range(total_frames):
+        t = i / (total_frames - 1)
         
-        if not os.path.exists(filename):
-            await interaction.response.send_message("❌ GIF 파일을 찾을 수 없습니다.", ephemeral=True)
-            return
+        # 2. Quintic Out 이징: Cubic보다 더 급격하게 올라와서 아주 부드럽게 감속
+        progress = 1 - pow(1 - t, 5) 
+        
+        # 위치 및 회전 계산
+        current_y = start_y + (target_y - start_y) * progress
+        total_rotation = 7200 if side == "H" else 7380
+        angle = progress * total_rotation
+        
+        rad = math.radians(angle)
+        scale = abs(math.cos(rad))
+        current_coin = t_img if 90 < (angle % 360) < 270 else h_img
+        
+        # 부드러운 리사이징
+        new_h = max(int(coin_size * scale), 1)
+        resized_coin = current_coin.resize((coin_size, new_h), Image.Resampling.LANCZOS)
+        
+        frame = bg.copy()
+        coin_x = (bg.width - coin_size) // 2
+        coin_y = int(current_y - (new_h // 2))
+        
+        frame.paste(resized_coin, (coin_x, coin_y), resized_coin)
+        frames.append(frame)
 
-        file = discord.File(filename, filename=filename)
-        res_embed = discord.Embed(
-            title="🎊 코인플립 결과",
-            description=f"결과는 **{self.result_side}**입니다!\n\n" + 
-                        (f"✅ **승리! 축하드립니다!**" if self.is_win else "❌ **아쉽게 패배하셨습니다.**"),
-            color=0x2ecc71 if self.is_win else 0xe74c3c
-        )
-        res_embed.set_image(url=f"attachment://{filename}")
-        await interaction.response.send_message(embed=res_embed, file=file, ephemeral=True)
+    # 마지막 정지 화면 유지
+    for _ in range(15):
+        frames.append(frames[-1])
 
-# 2. H/T 선택 버튼 뷰 (timeout=None 설정)
-class CoinChoiceView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None) # 타임아웃 제거
-
-    async def handle_choice(self, interaction: discord.Interaction, user_side: str):
-        result_side = random.choice(["H", "T"])
-        is_win = (user_side == result_side)
-
-        wait_embed = discord.Embed(
-            title="📣 베팅 접수 완료",
-            description=f"{interaction.user.mention}님이 **{user_side}**에 베팅하셨습니다!",
-            color=0x2ecc71
-        )
-        view = ResultShowView(result_side, is_win)
-        # 본인에게만 보이는 메시지 수정
-        await interaction.response.edit_message(embed=wait_embed, view=view)
-
-    @discord.ui.button(label="앞면 (H)", style=discord.ButtonStyle.danger)
-    async def head_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_choice(interaction, "H")
-
-    @discord.ui.button(label="뒷면 (T)", style=discord.ButtonStyle.primary)
-    async def tail_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_choice(interaction, "T")
-
-# 3. 메인 명령어 (패널 출력)
-@bot.tree.command(name="베팅하기", description="코인플립 베팅 패널을 출력합니다.")
-async def betting_command(interaction: discord.Interaction):
-    start_embed = discord.Embed(
-        title="BloxFlip - 베팅하기",
-        description=(
-            "**✅ 베팅 중 문제 발생 시 문의 부탁드려주세요**\n"
-            "**✅ 베팅한 기록들은 DB에 저장됩니다**\n\n"
-            "***[BloxFlip 이용약관](https://discord.com)***"
-        ),
-        color=0xffffff
+    # 3. duration을 15ms~20ms로 설정하여 매우 빠르게 재생 (부드러움의 핵심)
+    frames[0].save(
+        f"final_fix_{side}.gif",
+        save_all=True,
+        append_images=frames[1:],
+        duration=18, 
+        loop=0,
+        disposal=2 # 잔상 방지 설정
     )
-    start_embed.set_image(url=IMG_BANNER_URL)
 
-    class StartView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None) # 메인 패널도 타임아웃 제거
-
-        @discord.ui.button(label="베팅 시작하기", style=discord.ButtonStyle.primary)
-        async def start(self, interaction_start: discord.Interaction, button: discord.ui.Button):
-            choice_view = CoinChoiceView()
-            choice_embed = discord.Embed(title="🪙 선택", description="앞면 혹은 뒷면을 골라주세요.", color=0xffffff)
-            choice_embed.set_image(url=IMG_BANNER_URL)
-            # 여기에서 ephemeral=True를 사용하여 본인에게만 보이게 시작
-            await interaction_start.response.send_message(embed=choice_embed, view=choice_view, ephemeral=True)
-
-    # 초기 패널은 누구나 볼 수 있게 함
-    await interaction.response.send_message(embed=start_embed, view=StartView())
+# 실행 (H, T 각각 생성)
+create_super_smooth_gif("H", "BloxF_background.png", "H.png", "T.png")
+create_super_smooth_gif("T", "BloxF_background.png", "H.png", "T.png")
