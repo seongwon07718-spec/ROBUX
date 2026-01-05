@@ -1,46 +1,55 @@
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 import math
 
-def create_bloxy_clean_drop(side, bg_path, h_path, t_path):
-    # 1. 안티앨리어싱 적용 (테두리 부드럽게)
-    def get_smooth_img(img_path, size):
+def create_final_bet_gif(side, bg_path, h_path, t_path):
+    # 1. 배경 제거 및 안티앨리어싱 처리 함수 (복구)
+    def get_clean_side(img_path, size):
         img = Image.open(img_path).convert("RGBA")
-        img = img.resize((size * 2, size * 2), Image.Resampling.LANCZOS)
-        return img.resize((size, size), Image.Resampling.LANCZOS)
+        # 화질 저하 방지를 위해 크게 작업 후 축소
+        img = img.resize((size * 4, size * 4), Image.Resampling.LANCZOS)
+        
+        # 원형 마스크 생성 (배경 제거 효과)
+        mask = Image.new('L', (size * 4, size * 4), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0, size * 4, size * 4), fill=255)
+        
+        clean_img = Image.new('RGBA', (size * 4, size * 4), (0, 0, 0, 0))
+        clean_img.paste(img, (0, 0), mask=mask)
+        return clean_img.resize((size, size), Image.Resampling.LANCZOS)
 
     bg = Image.open(bg_path).convert("RGBA")
     coin_size = int(bg.height * 0.45)
-    h_img = get_smooth_img(h_path, coin_size)
-    t_img = get_smooth_img(t_path, coin_size)
+    h_img = get_clean_side(h_path, coin_size)
+    t_img = get_clean_side(t_path, coin_size)
 
     frames = []
-    total_frames = 75  # 디스코드 최적화 프레임 (렉 방지)
+    # 재생 시간을 늘리기 위해 프레임 수 증가 (약 4~5초 분량)
+    total_frames = 120 
     
-    target_y = bg.height // 2 # 최종 멈출 중앙 지점
-    start_y = -200            # 위쪽 화면 밖에서 시작
+    # 2. 배치 수정: 중앙(bg.height // 2)에서 50픽셀 정도 더 아래로 설정
+    target_y = (bg.height // 2) + 50 
+    start_y = -300 # 화면 위쪽 더 높은 곳에서 시작
 
     for i in range(total_frames):
         t = i / (total_frames - 1)
         
-        # 2. Quintic Out: 위에서 아래로 빠르게 떨어지다가 중앙에서 '탁' 멈춤 (아래로 안 내려감)
-        progress = 1 - pow(1 - t, 5) 
+        # 가감속 (Quintic Out): 더 천천히 떨어지며 무게감 있게 안착
+        progress = 1 - pow(1 - t, 4) 
         
-        # 현재 위치 (Y축) - 오직 위에서 아래로만 이동
         current_y = start_y + (target_y - start_y) * progress
         
-        # 회전수 설정 (멈출 때 앞/뒷면 결정)
-        total_rotation = 3600 if side == "H" else 3780
+        # 회전수 증가 (더 오래 돌아가게 함)
+        total_rotation = 5400 if side == "H" else 5580
         angle = progress * total_rotation
         
         rad = math.radians(angle)
         scale = abs(math.cos(rad))
         current_coin = t_img if 90 < (angle % 360) < 270 else h_img
         
-        # 코인 렌더링
+        # 코인 크기 변형
         new_h = max(int(coin_size * scale), 1)
         resized_coin = current_coin.resize((coin_size, new_h), Image.Resampling.LANCZOS)
         
-        # 배경에 합성 (잔상 제거를 위해 매번 새 복사본 사용)
         frame = bg.copy()
         coin_x = (bg.width - coin_size) // 2
         coin_y = int(current_y - (new_h // 2))
@@ -48,21 +57,21 @@ def create_bloxy_clean_drop(side, bg_path, h_path, t_path):
         frame.paste(resized_coin, (coin_x, coin_y), resized_coin)
         frames.append(frame)
 
-    # 마지막 프레임(멈춘 상태) 1.5초 유지 (결과 확인 시간)
-    for _ in range(30):
+    # 3. 마지막 멈춘 화면 유지 시간 대폭 증가 (약 2초 유지)
+    for _ in range(50):
         frames.append(frames[-1])
 
-    # 3. 최적화 저장 (렉 최소화 설정)
+    # 최종 저장 (부드러운 속도 유지)
     frames[0].save(
         f"final_fix_{side}.gif",
         save_all=True,
         append_images=frames[1:],
-        duration=20,     # 50 FPS (디스코드에서 가장 부드러운 속도)
+        duration=25,     # 너무 빠르지도 느리지도 않은 속도
         loop=0,
-        optimize=True,   # 용량 최적화로 렉 방지
-        disposal=2       # 프레임 전환 시 잔상 삭제
+        optimize=True,
+        disposal=2
     )
 
-# 실행 (H, T 생성)
-# create_bloxy_clean_drop("H", "BloxF_background.png", "H.png", "T.png")
-# create_bloxy_clean_drop("T", "BloxF_background.png", "H.png", "T.png")
+# 실행
+# create_final_bet_gif("H", "BloxF_background.png", "H.png", "T.png")
+# create_final_bet_gif("T", "BloxF_background.png", "H.png", "T.png")
