@@ -67,4 +67,4 @@ def create_fast_stop_flip(h_path, t_path, output_name="coin_fast.gif"):
     print(f"✅ 완성: {output_name}")
 
 if __name__ == "__main__":
-    create_fast_stop_flip("
+    create_fast_stop_flip("H.png", "T.png")
