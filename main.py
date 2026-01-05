@@ -1,10 +1,10 @@
-from PIL import Image, ImageTransform
+from PIL import Image
 import math
 import os
 
-def create_realistic_coin_gif(h_path, t_path, output_name="coinflip_pro.gif"):
+def create_vertical_flip_gif(h_path, t_path, output_name="coinflip_vertical.gif"):
     if not os.path.exists(h_path) or not os.path.exists(t_path):
-        print("❌ H.png 또는 T.png 파일이 폴더에 없습니다.")
+        print("❌ H.png 또는 T.png 파일이 없습니다.")
         return
 
     h_img = Image.open(h_path).convert("RGBA")
@@ -12,54 +12,61 @@ def create_realistic_coin_gif(h_path, t_path, output_name="coinflip_pro.gif"):
     w, h = h_img.size
     
     frames = []
-    total_frames = 40 # 프레임 수를 늘려 훨씬 부드럽게
+    total_frames = 45 # 더 부드러운 연출을 위해 프레임 증가
     
-    print("🚀 물리 엔진 적용 중... (입체 회전 및 감속 연출)")
+    print("🎬 위아래 입체 회전 렌더링 중...")
 
     for i in range(total_frames):
-        # 1. 물리적 회전 각도 계산 (갈수록 느려지는 감속 비율 적용)
-        # 진행도(t)를 0에서 1로 설정하여 비선형적으로 회전
+        # 1. 진행도(t)에 따른 비선형 회전 각도 (감속 적용)
         t = i / total_frames
-        angle = (t * (2 - t)) * 1440 # 4바퀴 회전하면서 마지막에 감속
+        # 약 4바퀴 회전하며 멈춤
+        angle = (t * (2 - t)) * 1440 
         
         rad = math.radians(angle)
+        sin_val = math.sin(rad)
         cos_val = math.cos(rad)
         
-        # 2. 입체감(원근) 구현: 가로 너비와 세로 높이를 동시에 조절
-        # 코인이 옆면일 때 약간 작아지게 하여 원근감 부여
-        width_scale = abs(cos_val)
-        height_scale = 1.0 + (0.05 * abs(math.sin(rad))) # 회전 시 미세한 높이 변화
+        # 2. 위아래 회전 핵심: 세로 높이($h$)를 조절
+        # 높이가 0에 가까워질 때 면이 바뀜
+        height_scale = abs(cos_val)
         
-        # 3. 바운스 효과: 코인이 공중으로 떴다가 내려오는 느낌
-        # 포물선 운동 추가 (y축 오프셋)
-        jump_height = 40 * math.sin(math.pi * t) 
+        # 3. 원근감 및 바운스 (위로 던져지는 느낌)
+        # 코인이 정면을 볼 때 살짝 더 크게(1.1배), 측면일 때 작게
+        perspective_scale = 1.0 + (0.1 * abs(sin_val))
+        jump_height = 50 * math.sin(math.pi * t) # 포물선 점프
         
-        # 앞/뒤 이미지 결정
-        current_base = t_img if 90 < (angle % 360) < 270 else h_img
-        
-        # 이미지 변형
-        new_w = max(int(w * width_scale), 1)
-        new_h = int(h * height_scale)
+        # 앞/뒤 면 결정 (위아래 회전각 기준)
+        if (angle % 360) > 90 and (angle % 360) < 270:
+            current_base = t_img
+        else:
+            current_base = h_img
+            
+        # 크기 변형 적용
+        new_w = int(w * perspective_scale)
+        new_h = max(int(h * height_scale * perspective_scale), 1)
         resized = current_base.resize((new_w, new_h), Image.Resampling.LANCZOS)
         
-        # 캔버스 생성 (바운스 높이 고려하여 높이를 약간 크게 잡음)
-        canvas_h = h + 60
-        canvas = Image.new("RGBA", (w, canvas_h), (0, 0, 0, 0))
+        # 캔버스 생성 (점프 높이 고려)
+        canvas_h = h + 100
+        canvas_w = w + 40
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         
-        # 중앙 배치 및 점프 적용
+        # 중앙 배치 및 바운스 적용
+        x_pos = (canvas_w - new_w) // 2
         y_pos = int((canvas_h - new_h) // 2 - jump_height)
-        canvas.paste(resized, ((w - new_w) // 2, y_pos))
+        canvas.paste(resized, (x_pos, y_pos))
         frames.append(canvas)
 
-    # 최종 결과 멈춤 (2초)
+    # 결과 정지 화면 (2초)
+    # 마지막 프레임을 결과값에 맞춰 고정 (여기선 앞면 기준)
     for _ in range(20):
         frames.append(frames[-1])
 
-    # 4. 프레임당 속도 조절 (ms)
-    # 처음엔 초당 50프레임 속도(20ms), 마지막엔 천천히 멈춤
+    # 4. Bloxluck 특유의 드르륵 멈추는 속도감
     durations = []
     for i in range(total_frames):
-        d = 20 + int(200 * (i / total_frames)**3) # 3제곱 비례로 급감속
+        # 초반 20ms에서 후반 500ms까지 부드럽게 느려짐
+        d = 15 + int(485 * (i / total_frames)**4) 
         durations.append(d)
     durations.extend([2000] * 20)
 
@@ -67,7 +74,7 @@ def create_realistic_coin_gif(h_path, t_path, output_name="coinflip_pro.gif"):
         output_name, format='GIF', save_all=True,
         append_images=frames[1:], duration=durations, loop=0, disposal=2
     )
-    print(f"✅ 자연스러운 코인플립 완성: {output_name}")
+    print(f"✅ 위아래 회전 완성: {output_name}")
 
 if __name__ == "__main__":
-    create_realistic_coin_gif("H.png", "T.png")
+    create_vertical_flip_gif("H.png", "T.png")
