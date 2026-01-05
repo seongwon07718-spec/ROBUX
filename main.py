@@ -2,63 +2,86 @@ from PIL import Image
 import math
 import os
 
-def create_smooth_stop_flip(h_path, t_path, output_name="coin_smooth_final.gif"):
-    if not os.path.exists(h_path) or not os.path.exists(t_path):
-        print("❌ 파일이 없습니다.")
+def create_bg_jump_flip(h_path, t_path, bg_path, output_name="coin_final_bg.gif"):
+    if not all(os.path.exists(p) for p in [h_path, t_path, bg_path]):
+        print("❌ 파일(H, T, 배경) 중 없는 것이 있습니다.")
         return
 
-    # 배경 제거 없이 흰 배경으로 속도 우선 처리
-    h_img = Image.open(h_path).convert("RGB")
-    t_img = Image.open(t_path).convert("RGB")
-    w, h = h_img.size
+    # 1. 이미지 로드
+    bg_img = Image.open(bg_path).convert("RGBA")
+    h_img = Image.open(h_path).convert("RGBA")
+    t_img = Image.open(t_path).convert("RGBA")
+    bg_w, bg_h = bg_img.size
     
     frames = []
-    # 렉과 부드러움의 최적 균형점
-    total_frames = 120 
+    total_frames = 150 # 7초 내외의 부드러운 연출
     
-    print("✨ 자연스러운 감속 렌더링 중...")
+    # 코인 크기 조절 (배경에 맞춰 원본의 60%로 축소)
+    coin_scale = 0.6
+    c_w = int(h_img.size[0] * coin_scale)
+    c_h = int(h_img.size[1] * coin_scale)
+    h_img = h_img.resize((c_w, c_h), Image.Resampling.LANCZOS)
+    t_img = t_img.resize((c_w, c_h), Image.Resampling.LANCZOS)
+
+    print("🎨 배경 합성 및 낙하 연출 렌더링 중...")
 
     for i in range(total_frames):
-        # 1. 자연스러운 감속 곡선 (Sin 곡선 활용)
-        # i=0일 때 변화량이 가장 크고(빠름), i=total_frames일 때 0에 수렴(멈춤)
         t = i / total_frames
-        # 회전 각도 계산: 마지막에 아주 부드럽게 멈추도록 설정
-        angle = math.sin(t * (math.pi / 2)) * 3600 # 총 10바퀴
+        
+        # 2. 물리 연출: 위에서 떨어지는 궤적
+        # 처음엔 화면 밖 위(negative y)에서 시작해 중앙으로 낙하
+        if t < 0.5:
+            # 0~0.5초: 낙하 구간 (물리적으로 가속)
+            fall_t = t / 0.5
+            y_pos = int(-c_h + (bg_h/2 + c_h) * (fall_t**2))
+        else:
+            # 0.5~1.0초: 제자리 안착 및 미세 바운스
+            y_pos = int(bg_h/2)
+
+        # 3. 회전 연출: 초반 광속 -> 후반 급감속
+        # progress가 1에 가까워질수록 속도가 0이 됨
+        progress = 1 - (1 - t)**4
+        angle = progress * 7200 # 20바퀴 광속 회전
         
         rad = math.radians(angle)
         height_scale = abs(math.cos(rad))
-        
-        # 앞/뒤 결정
         current_base = t_img if 90 < (angle % 360) < 270 else h_img
         
-        # 2. 고품질 리사이징 (중간에 깨지지 않게 LANCZOS 사용)
-        new_h = max(int(h * height_scale), 1)
-        resized = current_base.resize((w, new_h), Image.Resampling.LANCZOS)
+        # 수직 회전 리사이즈
+        new_h = max(int(c_h * height_scale), 1)
+        resized_coin = current_base.resize((c_w, new_h), Image.Resampling.LANCZOS)
         
-        # 제자리 중앙 배치
-        canvas = Image.new("RGB", (w, h), (255, 255, 255))
-        y_pos = (h - new_h) // 2
-        canvas.paste(resized, (0, y_pos))
-        frames.append(canvas)
+        # 4. 배경 위에 코인 합성
+        frame = bg_img.copy()
+        coin_x = (bg_w - c_w) // 2
+        coin_y = y_pos - (new_h // 2)
+        
+        # 배경 중앙 부근에 코인 부착
+        frame.paste(resized_coin, (coin_x, int(coin_y)), resized_coin)
+        frames.append(frame)
 
-    # 3. 프레임 시간(Duration)도 곡선에 맞춰 정밀 배분
+    # 5. 프레임 타이밍: 처음엔 10ms로 광속, 마지막엔 틱!
     durations = []
     for i in range(total_frames):
-        # 뒤로 갈수록 아주 미세하게 2ms씩 늘어나게 설계 (끊김 방지)
-        d = 10 + int(100 * (i / total_frames)**3)
+        if i < 100:
+            d = 10
+        else:
+            ease_t = (i - 100) / 50
+            d = 10 + int(300 * (ease_t**4))
         durations.append(d)
 
-    # 마지막 정지 화면 1.5초
-    durations.append(1500)
+    # 정지 화면 2초
+    durations.append(2000)
     frames.append(frames[-1])
 
-    # 4. 저장
+    # 6. 저장
     frames[0].save(
         output_name, format='GIF', save_all=True,
         append_images=frames[1:], duration=durations, loop=0, 
         optimize=True
     )
-    print(f"✅ 자연스러운 회전 완성: {output_name}")
+    print(f"✅ 배경 합성 완료: {output_name}")
 
 if __name__ == "__main__":
-    create_smooth_stop_flip("H.png", "T.png")
+    # 파일명이 background.png 인지 확인하세요
+    create_bg_jump_flip("H.png", "T.png", "background.png")
