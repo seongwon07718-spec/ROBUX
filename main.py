@@ -2,69 +2,63 @@ from PIL import Image
 import math
 import os
 
-def create_fast_stop_flip(h_path, t_path, output_name="coin_fast.gif"):
+def create_smooth_stop_flip(h_path, t_path, output_name="coin_smooth_final.gif"):
     if not os.path.exists(h_path) or not os.path.exists(t_path):
-        print("❌ H.png 또는 T.png 파일이 없습니다.")
+        print("❌ 파일이 없습니다.")
         return
 
-    h_img = Image.open(h_path).convert("RGBA")
-    t_img = Image.open(t_path).convert("RGBA")
+    # 배경 제거 없이 흰 배경으로 속도 우선 처리
+    h_img = Image.open(h_path).convert("RGB")
+    t_img = Image.open(t_path).convert("RGB")
     w, h = h_img.size
     
     frames = []
-    # 프레임을 150장으로 압축하여 속도감 상승
-    total_frames = 150 
+    # 렉과 부드러움의 최적 균형점
+    total_frames = 120 
     
-    print("🚀 짧고 강렬한 연출 생성 중...")
+    print("✨ 자연스러운 감속 렌더링 중...")
 
     for i in range(total_frames):
-        # 속도 곡선: 0.7 지점까지 광속, 이후 급격히 감속하여 정지
+        # 1. 자연스러운 감속 곡선 (Sin 곡선 활용)
+        # i=0일 때 변화량이 가장 크고(빠름), i=total_frames일 때 0에 수렴(멈춤)
         t = i / total_frames
-        if t < 0.7:
-            progress = t * 1.2 # 초반 가속
-        else:
-            # 마지막 30% 구간에서 짧고 굵게 감속
-            sub_t = (t - 0.7) / 0.3
-            progress = 0.84 + (0.16 * (1 - (1 - sub_t)**2))
-            
-        angle = progress * 5400 # 총 15바퀴 회전
+        # 회전 각도 계산: 마지막에 아주 부드럽게 멈추도록 설정
+        angle = math.sin(t * (math.pi / 2)) * 3600 # 총 10바퀴
         
         rad = math.radians(angle)
-        cos_val = math.cos(rad)
+        height_scale = abs(math.cos(rad))
         
-        # 수직 회전 (높이만 조절)
-        height_scale = abs(cos_val)
+        # 앞/뒤 결정
         current_base = t_img if 90 < (angle % 360) < 270 else h_img
         
+        # 2. 고품질 리사이징 (중간에 깨지지 않게 LANCZOS 사용)
         new_h = max(int(h * height_scale), 1)
-        resized = current_base.resize((w, new_h), Image.Resampling.NEAREST) # 속도를 위해 NEAREST 사용
+        resized = current_base.resize((w, new_h), Image.Resampling.LANCZOS)
         
-        canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255)) # 흰 배경 유지
+        # 제자리 중앙 배치
+        canvas = Image.new("RGB", (w, h), (255, 255, 255))
         y_pos = (h - new_h) // 2
         canvas.paste(resized, (0, y_pos))
         frames.append(canvas)
 
-    # 듀레이션 설정 (전체 약 3~4초 내외)
+    # 3. 프레임 시간(Duration)도 곡선에 맞춰 정밀 배분
     durations = []
     for i in range(total_frames):
-        if i < 100:
-            d = 10 # 초반 광속 (10ms)
-        else:
-            # 급격한 감속
-            ease_t = (i - 100) / 50
-            d = 10 + int(150 * (ease_t**2))
+        # 뒤로 갈수록 아주 미세하게 2ms씩 늘어나게 설계 (끊김 방지)
+        d = 10 + int(100 * (i / total_frames)**3)
         durations.append(d)
 
-    # 정지 화면 (1.5초만 짧게)
+    # 마지막 정지 화면 1.5초
     durations.append(1500)
     frames.append(frames[-1])
 
+    # 4. 저장
     frames[0].save(
         output_name, format='GIF', save_all=True,
         append_images=frames[1:], duration=durations, loop=0, 
         optimize=True
     )
-    print(f"✅ 완성: {output_name}")
+    print(f"✅ 자연스러운 회전 완성: {output_name}")
 
 if __name__ == "__main__":
-    create_fast_stop_flip("H.png", "T.png")
+    create_smooth_stop_flip("H.png", "T.png")
