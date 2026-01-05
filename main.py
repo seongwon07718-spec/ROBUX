@@ -2,71 +2,75 @@ from PIL import Image, ImageDraw
 import math
 import os
 
-def create_coin_pair(h_path, t_path):
-    # 파일 존재 확인
-    if not os.path.exists(h_path) or not os.path.exists(t_path):
-        print(f"❌ 파일을 찾을 수 없습니다: {h_path} 또는 {t_path}")
+def create_final_bg_flip(h_path, t_path, bg_path):
+    if not all(os.path.exists(p) for p in [h_path, t_path, bg_path]):
+        print("❌ 파일(H, T, 배경) 중 없는 것이 있습니다. 파일명을 확인하세요.")
         return
 
     def get_outer_clean(path):
-        """외곽 배경만 선택적으로 제거하여 중앙 문자를 보호하는 로직"""
+        """외곽 배경만 선택적으로 제거하여 중앙 문자를 보호"""
         img = Image.open(path).convert("RGBA")
         w, h = img.size
-        # 0,0(좌측 상단)과 w-1,0(우측 상단)에서 시작해 연결된 배경만 투명화
-        # thresh=50 정도로 높여서 지저분한 외곽 잔상을 확실히 제거
+        # 모서리에서 시작해 연결된 배경만 투명화
         ImageDraw.floodfill(img, xy=(0, 0), value=(0, 0, 0, 0), thresh=50)
         ImageDraw.floodfill(img, xy=(w-1, 0), value=(0, 0, 0, 0), thresh=50)
-        ImageDraw.floodfill(img, xy=(0, h-1), value=(0, 0, 0, 0), thresh=50)
-        ImageDraw.floodfill(img, xy=(w-1, h-1), value=(0, 0, 0, 0), thresh=50)
         return img
 
-    print("🧹 배경 제거 및 이미지 최적화 중...")
-    h_img_final = get_outer_clean(h_path)
-    t_img_final = get_outer_clean(t_path)
+    print("🧹 코인 배경 제거 중...")
+    h_img = get_outer_clean(h_path)
+    t_img = get_outer_clean(t_path)
     
-    w, h = h_img_final.size
+    bg_img = Image.open(bg_path).convert("RGBA")
+    bg_w, bg_h = bg_img.size
+
+    # 코인 크기 최적화 (배경 높이의 약 50%)
+    coin_size = int(bg_h * 0.5)
+    h_img = h_img.resize((coin_size, coin_size), Image.Resampling.LANCZOS)
+    t_img = t_img.resize((coin_size, coin_size), Image.Resampling.LANCZOS)
+    
     total_frames = 120
 
-    def generate_gif(final_side, filename):
+    def generate(final_side, filename):
         frames = []
-        print(f"🎬 {filename} 렌더링 시작...")
+        print(f"🎬 {filename} 생성 시작...")
         
         for i in range(total_frames):
             t = i / total_frames
-            # 자연스러운 감속 곡선
-            progress = 1 - (1 - t)**3
+            progress = 1 - (1 - t)**3 # 감속 곡선
             
-            # H결과는 20바퀴(7200도), T결과는 20.5바퀴(7380도)
+            # 결과값에 따른 최종 각도 (H: 20바퀴, T: 20.5바퀴)
             total_angle = 7200 if final_side == "H" else 7380
             angle = progress * total_angle
             
             rad = math.radians(angle)
             height_scale = abs(math.cos(rad))
             
-            # 현재 각도에 따라 보여줄 이미지 선택
-            current_face = t_img_final if 90 < (angle % 360) < 270 else h_img_final
+            # 현재 면 선택
+            current_face = t_img if 90 < (angle % 360) < 270 else h_img
             
-            new_h = max(int(h * height_scale), 1)
-            resized = current_face.resize((w, new_h), Image.Resampling.LANCZOS)
+            # 회전 리사이즈
+            new_h = max(int(coin_size * height_scale), 1)
+            resized_coin = current_face.resize((coin_size, new_h), Image.Resampling.LANCZOS)
             
-            # 투명 캔버스에 중앙 배치
-            canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            canvas.paste(resized, (0, (h - new_h) // 2), resized)
-            frames.append(canvas)
+            # 배경에 합성
+            frame = bg_img.copy()
+            coin_x = (bg_w - coin_size) // 2
+            coin_y = (bg_h - new_h) // 2
+            frame.paste(resized_coin, (coin_x, coin_y), resized_coin)
+            frames.append(frame)
 
-        # 듀레이션 설정 (뒤로 갈수록 천천히)
-        durations = [10 + int(250 * ((i/total_frames)**4)) for i in range(total_frames)]
-        durations.append(2000) # 마지막 정지 화면 2초
+        # 듀레이션 및 정지 화면
+        durations = [10 + int(250 * ((i/total_frames)**3)) for i in range(total_frames)]
+        durations.append(2000)
         frames.append(frames[-1])
 
         frames[0].save(filename, format='GIF', save_all=True, append_images=frames[1:], 
-                       duration=durations, loop=0, disposal=2, optimize=True)
-        print(f"✅ {filename} 생성 완료!")
+                       duration=durations, loop=0, optimize=True)
+        print(f"✅ {filename} 완료!")
 
-    # 결과물 2개 생성
-    generate_gif("H", "result_H.gif")
-    generate_gif("T", "result_T.gif")
+    generate("H", "final_H_bg.gif")
+    generate("T", "final_T_bg.gif")
 
 if __name__ == "__main__":
-    # 파일명이 정확한지 확인하세요!
-    create_coin_pair("H.png", "T.png")
+    # 배경 파일명을 'BloxF_background.png'로 맞춰주세요.
+    create_final_bg_flip("H.png", "T.png", "BloxF_background.png")
