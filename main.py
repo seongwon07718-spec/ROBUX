@@ -1,30 +1,59 @@
-BASE_PATH = pathlib.Path(__file__).parent.resolve()
+import tkinter as tk
+from tkinter import ttk
 
-async def create_merged_gif(result_side, c_data, p_data, bet_id):
-    # 사진 7번 파일명과 100% 일치하게 경로 설정
-    base_gif_path = BASE_PATH / f"final_fix_{result_side}.gif"
-    
-    if not base_gif_path.exists():
-        print(f"❌ 파일을 못찾음: {base_gif_path}")
-        return None
+def on_click():
+    print("버튼이 클릭되었습니다.")
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(c_data['thumb']) as r1, session.get(p_data['thumb']) as r2:
-            c_img = Image.open(io.BytesIO(await r1.read())).convert("RGBA").resize((120, 120))
-            p_img = Image.open(io.BytesIO(await r2.read())).convert("RGBA").resize((120, 120))
+root = tk.Tk()
+root.title("Macro Dashboard")
+root.geometry("800x500")
+root.configure(bg="#F8F9FD") # 배경색: 아주 연한 회색/보라빛
 
-    base_gif = Image.open(str(base_gif_path))
-    frames = []
-    font = ImageFont.load_default()
+# --- 1. 왼쪽 사이드바 영역 ---
+sidebar = tk.Frame(root, width=200, bg="#FFFFFF", relief="flat")
+sidebar.pack(side="left", fill="y")
 
-    # 렉 최적화: 프레임 압축
-    for frame in range(base_gif.n_frames):
-        base_gif.seek(frame)
-        canvas = base_gif.convert("RGBA")
-        canvas.paste(c_img, (40, 150), c_img)
-        canvas.paste(p_img, (canvas.width - 160, 150), p_img)
-        frames.append(canvas.convert("P", palette=Image.ADAPTIVE))
+# 사이드바 로고/타입
+logo_label = tk.Label(sidebar, text="S Shoppy", font=("Arial", 14, "bold"), 
+                      bg="#FFFFFF", fg="#333333", pady=30)
+logo_label.pack()
 
-    out_path = BASE_PATH / f"temp_{bet_id}.gif"
-    frames[0].save(str(out_path), save_all=True, append_images=frames[1:], duration=40, loop=0, optimize=True)
-    return str(out_path)
+# 사이드바 메뉴 예시 (이미지처럼 아이콘 대신 텍스트로)
+menus = ["Overview", "Transactions", "Messages", "My Products", "Account"]
+for menu in menus:
+    fg_color = "#4B7BFF" if menu == "Overview" else "#A0A0A0" # Overview만 파란색
+    tk.Label(sidebar, text=menu, font=("Arial", 10), bg="#FFFFFF", 
+             fg=fg_color, pady=10, cursor="hand2").pack(anchor="w", padx=30)
+
+# --- 2. 메인 콘텐츠 영역 ---
+main_canvas = tk.Frame(root, bg="#F8F9FD", padx=40, pady=30)
+main_canvas.pack(side="right", expand=True, fill="both")
+
+# 헤더 (Overview)
+header_label = tk.Label(main_canvas, text="Overview", font=("Arial", 18, "bold"), 
+                        bg="#F8F9FD", fg="#2D3436")
+header_label.pack(anchor="w")
+
+# --- 3. 카드형 레이아웃 (이미지 중간의 흰색 박스들) ---
+card_frame = tk.Frame(main_canvas, bg="#F8F9FD")
+card_frame.pack(fill="x", pady=20)
+
+# 가짜 데이터 카드 1
+card1 = tk.Frame(card_frame, bg="white", padx=20, pady=20, highlightthickness=1, highlightbackground="#EEEEEE")
+card1.pack(side="left", expand=True, fill="both", padx=5)
+tk.Label(card1, text="Active Orders", font=("Arial", 9), bg="white", fg="#ADADAD").pack(anchor="w")
+tk.Label(card1, text="12,018", font=("Arial", 14, "bold"), bg="white").pack(anchor="w")
+
+# 가짜 데이터 카드 2 (파란색 포인트 버튼 포함)
+card2 = tk.Frame(card_frame, bg="white", padx=20, pady=20, highlightthickness=1, highlightbackground="#EEEEEE")
+card2.pack(side="left", expand=True, fill="both", padx=5)
+tk.Label(card2, text="Personal Balance", font=("Arial", 9), bg="white", fg="#ADADAD").pack(anchor="w")
+tk.Label(card2, text="$2390.20", font=("Arial", 14, "bold"), bg="white").pack(anchor="w")
+
+# --- 4. 실제 실행 버튼 (이미지의 파란색 Withdraw 버튼 스타일) ---
+run_btn = tk.Button(main_canvas, text="RUN MACRO", command=on_click,
+                    bg="#4B7BFF", fg="white", font=("Arial", 11, "bold"),
+                    relief="flat", padx=40, pady=15, cursor="hand2")
+run_btn.pack(pady=30)
+
+root.mainloop()
