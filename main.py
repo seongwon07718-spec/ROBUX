@@ -2,16 +2,26 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 import requests
+import re
 
 # 전역 변수
 current_stock = "0"
 target_message = None 
 user_cookie = ""
 
-# API 호출 시 사용할 헤더 (인식률 향상)
-REQUEST_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+# 실제 브라우저처럼 보이게 하는 필수 헤더
+def get_roblox_headers(cookie=None):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.roblox.com/",
+        "Origin": "https://www.roblox.com"
+    }
+    if cookie:
+        # 쿠키 값 앞에 .ROBLOSECURITY= 가 붙어있는지 확인 후 설정
+        formatted_cookie = cookie if ".ROBLOSECURITY=" in cookie else f".ROBLOSECURITY={cookie}"
+        headers["Cookie"] = formatted_cookie
+    return headers
 
 class RobuxButtons(discord.ui.View):
     def __init__(self):
@@ -33,9 +43,9 @@ class RobuxButtons(discord.ui.View):
     async def charge(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("충전 페이지 안내입니다.", ephemeral=True)
 
-class CookieModal(discord.ui.Modal, title="로블록스 쿠키 등록"):
+class CookieModal(discord.ui.Modal, title="강력한 쿠키 등록 시스템"):
     cookie_input = discord.ui.TextInput(
-        label="로블록스 쿠키를 입력하세요",
+        label="로블록스 쿠키 (전체 복사해서 넣으세요)",
         placeholder="_|WARNING:-DO-NOT-SHARE-THIS...",
         style=discord.TextStyle.paragraph,
         required=True
@@ -43,48 +53,50 @@ class CookieModal(discord.ui.Modal, title="로블록스 쿠키 등록"):
 
     async def on_submit(self, interaction: discord.Interaction):
         global user_cookie, current_stock
-        # 앞뒤 공백 제거하여 인식률 향상
-        raw_cookie = self.cookie_input.value.strip()
-        user_cookie = raw_cookie
+        raw_val = self.cookie_input.value.strip()
+
+        # 1. 쿠키 값만 정확히 추출 (정규식 보강)
+        match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS[^;]+)", raw_val)
+        clean_cookie = match.group(1) if match else raw_val
         
+        user_cookie = clean_cookie
+        session = requests.Session()
+        session.headers.update(get_roblox_headers(user_cookie))
+
         try:
-            cookies = {".ROBLOSECURITY": user_cookie}
+            # 2. 보안 토큰(CSRF) 우회 시도
+            logout_res = session.post("https://auth.roblox.com/v2/logout")
+            csrf_token = logout_res.headers.get("x-csrf-token")
+            if csrf_token:
+                session.headers.update({"x-csrf-token": csrf_token})
+
+            # 3. 유저 정보 및 로벅스 확인
+            user_info = session.get("https://users.roblox.com/v1/users/authenticated").json()
+            user_id = user_info.get("id")
             
-            # 유저 정보 및 경제 정보 가져오기
-            user_res = requests.get("https://users.roblox.com/v1/users/authenticated", cookies=cookies, headers=REQUEST_HEADERS)
-            economy_res = requests.get("https://economy.roblox.com/v1/users/authenticated/currency", cookies=cookies, headers=REQUEST_HEADERS)
-            
-            if user_res.status_code == 200 and economy_res.status_code == 200:
-                user_data = user_res.json()
-                economy_data = economy_res.json()
-                
-                name = user_data.get("name", "알 수 없음")
-                robux = economy_data.get("robux", 0)
-                # 프리미엄 여부는 별도 API 확인이 필요할 수 있으나 기본 정보에서 시도
-                premium = "확인 불가(API 제한)" 
-                
+            if user_id:
+                name = user_info.get("name")
+                economy = session.get(f"https://economy.roblox.com/v1/users/{user_id}/currency").json()
+                robux = economy.get("robux", 0)
                 current_stock = f"{robux:,}"
 
-                # 나에게만 보이는 상세 정보
-                success_embed = discord.Embed(title="✅ 쿠키 인증 성공", color=0x00ff00)
-                success_embed.add_field(name="닉네임", value=f"```{name}```", inline=True)
-                success_embed.add_field(name="보유 로벅스", value=f"```{robux:,} R$```", inline=True)
-                success_embed.set_footer(text="인증 성공! 이제 자판기 재고가 실시간으로 갱신됩니다.")
-                
-                await interaction.response.send_message(embed=success_embed, ephemeral=True)
-                
-                # 즉시 자판기 임베드 갱신
+                # 성공 알림
+                res_embed = discord.Embed(title="✅ 쿠키 인증 및 보안 우회 성공", color=0x00ff00)
+                res_embed.add_field(name="계정명", value=f"```{name}```", inline=True)
+                res_embed.add_field(name="보유 로벅스", value=f"```{current_stock} R$```", inline=True)
+                await interaction.response.send_message(embed=res_embed, ephemeral=True)
+
+                # 즉시 자판기 업데이트
                 if target_message:
-                    new_embed = discord.Embed(color=0xffffff)
-                    new_embed.set_author(name="자동 로벅스 자판기", icon_url=interaction.client.user.display_avatar.url)
-                    new_embed.add_field(name="현재 재고", value=f"```{current_stock}로벅스```", inline=True)
-                    new_embed.add_field(name="현재 가격", value="```만원 = 1300로벅스```", inline=True)
-                    new_embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요 (실시간 갱신 중)")
-                    await target_message.edit(embed=new_embed)
+                    upd_embed = discord.Embed(color=0xffffff)
+                    upd_embed.set_author(name="자동 로벅스 자판기", icon_url=interaction.client.user.display_avatar.url)
+                    upd_embed.add_field(name="현재 재고", value=f"```{current_stock}로벅스```", inline=True)
+                    upd_embed.add_field(name="현재 가격", value="```만원 = 1300로벅스```", inline=True)
+                    await target_message.edit(embed=upd_embed)
             else:
-                await interaction.response.send_message(f"❌ 로그인 실패: 쿠키가 만료되었거나 올바르지 않습니다. (상태 코드: {user_res.status_code})", ephemeral=True)
+                await interaction.response.send_message("❌ 인증 실패: 쿠키가 올바르지 않거나 IP가 차단되었습니다.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"⚠️ 시스템 오류: {e}", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ 에러 발생: {e}", ephemeral=True)
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -100,41 +112,32 @@ class MyBot(commands.Bot):
         global current_stock, target_message, user_cookie
         if user_cookie and target_message:
             try:
-                cookies = {".ROBLOSECURITY": user_cookie}
-                response = requests.get("https://economy.roblox.com/v1/users/authenticated/currency", cookies=cookies, headers=REQUEST_HEADERS)
-                if response.status_code == 200:
-                    current_stock = f"{response.json().get('robux', 0):,}"
+                session = requests.Session()
+                session.headers.update(get_roblox_headers(user_cookie))
+                res = session.get("https://economy.roblox.com/v1/users/authenticated/currency")
+                if res.status_code == 200:
+                    current_stock = f"{res.json().get('robux', 0):,}"
                     new_embed = discord.Embed(color=0xffffff)
                     new_embed.set_author(name="자동 로벅스 자판기", icon_url=self.user.display_avatar.url)
                     new_embed.add_field(name="현재 재고", value=f"```{current_stock}로벅스```", inline=True)
                     new_embed.add_field(name="현재 가격", value="```만원 = 1300로벅스```", inline=True)
-                    new_embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요 (실시간 갱신 중)")
                     await target_message.edit(embed=new_embed)
-            except:
-                pass
+            except: pass
 
 bot = MyBot()
 
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user.name}')
-
-@bot.tree.command(name="쿠키", description="로블록스 쿠키를 등록합니다.")
+@bot.tree.command(name="쿠키", description="로블록스 쿠키 등록")
 async def cookie(interaction: discord.Interaction):
     await interaction.response.send_modal(CookieModal())
 
-@bot.tree.command(name="자판기", description="자동화 로벅스 자판기 전송")
+@bot.tree.command(name="자판기", description="자동화 자판기 전송")
 async def auto_robux(interaction: discord.Interaction):
     global target_message
-    await interaction.response.send_message("**로벅스 자판기를 불러오는 중입니다...**", ephemeral=True)
-    
+    await interaction.response.send_message("로딩 중...", ephemeral=True)
     embed = discord.Embed(color=0xffffff)
     embed.set_author(name="자동 로벅스 자판기", icon_url=bot.user.display_avatar.url)
     embed.add_field(name="현재 재고", value=f"```{current_stock}로벅스```", inline=True)
     embed.add_field(name="현재 가격", value="```만원 = 1300로벅스```", inline=True)
-    embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요")
-
-    view = RobuxButtons()
-    target_message = await interaction.followup.send(embed=embed, view=view)
+    target_message = await interaction.followup.send(embed=embed, view=RobuxButtons())
 
 bot.run('YOUR_TOKEN')
