@@ -9,7 +9,6 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # 슬래시 명령어를 디스코드 서버에 동기화합니다.
         await self.tree.sync()
 
 bot = MyBot()
@@ -23,22 +22,17 @@ async def on_ready():
 async def auto_robux(interaction: discord.Interaction):
     # 임베드 생성 (제목, 설명, 색상 설정)
     embed = discord.Embed(
-        title="💰 자동 로벅스 시스템",
-        description="원하시는 메뉴를 선택하거나 정보를 확인하세요.",
-        color=discord.Color.blue()
+        title="24시간 자동 로벅스 자판기",
+        color=0xffffff
     )
 
     # 필드 추가 (인라인 설정 가능)
-    embed.add_field(name="상태", value="🟢 정상 작동 중", inline=True)
-    embed.add_field(name="잔액", value="1,000 Robux", inline=True)
-    
-    # 이미지나 썸네일 추가 (URL 필요)
-    # embed.set_thumbnail(url="이미지 주소")
-    
-    # 하단 문구
-    embed.set_footer(text="요청자: " + interaction.user.name)
+    embed.add_field(name="현재 재고", value="```1,000 로벅스```", inline=True)
+    embed.add_field(name="현재 가격", value="```만원 = 1300로벅스```", inline=True)
+
+    embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요")
 
     # 답변 전송
     await interaction.response.send_message(embed=embed)
 
-bot.run('YOUR_TOKEN_HERE')
+bot.run('')
