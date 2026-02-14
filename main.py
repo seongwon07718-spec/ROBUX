@@ -1,12 +1,12 @@
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks # tasks 추가
+from discord.ext import commands, tasks  # 1분마다 반복하기 위해 tasks 추가
 import requests
 
-# 전역 변수 설정
+# 전역 변수 (재고와 메시지 객체 저장용)
 current_stock = "0"
-target_message = None # 자동 갱신할 메시지 객체 저장용
-user_cookie = "" # 쿠키 저장용
+target_message = None 
+user_cookie = ""
 
 class RobuxButtons(discord.ui.View):
     def __init__(self):
@@ -31,7 +31,6 @@ class RobuxButtons(discord.ui.View):
     async def charge(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("충전 페이지 안내입니다.", ephemeral=True)
 
-# 쿠키 입력 모달
 class CookieModal(discord.ui.Modal, title="로블록스 쿠키 등록"):
     cookie_input = discord.ui.TextInput(
         label="로블록스 쿠키를 입력하세요",
@@ -43,7 +42,7 @@ class CookieModal(discord.ui.Modal, title="로블록스 쿠키 등록"):
     async def on_submit(self, interaction: discord.Interaction):
         global user_cookie
         user_cookie = self.cookie_input.value
-        await interaction.response.send_message("✅ 쿠키가 등록되었습니다. 이제 1분마다 재고가 자동 갱신됩니다.", ephemeral=True)
+        await interaction.response.send_message("✅ 쿠키 등록 완료! 60초마다 재고가 자동 갱신됩니다.", ephemeral=True)
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -52,14 +51,12 @@ class MyBot(commands.Bot):
 
     async def setup_hook(self):
         await self.tree.sync()
-        self.update_stock_task.start() # 재고 업데이트 태스크 시작
+        self.refresh_stock.start() # 60초 반복 작업 시작
 
-    # 1분마다 실행되는 반복 작업
-    @tasks.loop(minutes=1.0)
-    async def update_stock_task(self):
+    # 60초마다 실행되는 실시간 갱신 루프
+    @tasks.loop(seconds=60.0)
+    async def refresh_stock(self):
         global current_stock, target_message, user_cookie
-        
-        # 쿠키가 등록되어 있고 갱신할 메시지가 있는 경우에만 실행
         if user_cookie and target_message:
             try:
                 url = "https://economy.roblox.com/v1/users/authenticated/currency"
@@ -67,19 +64,18 @@ class MyBot(commands.Bot):
                 response = requests.get(url, cookies=cookies)
                 
                 if response.status_code == 200:
-                    data = response.json()
-                    current_stock = f"{data.get('robux', 0):,}"
+                    current_stock = f"{response.json().get('robux', 0):,}"
                     
-                    # 새 임베드 생성하여 메시지 수정
+                    # 실시간 재고가 반영된 새로운 임베드로 교체
                     new_embed = discord.Embed(color=0xffffff)
                     new_embed.set_author(name="자동 로벅스 자판기", icon_url=self.user.display_avatar.url)
                     new_embed.add_field(name="현재 재고", value=f"```{current_stock}로벅스```", inline=True)
                     new_embed.add_field(name="현재 가격", value="```만원 = 1300로벅스```", inline=True)
-                    new_embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요 (최근 갱신: 실시간)")
+                    new_embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요 (실시간 갱신 중)")
                     
                     await target_message.edit(embed=new_embed)
-            except Exception as e:
-                print(f"업데이트 오류: {e}")
+            except:
+                pass
 
 bot = MyBot()
 
@@ -87,7 +83,7 @@ bot = MyBot()
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
 
-@bot.tree.command(name="쿠키", description="로블록스 쿠키를 설정합니다.")
+@bot.tree.command(name="쿠키", description="로블록스 쿠키 등록")
 async def cookie(interaction: discord.Interaction):
     await interaction.response.send_modal(CookieModal())
 
@@ -103,7 +99,7 @@ async def auto_robux(interaction: discord.Interaction):
     embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요")
 
     view = RobuxButtons()
-    # 전송된 메시지를 변수에 저장하여 나중에 수정 가능하게 함
+    # 전송된 메시지를 변수에 담아 60초마다 수정할 수 있게 함
     target_message = await interaction.followup.send(embed=embed, view=view)
 
-bot.run('YOUR_TOKEN')
+bot.run('토큰을_여기에_입력하세요')
