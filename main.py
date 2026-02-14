@@ -1,60 +1,28 @@
-import discord
-from discord import app_commands
-from discord.ext import commands
-
-# --- 버튼 기능을 담당하는 클래스 추가 ---
 class RobuxButtons(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="구매하기", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="구매하기", style=discord.ButtonStyle.green, emoji="🛒")
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("구매 프로세스를 시작합니다.", ephemeral=True)
 
-    @discord.ui.button(label="내 정보", style=discord.ButtonStyle.grey)
+    # --- 정보 버튼 클릭 시 임베드가 나오도록 수정 ---
+    @discord.ui.button(label="내 정보", style=discord.ButtonStyle.grey, emoji="👤")
     async def info(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(f"**{interaction.user.name}**님의 정보입니다.", ephemeral=True)
+        # 1. 정보용 새로운 임베드 생성
+        info_embed = discord.Embed(
+            title=f"👤 {interaction.user.name}님의 정보",
+            description="현재 보유 중인 정보입니다.",
+            color=0x5865F2 # 정보 버튼에 어울리는 파란색 계열
+        )
+        info_embed.add_field(name="보유 로벅스", value="```0 Robux```", inline=True)
+        info_embed.add_field(name="누적 구매 금액", value="```0원```", inline=True)
+        info_embed.set_footer(text="조회 시간", icon_url=interaction.user.display_avatar.url)
+        info_embed.set_author(name="내 정보 시스템", icon_url=interaction.client.user.display_avatar.url)
 
-    @discord.ui.button(label="충전하기", style=discord.ButtonStyle.blurple)
+        # 2. 생성한 임베드 전송 (ephemeral=True는 본인에게만 보임)
+        await interaction.response.send_message(embed=info_embed, ephemeral=True)
+
+    @discord.ui.button(label="충전하기", style=discord.ButtonStyle.blurple, emoji="💳")
     async def charge(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("충전 페이지 안내입니다.", ephemeral=True)
-# ---------------------------------------
-
-# 봇 설정
-class MyBot(commands.Bot):
-    def __init__(self):
-        intents = discord.Intents.default()
-        super().__init__(command_prefix="!", intents=intents)
-
-    async def setup_hook(self):
-        await self.tree.sync()
-
-bot = MyBot()
-
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user.name}')
-
-# /auto_robux 명령어 정의
-@bot.tree.command(name="auto_robux", description="로벅스 정보를 임베드로 확인합니다.")
-async def auto_robux(interaction: discord.Interaction):
-    # 임베드 생성
-    embed = discord.Embed(
-        title="24시간 자동 로벅스 자판기",
-        color=0xffffff
-    )
-
-    # 상단 작은 글씨 추가
-    embed.set_author(name="자동화 시스템 가동 중")
-
-    # 필드 추가
-    embed.add_field(name="현재 재고", value="```1,000 로벅스```", inline=True)
-    embed.add_field(name="현재 가격", value="```만원 = 1300로벅스```", inline=True)
-
-    embed.set_footer(text="안내: 문제 발생 시 관리자에게 문의해주세요")
-
-    # 버튼(View) 생성 후 함께 전송
-    view = RobuxButtons()
-    await interaction.response.send_message(embed=embed, view=view)
-
-bot.run('')
