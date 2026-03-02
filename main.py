@@ -6,6 +6,31 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot("!", intents=intents)
 
+# 충전 버튼 클릭 시 나타날 새로운 레이아웃 (계좌이체, 문화상품권)
+class ChargeLayout(ui.LayoutView):
+    def __init__(self):
+        super().__init__()
+
+        container = ui.Container(ui.TextDisplay("## 충전 방식 선택"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("원하시는 충전 수단을 선택해주세요."))
+        
+        bank = ui.Button(label="계좌이체")
+        bank.callback = self.bank_callback
+        
+        gift_card = ui.Button(label="문화상품권")
+        gift_card.callback = self.gift_card_callback
+        
+        button_row = ui.ActionRow(bank, gift_card)
+        container.add_item(button_row)
+        self.add_item(container)
+
+    async def bank_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("계좌이체 충전 준비중입니다.", ephemeral=True)
+
+    async def gift_card_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("문화상품권 충전 준비중입니다.", ephemeral=True)
+
 class MeuLayout(ui.LayoutView):
     def __init__(self):
         super().__init__()
@@ -38,8 +63,9 @@ class MeuLayout(ui.LayoutView):
             await interaction.response.send_message("준비중입니다", ephemeral=True)
 
     async def chage_callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.send_message("준비중입니다", ephemeral=True)
+        # 충전 버튼 클릭 시 새로운 컨테이너(ChargeLayout)를 나에게만 보이게 전송
+        layout = ChargeLayout()
+        await interaction.response.send_message(view=layout, ephemeral=True)
 
     async def buy_callback(self, interaction: discord.Interaction):
         if not interaction.response.is_done():
@@ -56,10 +82,7 @@ async def on_ready():
 
 @bot.tree.command(name="자판기", description="자판기를 출력합니다")
 async def jampangi(interaction: discord.Interaction):
-    # 먼저 "자판기가 전송되었습니다" 문구를 보냅니다.
     await interaction.response.send_message("자판기가 전송되었습니다.", ephemeral=True)
-    
-    # 그 다음 실제 자판기 레이아웃을 채널에 전송합니다.
     layout = MeuLayout()
     await interaction.channel.send(view=layout)
 
