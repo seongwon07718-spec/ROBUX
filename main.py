@@ -1,48 +1,49 @@
 import aiohttp
+import json
 
 async def charge(pin, cookie):
-    # 핀번호 분할 로직 (16~19자리 대응)
-    pin_parts = [pin[0:4], pin[4:8], pin[8:12], pin[12:16] if len(pin) == 16 else pin[12:19]]
+    # 핀번호 분할 (16~19자리 대응)
+    pin_parts = [pin[0:4], pin[4:8], pin[8:12], pin[12:len(pin)]]
     
-    # 404를 방지하기 위한 실제 API 엔드포인트
-    url = "https://m.cultureland.co.kr/api/charge/touch" 
+    # [중요] 404 방지를 위한 실제 모바일 충전 처리 주소
+    url = "https://m.cultureland.co.kr/api/charge/touchConfirm" 
     
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15",
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json;charset=UTF-8",
         "Origin": "https://m.cultureland.co.kr",
-        "Referer": "https://m.cultureland.co.kr/cp/charge/touch.do", # 이게 빠지면 404가 뜹니다
+        "Referer": "https://m.cultureland.co.kr/cp/charge/touch.do",
         "Cookie": cookie,
         "X-Requested-With": "XMLHttpRequest"
     }
     
+    # 컬쳐랜드 서버가 요구하는 데이터 형식
     payload = {
         "pin1": pin_parts[0],
         "pin2": pin_parts[1],
         "pin3": pin_parts[2],
         "pin4": pin_parts[3],
-        "is_scms": "N"
+        "is_scms": "N",
+        "scrId": "MT0101" # 실제 요청에 포함되는 스크린 ID
     }
 
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            # 타임아웃 10초 설정하여 무한 대기 방지
             async with session.post(url, json=payload, timeout=10) as resp:
+                # 404가 뜨면 주소나 세션이 완전히 막힌 것임
                 if resp.status == 404:
-                    return {"status": "error", "message": "서버 경로를 찾을 수 없음 (404). 주소 확인 필요."}
-                
-                if resp.status != 200:
-                    return {"status": "error", "message": f"서버 응답 오류 (HTTP {resp.status})"}
+                    return {"status": "error", "message": "컬쳐랜드 주소 응답 없음(404). 세션 만료 가능성."}
                 
                 data = await resp.json()
                 
-                # 컬쳐랜드 성공 코드 (0 또는 0000 등 실제 응답에 맞춰 확인 필요)
-                if str(data.get("result")) in ["0", "0000"]:
+                # 결과값이 0이면 성공, 그 외는 실패 메시지 출력
+                if str(data.get("result")) == "0":
                     amount = int(data.get("chargeAmount", 0))
                     return {"status": "success", "amount": amount}
                 else:
-                    return {"status": "error", "message": data.get("resultMsg", "이미 사용되었거나 잘못된 핀번호입니다.")}
+                    msg = data.get("resultMsg", "핀번호 오류 또는 이미 사용됨")
+                    return {"status": "error", "message": msg}
 
     except Exception as e:
-        return {"status": "error", "message": f"통신 장애: {str(e)}"}
+        return {"status": "error", "message": f"서버 연결 실패: {str(e)}"}
