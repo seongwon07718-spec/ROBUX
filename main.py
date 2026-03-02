@@ -1,23 +1,20 @@
-class BankInfoLayout(ui.LayoutView):
-    def __init__(self, name, amount):
-        super().__init__()
-        self.name = name
-        self.amount = amount
-        self.container = ui.Container(ui.TextDisplay(f"## 입금 정보"), accent_color=0x00ff00)
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(f"**은행명:** 카카오뱅크\n**계좌:** 123-456-7890\n**예금주:** 정성원"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(f"**입금자명:** {self.name}\n**충전금액:** {self.amount}원"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay("-# 5분 이내로 입금해주셔야 충전이 완료됩니다"))
-        self.add_item(self.container)
+class BankModal(ui.Modal, title="계좌이체 충전"):
+    name = ui.TextInput(label="입금자명", placeholder="입금하실 성함을 입력해주세요", min_length=2, max_length=10)
+    amount = ui.TextInput(label="충전금액", placeholder="금액을 입력해주세요 (숫자만)", min_length=1)
 
-    async def start_timer(self, interaction: discord.Interaction):
-        await asyncio.sleep(300)
+    async def on_submit(self, interaction: discord.Interaction):
+        db_id = database.insert_request(interaction.user.id, self.amount.value)
+        layout = BankInfoLayout(self.name.value, self.amount.value, db_id)
+        await interaction.response.edit_message(view=layout)
 
-        self.container.clear_items()
-        self.container.style = discord.ButtonStyle.red
-        self.container.add_item(ui.TextDisplay("## 충전 시간 초과"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay("자동충전 시간이 초과되었습니다"))
-        await interaction.edit_original_response(view=self)
+        log_chan = bot.get_channel(LOG_CHANNEL_ID)
+        if log_chan is None:
+            try:
+                log_chan = await bot.fetch_channel(LOG_CHANNEL_ID)
+            except:
+                print("로그 채널을 찾을 수 없습니다. ID를 확인하세요.")
+
+        if log_chan:
+            await log_chan.send(view=AdminLogView(interaction.user, self.name.value, self.amount.value, db_id))
+
+        asyncio.create_task(layout.start_timer(interaction))
