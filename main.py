@@ -56,7 +56,11 @@ async def on_ready():
 
 @bot.tree.command(name="자판기", description="자판기를 출력합니다")
 async def jampangi(interaction: discord.Interaction):
+    # 먼저 "자판기가 전송되었습니다" 문구를 보냅니다.
+    await interaction.response.send_message("자판기가 전송되었습니다.", ephemeral=True)
+    
+    # 그 다음 실제 자판기 레이아웃을 채널에 전송합니다.
     layout = MeuLayout()
-    await interaction.response.send_message(view=layout)
+    await interaction.channel.send(view=layout)
 
 bot.run("YOUR_TOKEN_HERE")
