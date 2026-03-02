@@ -9,7 +9,7 @@ import culture_logic
 import sqlite3
 
 intents = discord.Intents.all()
-bot = commands.Bot("!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 LOG_CHANNEL_ID = 1477980009753739325
 CULTURE_COOKIE = "9"
@@ -34,7 +34,8 @@ class CultureModal(ui.Modal, title="문상 정보"):
         await it.response.send_message(view=ui.LayoutView().add_item(wait_con), ephemeral=True)
         
         clean_pin = str(self.pin.value).replace("-", "").strip()
-        res = await culture_logic(clean_pin)    
+        # culture_logic 파일 내의 charge 함수를 호출하는 방식으로 수정
+        res = await culture_logic.charge(clean_pin, CULTURE_COOKIE)    
         
         result_con = ui.Container()
         
@@ -55,6 +56,10 @@ class CultureModal(ui.Modal, title="문상 정보"):
             result_con.add_item(ui.TextDisplay(f"**충전 금액:** {amount:,}원\n잔액이 정상적으로 반영되었습니다"))
             
             log_chan = self.bot.get_channel(self.log_channel_id)
+            if log_chan is None:
+                try: log_chan = await self.bot.fetch_channel(self.log_channel_id)
+                except: pass
+
             if log_chan:
                 log_con = ui.Container(ui.TextDisplay(f"## 문상 충전로그"), accent_color=0x00ff00)
                 log_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
@@ -123,7 +128,6 @@ class BankInfoLayout(ui.LayoutView):
 
     async def start_timer(self, interaction: discord.Interaction):
         await asyncio.sleep(300)
-
         if database.get_status(self.db_id) == "대기":
             self.container.clear_items()
             self.container.accent_color = 0xff0000
@@ -150,10 +154,8 @@ class BankModal(ui.Modal, title="계좌이체 충전"):
 
         log_chan = bot.get_channel(LOG_CHANNEL_ID)
         if log_chan is None:
-            try:
-                log_chan = await bot.fetch_channel(LOG_CHANNEL_ID)
-            except:
-                print("로그 채널을 찾을 수 없습니다. ID를 확인하세요.")
+            try: log_chan = await bot.fetch_channel(LOG_CHANNEL_ID)
+            except: pass
 
         if log_chan:
             await log_chan.send(view=AdminLogView(interaction.user, self.name.value, self.amount.value, db_id))
@@ -163,7 +165,6 @@ class BankModal(ui.Modal, title="계좌이체 충전"):
 class ChargeLayout(ui.LayoutView):
     def __init__(self):
         super().__init__()
-
         container = ui.Container(ui.TextDisplay("## 충전 방식 선택"), accent_color=0xffffff)
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("원하시는 충전 수단을 선택해주세요"))
@@ -188,7 +189,6 @@ class ChargeLayout(ui.LayoutView):
 class MeuLayout(ui.LayoutView):
     def __init__(self):
         super().__init__()
-
         container = ui.Container(ui.TextDisplay("## 구매하기"), accent_color=0xffffff)
         container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(ui.TextDisplay("계정 구매 후 환불은 불가능하며 계정 불량 또는 2단계 인증 문제로 로그인 안될 시 문의 부탁드립니다\n\n충전 안될 시 티켓 열고 이중창 제출해주세요 / 오송금은 충전 처리 힘듭니다 계좌, 금액 꼭 확인해주세요\n\n구매하면 디엠으로 제품 전송됩니다 제품 전송 안될 시 DM 허용해주셔야 합니다 / 저희 제품은 최상급으로 지급해드립니다"))
@@ -196,13 +196,10 @@ class MeuLayout(ui.LayoutView):
 
         shop = ui.Button(label="제품")
         shop.callback = self.shop_callback
-
         chage = ui.Button(label="충전")
         chage.callback = self.chage_callback
-
         buy = ui.Button(label="구매")
         buy.callback = self.buy_callback
-
         info = ui.Button(label="정보")
         info.callback = self.info_callback
 
@@ -213,30 +210,25 @@ class MeuLayout(ui.LayoutView):
         self.add_item(container)
 
     async def shop_callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.send_message("준비중입니다", ephemeral=True)
+        await interaction.response.send_message("준비중입니다", ephemeral=True)
 
     async def chage_callback(self, interaction: discord.Interaction):
-        layout = ChargeLayout()
-        await interaction.response.send_message(view=layout, ephemeral=True)
+        await interaction.response.send_message(view=ChargeLayout(), ephemeral=True)
 
     async def buy_callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.send_message("준비중입니다", ephemeral=True)
+        await interaction.response.send_message("준비중입니다", ephemeral=True)
 
     async def info_callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.send_message("준비중입니다", ephemeral=True)
+        await interaction.response.send_message("준비중입니다", ephemeral=True)
 
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print("------")
 
 @bot.tree.command(name="자판기", description="컴포넌트 v2를 이용한 자판기 전송")
 async def vending(interaction: discord.Interaction):
     await interaction.response.send_message("**자판기가 전송되었습니다**", ephemeral=True)
+    await interaction.channel.send(view=MeuLayout())
 
-    layout = MeuLayout()
-    await interaction.channel.send(view=layout)
+bot.run("YOUR_TOKEN_HERE")
