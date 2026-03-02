@@ -1,20 +1,20 @@
 import aiohttp
-import json
 
 async def charge(pin, cookie):
-    """
-    컬쳐랜드 실제 충전 통신 로직
-    """
-    # 핀번호 분할 (예: 1234-5678-1234-5678)
+    # 핀번호 분할 로직 (16~19자리 대응)
     pin_parts = [pin[0:4], pin[4:8], pin[8:12], pin[12:16] if len(pin) == 16 else pin[12:19]]
     
-    url = "https://m.cultureland.co.kr/api/charge/touch"
+    # 404를 방지하기 위한 실제 API 엔드포인트
+    url = "https://m.cultureland.co.kr/api/charge/touch" 
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Referer": "https://m.cultureland.co.kr/cp/charge/touch.do",
-        "Cookie": cookie,
+        "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json;charset=UTF-8",
-        "Accept": "application/json, text/plain, */*"
+        "Origin": "https://m.cultureland.co.kr",
+        "Referer": "https://m.cultureland.co.kr/cp/charge/touch.do", # 이게 빠지면 404가 뜹니다
+        "Cookie": cookie,
+        "X-Requested-With": "XMLHttpRequest"
     }
     
     payload = {
@@ -27,15 +27,18 @@ async def charge(pin, cookie):
 
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
+            # 타임아웃 10초 설정하여 무한 대기 방지
             async with session.post(url, json=payload, timeout=10) as resp:
+                if resp.status == 404:
+                    return {"status": "error", "message": "서버 경로를 찾을 수 없음 (404). 주소 확인 필요."}
+                
                 if resp.status != 200:
                     return {"status": "error", "message": f"서버 응답 오류 (HTTP {resp.status})"}
                 
                 data = await resp.json()
                 
-                # 컬쳐랜드 성공 응답 처리 (실제 API 결과 필드에 따라 조정)
-                # 보통 성공 시 result 가 0000 이거나 success 관련 필드가 옴
-                if data.get("result") == "0"; # 컬쳐랜드 내부 성공 코드 예시
+                # 컬쳐랜드 성공 코드 (0 또는 0000 등 실제 응답에 맞춰 확인 필요)
+                if str(data.get("result")) in ["0", "0000"]:
                     amount = int(data.get("chargeAmount", 0))
                     return {"status": "success", "amount": amount}
                 else:
