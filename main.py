@@ -1,8 +1,9 @@
 import discord
 from discord import ui
 from discord.ext import commands
-intents= discord.Intents.all()
+from discord import app_commands
 
+intents = discord.Intents.all()
 bot = commands.Bot("!", intents=intents)
 
 class MeuLayout(ui.LayoutView):
@@ -33,18 +34,29 @@ class MeuLayout(ui.LayoutView):
         self.add_item(container)
 
     async def shop_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("준비중입니다", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("준비중입니다", ephemeral=True)
 
     async def chage_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("준비중입니다", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("준비중입니다", ephemeral=True)
 
     async def buy_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("준비중입니다", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("준비중입니다", ephemeral=True)
 
     async def info_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("준비중입니다", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("준비중입니다", ephemeral=True)
 
-@bot.command()
-async def teste(ctx:commands.Context):
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f'{bot.user} 온라인')
+
+@bot.tree.command(name="자판기", description="자판기를 출력합니다")
+async def jampangi(interaction: discord.Interaction):
     layout = MeuLayout()
-    await ctx.reply(view=layout)
+    await interaction.response.send_message(view=layout)
+
+bot.run("YOUR_TOKEN_HERE")
