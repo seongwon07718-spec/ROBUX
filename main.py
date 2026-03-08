@@ -1,38 +1,55 @@
-class MeuLayout(ui.LayoutView):
-    # ... (기존 __init__ 생략)
+# --- [ 모달 정의: DB 저장 로직 포함 ] ---
+class ProductModal(ui.Modal, title="제품 등록/수정"):
+    cat = ui.TextInput(label="카테고리", placeholder="예: 음료, 과자")
+    name = ui.TextInput(label="제품명", placeholder="예: 코카콜라")
+    price = ui.TextInput(label="가격", placeholder="숫자만 입력 (예: 1500)")
 
-    async def shop_callback(self, it: discord.Interaction):
-        if await check_black(it): return
+    async def on_submit(self, it: discord.Interaction):
+        if not self.price.value.isdigit():
+            return await it.response.send_message("❌ 가격은 숫자만 입력해주세요.", ephemeral=True)
         
         conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-        # 현재 DB에 등록된 모든 카테고리 중복 없이 가져오기
-        cur.execute("SELECT DISTINCT category FROM products")
-        categories = [row[0] for row in cur.fetchall()]
-        conn.close()
+        # INSERT OR REPLACE로 기존 제품이 있으면 업데이트, 없으면 추가
+        cur.execute("INSERT OR REPLACE INTO products (category, name, price, stock) VALUES (?, ?, ?, COALESCE((SELECT stock FROM products WHERE name = ?), 0))", 
+                    (self.cat.value, self.name.value, int(self.price.value), self.name.value))
+        conn.commit(); conn.close()
+        await it.response.send_message(f"✅ **{self.name.value}** 제품이 DB에 반영되었습니다.", ephemeral=True)
 
-        if not categories:
-            return await it.response.send_message("현재 등록된 제품 카테고리가 없습니다.", ephemeral=True)
+class StockModal(ui.Modal, title="재고 수량 관리"):
+    name = ui.TextInput(label="제품명", placeholder="수정할 제품의 정확한 이름을 입력하세요")
+    count = ui.TextInput(label="변경할 재고 수량", placeholder="숫자 입력 (예: 50)")
 
-        cat_con = ui.Container(ui.TextDisplay("## 📂 카테고리 선택"), accent_color=0x5865F2)
-        options = [discord.SelectOption(label=cat, value=cat) for cat in categories]
-        cat_select = ui.Select(placeholder="카테고리를 선택하세요", options=options)
+    async def on_submit(self, it: discord.Interaction):
+        if not self.count.value.isdigit():
+            return await it.response.send_message("❌ 수량은 숫자만 입력해주세요.", ephemeral=True)
 
-        async def cat_callback(interaction: discord.Interaction):
-            selected = cat_select.values[0]
-            
-            # DB에서 해당 카테고리의 제품 정보 실시간 조회
-            conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-            cur.execute("SELECT name, price, stock FROM products WHERE category = ?", (selected,))
-            products = cur.fetchall(); conn.close()
+        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+        cur.execute("UPDATE products SET stock = ? WHERE name = ?", (int(self.count.value), self.name.value))
+        if cur.rowcount == 0:
+            conn.close()
+            return await it.response.send_message("❌ 해당 이름의 제품을 찾을 수 없습니다.", ephemeral=True)
+        conn.commit(); conn.close()
+        await it.response.send_message(f"✅ **{self.name.value}**의 재고가 {self.count.value}개로 수정되었습니다.", ephemeral=True)
 
-            item_text = "\n".join([f"• **{p[0]}** - {p[1]:,}원 (재고: {p[2]}개)" for p in products]) if products else "제품이 없습니다."
-            
-            res_con = ui.Container(ui.TextDisplay(f"## 📦 {selected} 목록"), accent_color=0x00ff00)
-            res_con.add_item(ui.TextDisplay(f"### {selected} 카테고리 실시간 리스트\n\n{item_text}"))
-            res_con.add_item(ui.ActionRow(cat_select))
-            
-            await interaction.response.edit_message(view=ui.LayoutView().add_item(res_con))
+# --- [ 관리자 전용 레이아웃 ] ---
+class ProductAdminLayout(ui.LayoutView):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.container = ui.Container(ui.TextDisplay("## ⚙️ 상품 관리 도구"), accent_color=0x2b2d31)
+        self.select = ui.Select(placeholder="설정할 항목을 선택하세요", options=[
+            discord.SelectOption(label="제품 등록/수정", value="prod", emoji="📦", description="이름 및 가격 설정"),
+            discord.SelectOption(label="재고 수량 설정", value="stock", emoji="📊", description="남은 갯수 수정")
+        ])
+        self.select.callback = self.admin_callback
+        self.container.add_item(ui.ActionRow(self.select))
+        self.add_item(self.container)
 
-        cat_select.callback = cat_callback
-        cat_con.add_item(ui.ActionRow(cat_select))
-        await it.response.send_message(view=ui.LayoutView().add_item(cat_con), ephemeral=True)
+    async def admin_callback(self, it: discord.Interaction):
+        if self.select.values[0] == "prod": await it.response.send_modal(ProductModal())
+        else: await it.response.send_modal(StockModal())
+
+@bot.tree.command(name="상품설정", description="자판기 상품 정보를 관리합니다 (관리자)")
+async def product_setting(it: discord.Interaction):
+    if not it.user.guild_permissions.administrator:
+        return await it.response.send_message("권한이 없습니다.", ephemeral=True)
+    await it.response.send_message(view=ProductAdminLayout(), ephemeral=True)
