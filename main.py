@@ -1,12 +1,48 @@
-# main.py 맨 밑부분
-if __name__ == "__main__":
-    # 백그라운드에서 ios_charge 서버 실행 로직을 넣거나,
-    # 그냥 편하게 터미널 두 개(main.py용, ios_charge.py용)를 띄워두는 게 디버깅하기엔 제일 좋습니다.
-    bot.run("너의_봇_토큰")
+import json
+import os
+import urllib.request
+import urllib.error
+import uvicorn
+from dotenv import load_dotenv
 
+load_dotenv()
 
-# ios_charge.py 파일의 가장 아랫부분에 넣어주세요
+_port = os.getenv("CHARGE_API_PORT", "88")
+_default_url = f"http://127.0.0.1:{_port}/"
+CHARGE_API_URL = os.getenv("CHARGE_API_URL", _default_url).strip() or _default_url
+TIMEOUT_SEC = int(os.getenv("CHARGE_CLIENT_TIMEOUT", "15"))
+
+def send_charge_message(message: str) -> dict:
+    """API 서버에 충전 메시지를 전송하고 결과를 반환합니다."""
+    url = CHARGE_API_URL.rstrip("/")
+    if not url.startswith("http"):
+        url = "http://" + url
+    if not url.endswith("/") and "/charge" not in url:
+        url = url + "/"
+
+    payload = {"message": (message or "").strip()}
+    if not payload["message"]:
+        return {"ok": False, "error": "메시지가 비어 있음"}
+
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as res:
+            data = res.read().decode("utf-8")
+            out = json.loads(data) if data.strip() else {}
+            return {
+                "ok": out.get("ok", False),
+                "error": out.get("error"),
+                "duplicate": out.get("duplicate"),
+            }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    
 if __name__ == "__main__":
-    import uvicorn
-    # 88번 포트로 서버를 실행합니다.
     uvicorn.run(app, host="0.0.0.0", port=88)
