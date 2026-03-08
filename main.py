@@ -1,28 +1,30 @@
-@bot.tree.command(name="블랙", description="유저를 블랙리스트에 추가하거나 해제합니다.")
-@discord.app_commands.describe(유저="블랙 관리할 유저", 여부="차단 또는 해제 선택")
-@discord.app_commands.choices(여부=[
-    discord.app_commands.Choice(name="차단", value=1),
-    discord.app_commands.Choice(name="해제", value=0)
-])
-async def black_manage(interaction: discord.Interaction, 유저: discord.Member, 여부: int):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("관리자 권한이 필요합니다.", ephemeral=True)
-
-    u_id = str(유저.id)
+# 블랙리스트 확인 공통 함수
+async def check_black(interaction: discord.Interaction):
+    u_id = str(interaction.user.id)
     conn = sqlite3.connect('vending_data.db')
     cur = conn.cursor()
-    
-    # 유저 데이터 확인 및 블랙 상태 업데이트
-    cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (u_id,))
-    cur.execute("UPDATE users SET is_blacked = ? WHERE user_id = ?", (여부, u_id))
-    
-    conn.commit()
+    cur.execute("SELECT is_blacked FROM users WHERE user_id = ?", (u_id,))
+    row = cur.fetchone()
     conn.close()
+    
+    if row and row[0] == 1:
+        # 블랙 유저일 경우: 응답을 아예 하지 않거나 에러 메시지를 띄움
+        # '상호작용 오류'를 유도하려면 아래 한 줄만 쓰면 됩니다.
+        return True 
+    return False
 
-    status_text = "차단" if 여부 == 1 else "해제"
-    color = 0xff0000 if 여부 == 1 else 0x00ff00
-    
-    container = ui.Container(ui.TextDisplay(f"## 🚫 블랙리스트 {status_text}"), accent_color=color)
-    container.add_item(ui.TextDisplay(f"대상: {유저.mention}\n상태: 해당 유저가 블랙리스트에서 **{status_text}**되었습니다."))
-    
-    await interaction.response.send_message(view=ui.LayoutView().add_item(container))
+# 예시: MeuLayout 내 콜백 수정
+class MeuLayout(ui.LayoutView):
+    # ... (기존 __init__ 생략)
+
+    async def shop_callback(self, it: discord.Interaction):
+        if await check_black(it): return # 블랙이면 여기서 중단 (상호작용 오류 발생)
+        await it.response.send_message("준비중입니다", ephemeral=True)
+
+    async def chage_callback(self, it: discord.Interaction):
+        if await check_black(it): return
+        await it.response.send_message(view=ChargeLayout(), ephemeral=True)
+
+    async def info_callback(self, it: discord.Interaction):
+        if await check_black(it): return
+        # ... (이후 기존 정보 조회 로직)
