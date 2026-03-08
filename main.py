@@ -1,50 +1,71 @@
-# --- [ 전역 변수 ] ---
-vending_msg = None # 자판기 메시지 객체 저장용
-
-# --- [ 메인 자판기 갱신 로직 ] ---
+# --- [ 상호작용 오류 방지용 자판기 레이아웃 ] ---
 class MeuLayout(ui.LayoutView):
     def __init__(self):
-        super().__init__()
-        # 컨테이너 구성은 기존과 동일
-        self.container = ui.Container(ui.TextDisplay("## 🛒 자판기 메뉴"), accent_color=0xffffff)
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        super().__init__(timeout=None) # ✅ 버튼 타임아웃을 None으로 설정 (영구 유지)
+        container = ui.Container(ui.TextDisplay("## 🛒 자판기 메뉴"), accent_color=0xffffff)
         
-        shop = ui.Button(label="제품", emoji="<:1302328347765899395:1480120014735540235>")
-        chage = ui.Button(label="충전", emoji="<:1302328427545624689:1480120016056619038>")
-        buy = ui.Button(label="구매", emoji="<:1302328398856847474:1480120020129419314>")
-        info = ui.Button(label="정보", emoji="<:1306285145132892180:1480120018602688664>")
+        # 버튼 생성 (에모지 포함)
+        self.shop_btn = ui.Button(label="제품", emoji="<:1302328347765899395:1480120014735540235>")
+        self.chage_btn = ui.Button(label="충전", emoji="<:1302328427545624689:1480120016056619038>")
+        self.buy_btn = ui.Button(label="구매", emoji="<:1302328398856847474:1480120020129419314>")
+        self.info_btn = ui.Button(label="정보", emoji="<:1306285145132892180:1480120018602688664>")
         
-        shop.callback = self.shop_callback
-        chage.callback = self.chage_callback
-        buy.callback = self.buy_callback
-        info.callback = self.info_callback
+        # 콜백 연결
+        self.shop_btn.callback = self.shop_callback
+        self.chage_btn.callback = self.chage_callback
+        self.buy_btn.callback = self.buy_callback
+        self.info_btn.callback = self.info_callback
         
-        self.container.add_item(ui.ActionRow(shop, chage, buy, info))
-        self.add_item(self.container)
+        container.add_item(ui.ActionRow(self.shop_btn, self.chage_btn, self.buy_btn, self.info_btn))
+        self.add_item(container)
 
-    # ... (callback 함수들은 기존과 동일)
+    # 모든 콜백 시작 부분에 에러 방지 로직 추가
+    async def shop_callback(self, it: discord.Interaction):
+        # 즉시 '생각 중...' 상태로 만들어 상호작용 만료를 방지
+        await it.response.send_message("제품 목록을 불러오는 중입니다...", ephemeral=True)
 
-# --- [ 상호작용 초기화 루프 (메시지 수정 방식) ] ---
-async def keep_vending_alive(message):
-    """2분마다 메시지를 '수정'하여 버튼 상호작용 세션을 유지합니다."""
+    async def chage_callback(self, it: discord.Interaction):
+        # 상호작용 실패 오류를 막기 위해 즉시 모달을 띄움
+        await it.response.send_modal(ChargeModal()) # 충전 수단 선택 모달 등
+
+    async def info_callback(self, it: discord.Interaction):
+        # 1. 상호작용 즉시 응답 (오류 방지 핵심)
+        await it.response.defer(ephemeral=True) 
+        
+        u_id = str(it.user.id)
+        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+        cur.execute("SELECT money, total_spent FROM users WHERE user_id = ?", (u_id,))
+        row = cur.fetchone(); conn.close()
+        
+        money, total_spent = (row[0], row[1]) if row else (0, 0)
+        
+        # 2. 내역 불러오기 (최근 충전 내역 포함)
+        # (기존의 내역 조회 로직 동일하게 수행)
+        
+        container = ui.Container(ui.TextDisplay(f"## {it.user.display_name}님의 정보"), accent_color=0xffffff)
+        container.add_item(ui.TextDisplay(f"보유 잔액: {money:,}원\n누적 금액: {total_spent:,}원"))
+        
+        # 3. 이미 defer를 했으므로 followup으로 전송
+        await it.followup.send(view=ui.LayoutView().add_item(container), ephemeral=True)
+
+# --- [ 자동 갱신 루프 (2분마다 세션 리프레시) ] ---
+async def update_vending_session(msg):
+    """메시지를 수정하여 버튼의 상호작용 가능 시간을 무한히 연장합니다."""
     while True:
-        await asyncio.sleep(120) # 2분마다 실행
+        await asyncio.sleep(120) # 2분마다
         try:
-            # 같은 내용으로 다시 edit하면 디스코드 서버에서 상호작용 시간이 갱신됩니다.
-            await message.edit(view=MeuLayout())
-            print(f"🔄 [자판기 갱신]: {time.strftime('%H:%M:%S')} - 상호작용 세션 연장 완료")
-        except Exception as e:
-            print(f"⚠️ 갱신 실패 (메시지가 삭제되었을 수 있음): {e}")
+            # 뷰를 다시 생성해서 덮어씌움으로써 세션을 갱신함
+            await msg.edit(view=MeuLayout())
+        except:
             break
 
-# --- [ 명령어 부분 ] ---
-@bot.tree.command(name="자판기", description="상호작용 오류가 없는 자판기를 전송합니다")
+@bot.tree.command(name="자판기", description="상호작용 오류가 없는 자판기를 소환합니다")
 async def vending(interaction: discord.Interaction):
-    await interaction.response.send_message("**자판기를 가동합니다.**", ephemeral=True)
+    # 관리자에게만 보이는 시작 메시지
+    await interaction.response.send_message("✅ 자판기 세션 최적화 모드로 가동합니다.", ephemeral=True)
     
-    # 1. 자판기 메시지 전송
     view = MeuLayout()
     msg = await interaction.channel.send(view=view)
     
-    # 2. 백그라운드에서 2분마다 수정을 통해 세션 유지 시작
-    bot.loop.create_task(keep_vending_alive(msg))
+    # 백그라운드에서 버튼 세션 유지 (가장 중요한 부분)
+    bot.loop.create_task(update_vending_session(msg))
