@@ -1,91 +1,39 @@
-import json
-import os
-import sys
-import urllib.request
-import urllib.error
+import re # 상단에 re 모듈이 없다면 추가해주세요.
 
+class BankModal(ui.Modal, title="계좌이체 충전"):
+    name = ui.TextInput(label="입금자명", placeholder="입금하실 성함(한글)을 입력해주세요", min_length=2, max_length=10)
+    amount = ui.TextInput(label="충전금액", placeholder="금액을 입력해주세요 (숫자만)", min_length=1)
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+    async def on_submit(self, interaction: discord.Interaction):
+        # 1. 입금자명 유효성 검사 (한글만 허용)
+        if not re.fullmatch(r'[가-힣]+', self.name.value):
+            return await interaction.response.send_message("❌ **입금자명은 공백 없이 한글로만 입력해주세요.**", ephemeral=True)
 
-_port = os.getenv("CHARGE_API_PORT", "88")
-_default_url = f"http://127.0.0.1:{_port}/"
-CHARGE_API_URL = os.getenv("CHARGE_API_URL", _default_url).strip() or _default_url
-TIMEOUT_SEC = int(os.getenv("CHARGE_CLIENT_TIMEOUT", "15"))
+        # 2. 충전금액 유효성 검사 (숫자만 허용)
+        if not self.amount.value.isdigit():
+            return await interaction.response.send_message("❌ **충전금액은 숫자만 입력해주세요.**", ephemeral=True)
 
+        # 기존 로직 유지
+        last_time = database.get_last_request_time(interaction.user.id)
+        current_time = time.time()
 
+        if current_time - last_time < 300:
+            remaining = int(300 - (current_time - last_time))
+            return await interaction.response.send_message(f"**이미 충전 신청한 기록이 있습니다\n{remaining}초 후에 다시 시도해주세요**", ephemeral=True)
 
-def send_charge_message(message: str, api_url: str = None) -> dict:
-    url = (api_url or CHARGE_API_URL).rstrip("/")
-    if not url.startswith("http"):
-        url = "http://" + url
-    if not url.endswith("/") and "/charge" not in url:
-        url = url + "/"
+        db_id = database.insert_request(interaction.user.id, self.amount.value)
+        layout = BankInfoLayout(self.name.value, self.amount.value, db_id)
+        
+        # interaction.response.edit_message는 모달 전송 직후에는 사용 방식에 따라 에러가 날 수 있으므로
+        # 상황에 맞춰 send_message 또는 edit_original_response를 사용하세요.
+        await interaction.response.edit_message(view=layout)
 
-    payload = {"message": (message or "").strip()}
-    if not payload["message"]:
-        return {"ok": False, "error": "메시지가 비어 있음", "duplicate": None}
+        log_chan = bot.get_channel(LOG_CHANNEL_ID)
+        if log_chan is None:
+            try: log_chan = await bot.fetch_channel(LOG_CHANNEL_ID)
+            except: pass
 
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json; charset=utf-8",
-        },
-    )
+        if log_chan:
+            await log_chan.send(view=AdminLogView(interaction.user, self.name.value, self.amount.value, db_id))
 
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as res:
-            data = res.read().decode("utf-8")
-            out = json.loads(data) if data.strip() else {}
-            return {
-                "ok": out.get("ok", False),
-                "error": out.get("error"),
-                "duplicate": out.get("duplicate"),
-            }
-    except urllib.error.HTTPError as e:
-        try:
-            body_err = e.read().decode("utf-8")
-            err_data = json.loads(body_err)
-            return {
-                "ok": False,
-                "error": err_data.get("error", f"HTTP {e.code}"),
-                "duplicate": err_data.get("duplicate"),
-            }
-        except Exception:
-            return {"ok": False, "error": f"HTTP {e.code} {e.reason}", "duplicate": None}
-    except urllib.error.URLError as e:
-        return {"ok": False, "error": str(e.reason), "duplicate": None}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "duplicate": None}
-
-
-def main():
-    if len(sys.argv) > 1:
-        text = " ".join(sys.argv[1:])
-    else:
-        text = sys.stdin.read()
-
-    text = text.strip()
-    if not text:
-        sys.exit(1)
-
-    result = send_charge_message(text)
-    if result["ok"]:
-        print("OK – 자동 승인 처리되었습니다.")
-    else:
-        err = result.get("error") or "알 수 없는 오류"
-        if result.get("duplicate"):
-            print("중복 – 이미 처리된 메시지입니다.")
-        else:
-            print(f"실패 – {err}")
-    sys.exit(0 if result["ok"] else 1)
-
-
-if __name__ == "__main__":
-    main()
+        asyncio.create_task(layout.start_timer(interaction))
