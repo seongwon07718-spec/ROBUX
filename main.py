@@ -1,52 +1,47 @@
-class AdminLogView(ui.LayoutView):
-    def __init__(self, user, name, amount, db_id):
-        super().__init__(); self.user, self.name, self.amount, self.db_id = user, name, amount, db_id
-        self.container = ui.Container(ui.TextDisplay(f"## 충전 신청"), accent_color=0xffff00)
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(f"**신청자:** {user.mention}\n**입금자명:** {name}\n**신청금액:** {amount}원"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        approve_btn = ui.Button(label="완료", style=discord.ButtonStyle.green); approve_btn.callback = self.approve_callback
-        cancel_btn = ui.Button(label="취소", style=discord.ButtonStyle.red); cancel_btn.callback = self.cancel_callback
-        self.container.add_item(ui.ActionRow(approve_btn, cancel_btn)); self.add_item(self.container)
+class BankModal(ui.Modal, title="계좌이체 충전"):
+    name = ui.TextInput(label="입금자명", placeholder="입금하실 성함을 입력해주세요", min_length=2, max_length=10)
+    amount = ui.TextInput(label="충전금액", placeholder="금액을 입력해주세요 (숫자만)", min_length=1)
 
-    async def approve_callback(self, interaction: discord.Interaction):
-        # 1. 데이터베이스 업데이트 (잔액 추가 및 내역 기록)
-        amount_int = int(self.amount)
-        u_id = str(self.user.id)
-        
-        conn = sqlite3.connect('vending_data.db')
-        cur = conn.cursor()
-        # 잔액 및 누적 금액 업데이트
-        cur.execute("UPDATE users SET money = money + ?, total_spent = total_spent + ? WHERE user_id = ?", (amount_int, amount_int, u_id))
-        # ✅ 최근 충전 내역에 기록 저장 (수동 승인)
-        cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
-                    (u_id, amount_int, time.strftime('%Y-%m-%d %H:%M'), "수동(관리자)"))
-        conn.commit()
-        conn.close()
+    async def on_submit(self, interaction: discord.Interaction):
+        if not re.fullmatch(r'[가-힣]+', self.name.value):
+            return await interaction.response.send_message("**입금자명은 한글로만 입력해주세요**", ephemeral=True)
+        if not self.amount.value.isdigit():
+            return await interaction.response.send_message("**충전금액은 숫자만 입력해주세요**", ephemeral=True)
 
-        # 2. 신청 상태 업데이트 (requests 테이블)
-        database.update_status(self.db_id, "완료")
+        db_id = database.insert_request(interaction.user.id, self.amount.value)
+        layout = BankInfoLayout(self.name.value, self.amount.value, db_id)
+        await interaction.response.send_message(view=layout, ephemeral=True)
 
-        # 3. UI 업데이트
-        self.container.clear_items()
-        self.container.accent_color = 0x00ff00
-        self.container.add_item(ui.TextDisplay(f"## 충전 완료 (수동 승인)"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(f"**처리자:** {interaction.user.mention}\n**대상:** {self.user.mention}\n**금액:** {self.amount}원"))
-        
-        await interaction.response.edit_message(view=self)
-        
-        try: 
-            await self.user.send(f"**{self.amount}원 충전이 완료되었습니다 (관리자 승인)**")
-        except: 
-            pass
+        if AUTO_LOG_ENABLED:
+            log_chan = bot.get_channel(LOG_CHANNEL_ID)
+            if log_chan: 
+                await log_chan.send(view=AdminLogView(interaction.user, self.name.value, self.amount.value, db_id))
 
-    async def cancel_callback(self, interaction: discord.Interaction):
-        database.update_status(self.db_id, "취소")
-        self.container.clear_items()
-        self.container.accent_color = 0xff0000
-        self.container.add_item(ui.TextDisplay(f"## 충전 취소"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(f"**처리자:** {interaction.user.mention}\n**대상:** {self.user.mention}\n**금액:** {self.amount}원"))
-        
-        await interaction.response.edit_message(view=self)
+        name_val = self.name.value
+        amount_val = self.amount.value
+        key = f"{name_val}_{amount_val}"
+        asyncio.create_task(self.watch_deposit(interaction, layout, name_val, amount_val, key))
+        asyncio.create_task(layout.start_timer(interaction))
+
+async def watch_deposit(self, interaction, layout, name, amount, key):
+    while True:
+        await asyncio.sleep(3)
+        if pending_deposits.get(key):
+            amount_int = int(amount)
+            u_id = str(interaction.user.id)
+            conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+            cur.execute("UPDATE users SET money = money + ?, total_spent = total_spent + ? WHERE user_id = ?", (amount_int, amount_int, u_id))
+            cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
+                        (u_id, amount_int, time.strftime('%Y-%m-%d %H:%M'), "자동(계좌)"))
+            conn.commit(); conn.close()
+            if key in pending_deposits: del pending_deposits[key]
+            database.update_status(layout.db_id, "완료")
+
+            layout.container.clear_items()
+            layout.container.accent_color = 0x00ff00
+            layout.container.add_item(ui.TextDisplay("## 자동충전 완료"))
+            layout.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            layout.container.add_item(ui.TextDisplay(f"충전금액: **{amount_int:,}원**\n\n성공적으로 충전이 완료되었습니다"))
+                
+            await interaction.edit_original_response(view=layout)
+            break
