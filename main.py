@@ -1,76 +1,45 @@
-import sqlite3
-import time
+    async def info_callback(self, interaction: discord.Interaction):
+        u_id = str(interaction.user.id)
+        
+        # DB에서 유저 정보 조회 (기존 database 모듈 사용)
+        conn = sqlite3.connect('vending1.db')
+        cur = conn.cursor()
+        cur.execute("SELECT money, total_spent FROM users WHERE user_id = ?", (u_id,))
+        row = cur.fetchone()
+        conn.close()
 
-# 파일명을 하나로 통일하여 관리하는 것이 에러 방지에 좋습니다.
-DB_NAME = "vending1.db" 
+        money, total_spent = (row[0], row[1]) if row else (0, 0)
 
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    # 기존 유저 테이블
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users 
-                     (user_id TEXT PRIMARY KEY, 
-                      money INTEGER DEFAULT 0, 
-                      total_spent INTEGER DEFAULT 0, 
-                      is_blacked INTEGER DEFAULT 0)''')
-    
-    # 충전 및 신청 기록 테이블
-    cursor.execute('''CREATE TABLE IF NOT EXISTS requests 
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                      user_id TEXT, 
-                      amount TEXT, 
-                      status TEXT, 
-                      timestamp REAL)''')
-    conn.commit()
-    conn.close()
+        # 1. 정보를 담을 컨테이너 생성
+        info_con = ui.Container(ui.TextDisplay(f"## {interaction.user.display_name}님의 정보"), accent_color=0x5865F2)
+        info_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        info_con.add_item(ui.TextDisplay(f"**잔액:** ₩{money:,}\n**누적 금액:** ₩{total_spent:,}"))
+        info_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-def insert_request(user_id, amount):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO requests (user_id, amount, status, timestamp) VALUES (?, ?, ?, ?)", 
-                   (str(user_id), str(amount), "대기", time.time()))
-    db_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return db_id
+        # 2. 사진 속 방식과 동일한 ui.Select 생성
+        selecao = ui.Select(placeholder="조회하실 내역을 선택하세요", options=[
+            discord.SelectOption(label="최근 구매 내역", value="buy", description="최근 상품 구매 기록을 확인합니다.", emoji="🛒"),
+            discord.SelectOption(label="최근 충전 내역", value="charge", description="최근 충전 신청 기록을 확인합니다.", emoji="💳")
+        ])
 
-def update_status(db_id, status):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE requests SET status = ? WHERE id = ?", (status, db_id))
-    conn.commit()
-    conn.close()
+        # Select 콜백 함수 연결 (사진의 self.resposta_selecao 방식)
+        async def resposta_selecao(it: discord.Interaction):
+            escolha = selecao.values[0] # 선택한 값 가져오기
+            
+            if escolha == "buy":
+                await it.response.send_message(f"🛒 **{it.user.name}**님의 최근 구매 내역이 없습니다.", ephemeral=True)
+            else:
+                # database.get_history 함수 등을 활용해 내역 출력 가능
+                await it.response.send_message(f"💳 **{it.user.name}**님의 최근 충전 내역이 없습니다.", ephemeral=True)
 
-def get_status(db_id):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM requests WHERE id = ?", (db_id,))
-    res = cursor.fetchone()
-    conn.close()
-    return res[0] if res else None
+        selecao.callback = resposta_selecao
 
-def get_last_request_time(user_id):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT timestamp FROM requests WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1", (str(user_id),))
-    res = cursor.fetchone()
-    conn.close()
-    return res[0] if res else 0
+        # 3. 레이아웃에 컨테이너와 셀렉트 메뉴 추가
+        info_view = ui.LayoutView()
+        info_view.add_item(info_con)
+        
+        # 사진처럼 ui.ActionRow를 사용하여 Select 메뉴 추가
+        linha = ui.ActionRow(selecao)
+        info_view.add_item(linha)
 
-# --- [정보 버튼 내역 조회를 위해 추가된 함수] ---
-
-def get_history(user_id, limit=5):
-    """최근 5개의 완료된 충전 내역을 가져옵니다."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    # '완료'된 기록 중 최신순으로 정렬
-    cursor.execute("""
-        SELECT amount, timestamp FROM requests 
-        WHERE user_id = ? AND status = '완료' 
-        ORDER BY timestamp DESC LIMIT ?
-    """, (str(user_id), limit))
-    res = cursor.fetchall()
-    conn.close()
-    return res
-
-init_db()
+        await interaction.response.send_message(view=info_view, ephemeral=True)
