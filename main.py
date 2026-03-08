@@ -1,96 +1,256 @@
-import aiohttp
+import discord
 import asyncio
+from discord import ui
+from discord.ext import commands
+from discord import app_commands
+import database
+import time
+import culture_logic
+import sqlite3
 
-class Pin:
-    def __init__(self, pin_string):
-        self.pin = pin_string.replace("-", "").strip()
-        self.amount = 0
-        self.message = "미처리"
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-class Cultureland:
-    def __init__(self):
-        self.session = None
-        self.base_url = "https://m.cultureland.co.kr"
-
-    async def login(self, cookie):
-        # 1. 브라우저와 동일한 헤더 구성 (강화된 인식 로직)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Content-Type": "application/x-www-form-urlencoded", # 데이터 전송 방식 고정
-            "Cookie": cookie,
-            "Origin": self.base_url,
-            "Referer": f"{self.base_url}/csh/cshGiftCardCfrm.do",
-            "Connection": "keep-alive",
-            "X-Requested-With": "XMLHttpRequest",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin"
-        }
-        
-        # SSL 인증 무시 및 커넥션 풀 최적화
-        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
-        self.session = aiohttp.ClientSession(headers=headers, connector=connector)
-
-    async def charge_process(self, pins):
-        if not self.session:
-            return pins[0] if pins else None
-
-        url = f"{self.base_url}/csh/cshGiftCardCfrm.do"
-        target = pins[0]
-        
-        # 2. Payload를 JSON이 아닌 Form Data 형식으로 전송 (인식 강화)
-        payload = {
-            "txt_pin_no": target.pin,
-            "is_scms": "N",
-            "scrId": "MT0101"
-        }
-
-        try:
-            # 3. 리다이렉트 방지(allow_redirects=False)로 세션 체크 강화
-            async with self.session.post(url, data=payload, timeout=15, allow_redirects=False) as resp:
-                # HTTP 302(리다이렉트)나 200인데 HTML이 오면 무조건 세션 만료
-                content_type = resp.headers.get("Content-Type", "")
-                
-                if resp.status == 302 or "text/html" in content_type:
-                    target.amount = 0
-                    target.message = "❌ 세션 거부 (쿠키를 다시 복사하여 '로그인 유지' 체크 확인)"
-                    return target
-
-                if resp.status == 200:
-                    data = await resp.json()
-                    result_code = str(data.get("result", ""))
-                    
-                    if result_code == "0" or "성공" in data.get("resultMsg", ""):
-                        target.amount = int(data.get("chargeAmount", 0))
-                        target.message = "성공"
-                    else:
-                        target.amount = 0
-                        target.message = data.get("resultMsg", "핀번호 오류")
-                else:
-                    target.message = f"서버 응답 오류 ({resp.status})"
-                    
-        except Exception as e:
-            target.message = f"통신 강화 에러: {str(e)}"
-
-        return target
-
-    async def close(self):
-        if self.session:
-            await self.session.close()
-
-async def charge(pin_string, cookie):
-    cl = Cultureland()
+LOG_CHANNEL_ID = 1477980009753739325
+CULTURE_COOKIE = ""
+async def do_culture_charge(pin_string):
+    """주신 코드 방식: Pin 객체 생성 -> 리스트 전달 -> 결과 객체 반환"""
     try:
-        await cl.login(cookie)
-        target_pin = Pin(pin_string)
-        result = await cl.charge_process([target_pin])
-        return {
-            "status": "success" if result.amount > 0 else "error",
-            "amount": result.amount,
-            "message": result.message
-        }
-    finally:
+        cl = culture_logic.Cultureland()
+        await cl.login(CULTURE_COOKIE)
+
+        target_pin = culture_logic.Pin(pin_string) 
+
+        result_obj = await cl.charge_process([target_pin]) 
+
         await cl.close()
+
+        final_res = result_obj[0] if isinstance(result_obj, list) else result_obj
+
+        return {
+            "status": "success" if final_res.amount > 0 else "error",
+            "amount": final_res.amount,
+            "message": final_res.message
+        }
+
+    except Exception as e:
+        print(f"❌ [컬쳐랜드 에러]: {e}")
+        return {"status": "error", "message": str(e)}
+
+    
+class CultureModal(ui.Modal, title="문상 정보"):
+    pin = ui.TextInput(
+        label="핀번호 입력", 
+        placeholder="하이픈(-) 없이 숫자만 입력하세요",
+        min_length=16,
+        max_length=19
+    )
+
+    def __init__(self, bot, log_channel_id):
+        super().__init__()
+        self.bot = bot
+        self.log_channel_id = log_channel_id
+
+    async def on_submit(self, it: discord.Interaction):
+        wait_con = ui.Container(ui.TextDisplay("## 핀번호 확인 중"), accent_color=0xffff00)
+        wait_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        wait_con.add_item(ui.TextDisplay("약 5~10초 정도 소요됩니다\n잠시만 기다려 주세요"))
+        await it.response.send_message(view=ui.LayoutView().add_item(wait_con), ephemeral=True)
+
+        clean_pin = str(self.pin.value).replace("-", "").strip()
+
+        res = await do_culture_charge(clean_pin)
+
+        result_con = ui.Container()
+        
+        if res["status"] == "success" and res.get("amount", 0) > 0:
+            amount = res["amount"]
+            u_id = str(it.user.id)
+            
+            conn = sqlite3.connect('vending1.db')
+            cur = conn.cursor()
+            cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (u_id,))
+            cur.execute("UPDATE users SET money = money + ?, total_spent = total_spent + ? WHERE user_id = ?", (amount, amount, u_id))
+            conn.commit()
+            conn.close()
+            
+            result_con.accent_color = 0x00ff00
+            result_con.add_item(ui.TextDisplay(f"## 충전 성공"))
+            result_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            result_con.add_item(ui.TextDisplay(f"**충전 금액:** {amount:,}원\n잔액이 정상적으로 반영되었습니다"))
+            
+            log_chan = self.bot.get_channel(self.log_channel_id)
+            if log_chan is None:
+                try: log_chan = await self.bot.fetch_channel(self.log_channel_id)
+                except: pass
+
+            if log_chan:
+                log_con = ui.Container(ui.TextDisplay(f"## 문상 충전로그"), accent_color=0x00ff00)
+                log_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+                log_con.add_item(ui.TextDisplay(f"**신청자:** {it.user.mention}\n**충전금액:** {amount:,}원\n**상태:** 자동 승인 완료"))
+                await log_chan.send(view=ui.LayoutView().add_item(log_con))
+        else:
+            reason = res.get("message", "잘못된 핀번호이거나 이미 사용된 번호입니다")
+            result_con.accent_color = 0xff0000
+            result_con.add_item(ui.TextDisplay(f"## 충전 실패"))
+            result_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            result_con.add_item(ui.TextDisplay(f"**사유:** {reason}"))
+
+        await it.edit_original_response(view=ui.LayoutView().add_item(result_con))
+
+class AdminLogView(ui.LayoutView):
+    def __init__(self, user, name, amount, db_id):
+        super().__init__()
+        self.user, self.name, self.amount, self.db_id = user, name, amount, db_id
+        self.container = ui.Container(ui.TextDisplay(f"## 충전 신청"), accent_color=0xffff00)
+        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        self.container.add_item(ui.TextDisplay(f"**신청자:** {user.mention}\n**입금자명:** {name}\n**신청금액:** {amount}원"))
+        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        approve_btn = ui.Button(label="완료", style=discord.ButtonStyle.green)
+        approve_btn.callback = self.approve_callback
+        cancel_btn = ui.Button(label="취소", style=discord.ButtonStyle.red)
+        cancel_btn.callback = self.cancel_callback
+        
+        self.container.add_item(ui.ActionRow(approve_btn, cancel_btn))
+        self.add_item(self.container)
+
+    async def approve_callback(self, interaction: discord.Interaction):
+        database.update_status(self.db_id, "완료")
+        self.container.clear_items()
+        self.container.accent_color = 0x00ff00
+        self.container.add_item(ui.TextDisplay(f"## 충전 완료"))
+        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        self.container.add_item(ui.TextDisplay(f"**처리자:** {interaction.user.mention}\n**대상:** {self.user.mention}\n**금액:** {self.amount}원"))
+        await interaction.response.edit_message(view=self)
+        try: await self.user.send(f"**{self.amount}원 충전이 완료되었습니다**")
+        except: pass
+
+    async def cancel_callback(self, interaction: discord.Interaction):
+        database.update_status(self.db_id, "취소")
+        self.container.clear_items()
+        self.container.accent_color = 0xff0000
+        self.container.add_item(ui.TextDisplay(f"## 충전 취소"))
+        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        self.container.add_item(ui.TextDisplay(f"**처리자:** {interaction.user.mention}\n**대상:** {self.user.mention}\n**금액:** {self.amount}원"))
+        await interaction.response.edit_message(view=self)
+
+class BankInfoLayout(ui.LayoutView):
+    def __init__(self, name, amount, db_id):
+        super().__init__()
+        self.name = name
+        self.amount = amount
+        self.db_id = db_id
+
+        self.container = ui.Container(ui.TextDisplay(f"## 입금 정보"), accent_color=0x00ff00)
+        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        self.container.add_item(ui.TextDisplay(f"은행명: 카카오뱅크\n계좌: 123-456-7890\n예금주: 정성원"))
+        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        self.container.add_item(ui.TextDisplay(f"입금자명: {self.name}\n충전금액: {self.amount}원"))
+        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        self.container.add_item(ui.TextDisplay("-# 5분 이내로 입금해주셔야 충전이 완료됩니다"))
+        self.add_item(self.container)
+
+    async def start_timer(self, interaction: discord.Interaction):
+        await asyncio.sleep(300)
+        if database.get_status(self.db_id) == "대기":
+            self.container.clear_items()
+            self.container.accent_color = 0xff0000
+            self.container.add_item(ui.TextDisplay("## 충전 시간 초과"))
+            self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            self.container.add_item(ui.TextDisplay("자동충전 시간이 초과되었습니다"))
+            await interaction.edit_original_response(view=self)
+
+class BankModal(ui.Modal, title="계좌이체 충전"):
+    name = ui.TextInput(label="입금자명", placeholder="입금하실 성함을 입력해주세요", min_length=2, max_length=10)
+    amount = ui.TextInput(label="충전금액", placeholder="금액을 입력해주세요 (숫자만)", min_length=1)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        last_time = database.get_last_request_time(interaction.user.id)
+        current_time = time.time()
+
+        if current_time - last_time < 300:
+            remaining = int(300 - (current_time - last_time))
+            return await interaction.response.send_message(f"**이미 충전 신청한 기록이 있습니다\n{remaining}초 후에 다시 시도해주세요**", ephemeral=True)
+
+        db_id = database.insert_request(interaction.user.id, self.amount.value)
+        layout = BankInfoLayout(self.name.value, self.amount.value, db_id)
+        await interaction.response.edit_message(view=layout)
+
+        log_chan = bot.get_channel(LOG_CHANNEL_ID)
+        if log_chan is None:
+            try: log_chan = await bot.fetch_channel(LOG_CHANNEL_ID)
+            except: pass
+
+        if log_chan:
+            await log_chan.send(view=AdminLogView(interaction.user, self.name.value, self.amount.value, db_id))
+
+        asyncio.create_task(layout.start_timer(interaction))
+
+class ChargeLayout(ui.LayoutView):
+    def __init__(self):
+        super().__init__()
+        container = ui.Container(ui.TextDisplay("## 충전 방식 선택"), accent_color=0xffffff)
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("원하시는 충전 수단을 선택해주세요"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        
+        bank = ui.Button(label="계좌이체", style=discord.ButtonStyle.gray)
+        bank.callback = self.bank_callback
+        
+        gift_card = ui.Button(label="문상결제", style=discord.ButtonStyle.gray)
+        gift_card.callback = self.gift_card_callback
+        
+        button_row = ui.ActionRow(bank, gift_card)
+        container.add_item(button_row)
+        self.add_item(container)
+
+    async def bank_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(BankModal())
+
+    async def gift_card_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(CultureModal(bot, LOG_CHANNEL_ID))
+
+class MeuLayout(ui.LayoutView):
+    def __init__(self):
+        super().__init__()
+        container = ui.Container(ui.TextDisplay("## 구매하기"), accent_color=0xffffff)
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("테스트"))
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        shop = ui.Button(label="제품")
+        shop.callback = self.shop_callback
+        chage = ui.Button(label="충전")
+        chage.callback = self.chage_callback
+        buy = ui.Button(label="구매")
+        buy.callback = self.buy_callback
+        info = ui.Button(label="정보")
+        info.callback = self.info_callback
+
+        button = ui.ActionRow(shop, chage, buy, info)
+        container.add_item(button)
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay("-# © 2026 Made by **__@alx.io07__** All rights reserved"))
+        self.add_item(container)
+
+    async def shop_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("준비중입니다", ephemeral=True)
+
+    async def chage_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(view=ChargeLayout(), ephemeral=True)
+
+    async def buy_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("준비중입니다", ephemeral=True)
+
+    async def info_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("준비중입니다", ephemeral=True)
+
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+
+@bot.tree.command(name="자판기", description="자판기를 전송합니다")
+async def vending(interaction: discord.Interaction):
+    await interaction.response.send_message("**자판기가 전송되었습니다**", ephemeral=True)
+    await interaction.channel.send(view=MeuLayout())
