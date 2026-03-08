@@ -1,30 +1,38 @@
-class CategoryModal(ui.Modal, title="카테고리 설정"):
-    cat_name = ui.TextInput(label="카테고리 이름", placeholder="새로운 카테고리명을 입력하세요")
-    async def on_submit(self, it: discord.Interaction):
-        # 카테고리는 제품 등록 시 자동으로 분류되므로 안내 메시지만 전송
-        await it.response.send_message(f"✅ 카테고리 [**{self.cat_name.value}**] 설정 준비 완료. 제품 설정에서 등록해주세요.", ephemeral=True)
+class MeuLayout(ui.LayoutView):
+    # ... (기존 __init__ 생략)
 
-class ProductModal(ui.Modal, title="제품 설정"):
-    cat_name = ui.TextInput(label="카테고리", placeholder="예: 음료")
-    prod_name = ui.TextInput(label="제품명", placeholder="예: 콜라")
-    price = ui.TextInput(label="가격", placeholder="숫자만 입력")
-    async def on_submit(self, it: discord.Interaction):
-        if not self.price.value.isdigit():
-            return await it.response.send_message("❌ 가격은 숫자만 입력하세요.", ephemeral=True)
+    async def shop_callback(self, it: discord.Interaction):
+        if await check_black(it): return
         
-        conn = sqlite3.connect('vending_data.db')
-        cur = conn.cursor()
-        # DB에 제품 정보 저장 (이미 있으면 업데이트)
-        cur.execute("INSERT OR REPLACE INTO products (category, name, price, stock) VALUES (?, ?, ?, ?)",
-                    (self.cat_name.value, self.prod_name.value, int(self.price.value), 0))
-        conn.commit(); conn.close()
-        await it.response.send_message(f"✅ 제품 [**{self.prod_name.value}**]이(가) DB에 반영되었습니다.", ephemeral=True)
-
-class StockModal(ui.Modal, title="재고 설정"):
-    prod_name = ui.TextInput(label="제품명", placeholder="재고를 수정할 제품의 정확한 이름")
-    count = ui.TextInput(label="수량", placeholder="변경할 숫자 입력")
-    async def on_submit(self, it: discord.Interaction):
         conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-        cur.execute("UPDATE products SET stock = ? WHERE name = ?", (self.count.value, self.prod_name.value))
-        conn.commit(); conn.close()
-        await it.response.send_message(f"✅ [**{self.prod_name.value}**] 재고가 {self.count.value}개로 수정되었습니다.", ephemeral=True)
+        # 현재 DB에 등록된 모든 카테고리 중복 없이 가져오기
+        cur.execute("SELECT DISTINCT category FROM products")
+        categories = [row[0] for row in cur.fetchall()]
+        conn.close()
+
+        if not categories:
+            return await it.response.send_message("현재 등록된 제품 카테고리가 없습니다.", ephemeral=True)
+
+        cat_con = ui.Container(ui.TextDisplay("## 📂 카테고리 선택"), accent_color=0x5865F2)
+        options = [discord.SelectOption(label=cat, value=cat) for cat in categories]
+        cat_select = ui.Select(placeholder="카테고리를 선택하세요", options=options)
+
+        async def cat_callback(interaction: discord.Interaction):
+            selected = cat_select.values[0]
+            
+            # DB에서 해당 카테고리의 제품 정보 실시간 조회
+            conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+            cur.execute("SELECT name, price, stock FROM products WHERE category = ?", (selected,))
+            products = cur.fetchall(); conn.close()
+
+            item_text = "\n".join([f"• **{p[0]}** - {p[1]:,}원 (재고: {p[2]}개)" for p in products]) if products else "제품이 없습니다."
+            
+            res_con = ui.Container(ui.TextDisplay(f"## 📦 {selected} 목록"), accent_color=0x00ff00)
+            res_con.add_item(ui.TextDisplay(f"### {selected} 카테고리 실시간 리스트\n\n{item_text}"))
+            res_con.add_item(ui.ActionRow(cat_select))
+            
+            await interaction.response.edit_message(view=ui.LayoutView().add_item(res_con))
+
+        cat_select.callback = cat_callback
+        cat_con.add_item(ui.ActionRow(cat_select))
+        await it.response.send_message(view=ui.LayoutView().add_item(cat_con), ephemeral=True)
