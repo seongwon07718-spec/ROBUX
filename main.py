@@ -1,26 +1,24 @@
-async def watch_deposit(self, interaction, layout, name, amount, key):
-    while True:
-        await asyncio.sleep(3)
-        if pending_deposits.get(key):
-            amount_int = int(amount)
-            u_id = str(interaction.user.id)
-            
-            conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-            # 잔액 업데이트
-            cur.execute("UPDATE users SET money = money + ?, total_spent = total_spent + ? WHERE user_id = ?", (amount_int, amount_int, u_id))
-            
-            # ✅ 최근 충전 내역 기록 (자동)
-            cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
-                        (u_id, amount_int, time.strftime('%Y-%m-%d %H:%M'), "자동(계좌)"))
-            
-            conn.commit(); conn.close()
-            
-            if key in pending_deposits: del pending_deposits[key]
-            database.update_status(layout.db_id, "완료")
+class AdminLogView(ui.LayoutView):
+    # ... (기존 __init__ 생략)
 
-            # 컨테이너 업데이트 로직...
-            layout.container.clear_items()
-            layout.container.accent_color = 0x00ff00
-            layout.container.add_item(ui.TextDisplay(f"## ✅ 자동충전 완료\n금액: **{amount_int:,}원**"))
-            await interaction.edit_original_response(view=layout)
-            break
+    async def approve_callback(self, interaction: discord.Interaction):
+        amount_int = int(self.amount)
+        u_id = str(self.user.id)
+        
+        # 데이터베이스 처리
+        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+        cur.execute("UPDATE users SET money = money + ?, total_spent = total_spent + ? WHERE user_id = ?", (amount_int, amount_int, u_id))
+        
+        # ✅ 최근 충전 내역 기록 (수동 승인)
+        cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
+                    (u_id, amount_int, time.strftime('%Y-%m-%d %H:%M'), "수동(관리자)"))
+        
+        conn.commit(); conn.close()
+        
+        database.update_status(self.db_id, "완료")
+        
+        # 관리자 로그 컨테이너 업데이트
+        self.container.clear_items(); self.container.accent_color = 0x00ff00
+        self.container.add_item(ui.TextDisplay(f"## 충전 완료 (수동)"))
+        # ... (이후 기존 코드와 동일하게 처리)
+        await interaction.response.edit_message(view=self)
