@@ -35,70 +35,45 @@ class PurchaseModal(ui.Modal):
             res_con.accent_color = 0xff0000; res_con.add_item(ui.TextDisplay("## 재고 부족"))
             res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
             res_con.add_item(ui.TextDisplay(f"(현재 재고: {self.stock}개)"))
+            conn.close()
             return await it.edit_original_response(view=ui.LayoutView().add_item(res_con))
         
         if user_money < total_price:
             res_con.accent_color = 0xff0000; res_con.add_item(ui.TextDisplay("## 잔액 부족"))
             res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
             res_con.add_item(ui.TextDisplay(f"(필요: {total_price:,}원 / 보유: {user_money:,}원)"))
+            conn.close()
             return await it.edit_original_response(view=ui.LayoutView().add_item(res_con))
 
+        # 재고 데이터(stock_data) 처리
+        cur.execute("SELECT stock_data FROM products WHERE name = ?", (self.prod_name,))
+        stock_res = cur.fetchone()
+        stock_list = stock_res[0].split('\n') if stock_res and stock_res[0] else []
+        
+        delivery_items = stock_list[:buy_count]
+        remaining_stock_data = "\n".join(stock_list[buy_count:])
+
+        # DB 업데이트 (돈 차감, 재고 수량 차감, 누적 판매량 증가, 재고 데이터 갱신)
         cur.execute("UPDATE users SET money = money - ? WHERE user_id = ?", (total_price, u_id))
-        cur.execute("UPDATE products SET stock = stock - ? WHERE name = ?", (buy_count, self.prod_name))
+        cur.execute("""UPDATE products 
+                       SET stock = stock - ?, 
+                           sold_count = sold_count + ?, 
+                           stock_data = ? 
+                       WHERE name = ?""", (buy_count, buy_count, remaining_stock_data, self.prod_name))
+        
         cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
                     (u_id, -total_price, time.strftime('%Y-%m-%d %H:%M'), f"제품구매({self.prod_name} x {buy_count})"))
-        conn.commit(); conn.close()
-
-
-      async def shop_callback(self, it: discord.Interaction):
-        if await check_black(it): return
         
-        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-        cur.execute("SELECT DISTINCT category FROM products")
-        categories = [row[0] for row in cur.fetchall()]
+        conn.commit()
         conn.close()
 
-        if not categories:
-            return await it.response.send_message("현재 등록된 제품 카테고리가 없습니다.", ephemeral=True)
+        delivery_text = "\n".join(delivery_items)
+        res_con.accent_color = 0x00ff00; res_con.add_item(ui.TextDisplay(f"## ✅ 구매 완료"))
+        res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        res_con.add_item(ui.TextDisplay(f"**전달된 상품 정보:**\n{delivery_text}"))
+        await it.edit_original_response(view=ui.LayoutView().add_item(res_con))
 
-        cat_con = ui.Container(ui.TextDisplay("## 카테고리 선택"), accent_color=0xffffff)
-        cat_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        cat_con.add_item(ui.TextDisplay("원하시는 제품의 카테고리를 선택해주세요"))
-        cat_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        options = [discord.SelectOption(label=cat, value=cat) for cat in categories]
-        cat_select = ui.Select(placeholder="카테고리를 선택하세요", options=options)
-
-        async def cat_callback(interaction: discord.Interaction):
-            selected = cat_select.values[0]
-    
-            conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-            cur.execute("SELECT name, price, stock, sold_count FROM products WHERE category = ?", (selected,))
-            products = cur.fetchall(); conn.close()
-
-            if products:
-                item_text = "\n".join([
-                    f"<:dot_white:1482000567562928271> 제품: {p[0]}\n"
-                    f"<:dot_white:1482000567562928271> 가격: {p[1]:,}원\n"
-                    f"<:dot_white:1482000567562928271> 재고: {p[2]}개 / 누적 판매: {p[3]}개" 
-                    for p in products
-                ])
-            else:
-                item_text = "제품이 없습니다"
-            
-            res_con = ui.Container(ui.TextDisplay(f"## {selected} 제품 목록"), accent_color=0xffffff)
-            res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            res_con.add_item(ui.TextDisplay(f"{item_text}"))
-            res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            res_con.add_item(ui.ActionRow(cat_select))
-            
-            await interaction.response.edit_message(view=ui.LayoutView().add_item(res_con))
-
-        cat_select.callback = cat_callback
-        cat_con.add_item(ui.ActionRow(cat_select))
-        await it.response.send_message(view=ui.LayoutView().add_item(cat_con), ephemeral=True)
-    async def chage_callback(self, it: discord.Interaction):
-        if await check_black(it): return
-        await it.response.send_message(view=ChargeLayout(), ephemeral=True)
+# --- buy_callback 내부 흐름 수정 ---
     async def buy_callback(self, it: discord.Interaction):
         if await check_black(it): return
 
@@ -130,13 +105,26 @@ class PurchaseModal(ui.Modal):
             prod_con.add_item(ui.TextDisplay("구매할 제품을 선택해주세요"))
             prod_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
             prod_options = [
-    discord.SelectOption(
-        label=f"{p[0]}", 
-        description=f"제품 가격: {p[1]:,}원ㅣ남은 재고: {p[2]}개ㅣ누적 판매: {p[3]}개",
-        value=f"{p[0]}|{p[1]}|{p[2]}"
-    ) for p in prods
-]
+                discord.SelectOption(
+                    label=f"{p[0]}", 
+                    description=f"가격: {p[1]:,}원 ㅣ 재고: {p[2]}개 ㅣ 누적 판매: {p[3]}개",
+                    value=f"{p[0]}|{p[1]}|{p[2]}"
+                ) for p in prods
+            ]
             prod_select = ui.Select(placeholder="구매하실 제품을 선택하세요", options=prod_options)
 
+            async def prod_callback(it3: discord.Interaction):
+                # 선택된 값 분리
+                val_split = prod_select.values[0].split('|')
+                p_name = val_split[0]
+                p_price = int(val_split[1])
+                p_stock = int(val_split[2])
+                await it3.response.send_modal(PurchaseModal(p_name, p_price, p_stock))
 
+            prod_select.callback = prod_callback
+            prod_con.add_item(ui.ActionRow(prod_select))
+            await it2.response.edit_message(view=ui.LayoutView().add_item(prod_con))
 
+        cat_select.callback = cat_callback
+        cat_con.add_item(ui.ActionRow(cat_select))
+        await it.response.send_message(view=ui.LayoutView().add_item(cat_con), ephemeral=True)
