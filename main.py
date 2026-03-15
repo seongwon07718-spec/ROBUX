@@ -1,12 +1,3 @@
-class PurchaseModal(ui.Modal):
-    def __init__(self, prod_name, price, stock):
-        super().__init__(title=f"{prod_name} 구매")
-        self.prod_name = prod_name
-        self.price = price
-        self.stock = stock
-        self.count = ui.TextInput(label="구매 수량", placeholder=f"수량을 입력하세요", min_length=1, max_length=5)
-        self.add_item(self.count)
-
     async def on_submit(self, it: discord.Interaction):
         if not self.count.value.isdigit():
             err_con = ui.Container(ui.TextDisplay("## ❌ 입력 오류"), accent_color=0xff0000)
@@ -50,6 +41,8 @@ class PurchaseModal(ui.Modal):
         stock_list = stock_res[0].split('\n') if stock_res and stock_res[0] else []
         
         delivery_items = stock_list[:buy_count]
+        # 구매한 재고 원문을 합쳐서 변수에 저장 (Web.py 표시용)
+        purchased_stock_text = "\n".join(delivery_items) 
         remaining_stock_data = "\n".join(stock_list[buy_count:])
 
         cur.execute("UPDATE users SET money = money - ? WHERE user_id = ?", (total_price, u_id))
@@ -62,6 +55,11 @@ class PurchaseModal(ui.Modal):
         cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
                     (u_id, -total_price, time.strftime('%Y-%m-%d %H:%M'), f"제품구매({self.prod_name} x {buy_count})"))
         
+        # [수정] Web.py에서 보여줄 구매 로그 저장 (id를 생성하기 위함)
+        cur.execute("INSERT INTO buy_log (user_id, product_name, stock_data) VALUES (?, ?, ?)",
+                    (u_id, self.prod_name, purchased_stock_text))
+        buy_id = cur.lastrowid # 웹사이트 주소에 쓰일 고유 ID
+
         conn.commit()
         conn.close()
 
@@ -73,9 +71,9 @@ class PurchaseModal(ui.Modal):
         await it.edit_original_response(view=ui.LayoutView().add_item(res_con))
 
         try:
-            domain = "rbxshop.cloud"
-            safe_prod_name = urllib.parse.quote(self.prod_name)
-            view_url = f"https://{domain}/view?user={it.user.id}&product={safe_prod_name}"
+            # [수정] 도메인 뒤에 포트 번호(:88) 추가 및 id 파라미터로 변경
+            domain = "rbxshop.cloud:88" 
+            view_url = f"http://{domain}/view?id={buy_id}"
 
             dm_con = ui.Container(ui.TextDisplay("## 구매 제품"), accent_color=0xffffff)
             dm_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
@@ -88,14 +86,13 @@ class PurchaseModal(ui.Modal):
             review_btn.callback = review_btn_callback
             
             view_btn = ui.Button(
-    label="제품보기", 
-    url=view_url, 
-    style=discord.ButtonStyle.link,
-    emoji="<:shop:1481994009499930766>"
-)
+                label="제품보기", 
+                url=view_url, 
+                style=discord.ButtonStyle.link,
+                emoji="<:shop:1481994009499930766>"
+            )
             
             dm_con.add_item(ui.ActionRow(review_btn, view_btn))
-            
             await it.user.send(view=ui.LayoutView().add_item(dm_con))
 
         except Exception as e:
