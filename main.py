@@ -1,48 +1,40 @@
-        # 1. 보안 키(UUID) 생성 (남이 재고를 추측해서 털어가는 것 방지)
-        import uuid
-        web_key = str(uuid.uuid4())
+# --- [추가] 웹 서버 로직 ---
+app = FastAPI()
 
-        # 2. 구매 로그 저장 (web_key 컬럼 포함)
-        # 테이블에 web_key 컬럼이 반드시 있어야 합니다. (init_db에서 추가한 버전 사용)
-        cur.execute("INSERT INTO buy_log (user_id, product_name, stock_data, date, web_key) VALUES (?, ?, ?, ?, ?)",
-                    (u_id, self.prod_name, purchased_stock_text, time.strftime('%Y-%m-%d %H:%M'), web_key))
+@app.get("/view")
+async def view_product(key: str): # 보안 키로만 조회 가능
+    conn = sqlite3.connect('vending_data.db', timeout=10)
+    cur = conn.cursor()
+    cur.execute("SELECT product_name, stock_data FROM buy_log WHERE web_key = ?", (key,))
+    res = cur.fetchone()
+    conn.close()
+    
+    if not res:
+        return HTMLResponse(content="<h1 style='color:white;'>권한이 없거나 잘못된 접근입니다.</h1>", status_code=403)
 
-        conn.commit()
-        conn.close()
+    prod_name, stock_data = res
+    formatted_data = stock_data.replace('\n', '<br>')
 
-        # 3. 결과 메시지 업데이트
-        res_con.accent_color = 0x00ff00; res_con.add_item(ui.TextDisplay(f"## 구매 완료"))
-        res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        res_con.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> 제품명: {self.prod_name}\n<:dot_white:1482000567562928271> 구매 수량: {buy_count}개\n<:dot_white:1482000567562928271> 차감 금액: {total_price:,}원"))
-        res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        res_con.add_item(ui.TextDisplay("-# DM으로 제품 전송되었습니다"))
-        await it.edit_original_response(view=ui.LayoutView().add_item(res_con))
+    return HTMLResponse(content=f"""
+        <body style="background-color: #1a1a1a; color: white; font-family: sans-serif; text-align: center; padding-top: 50px;">
+            <div style="display: inline-block; background: #2a2a2a; padding: 30px; border-radius: 15px; border: 1px solid #444;">
+                <h2 style="color: #7289da;">📦 {prod_name}</h2>
+                <div style="background: #111; padding: 20px; border-radius: 8px; text-align: left; font-family: monospace;">
+                    {formatted_data}
+                </div>
+            </div>
+        </body>
+    """)
 
-        try:
-            # 4. 보안 URL 생성 (88번 포트 사용 및 key 파라미터 적용)
-            domain = "rbxshop.cloud:88" 
-            view_url = f"http://{domain}/view?key={web_key}"
-
-            dm_con = ui.Container(ui.TextDisplay("## 구매 제품"), accent_color=0xffffff)
-            dm_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            dm_con.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> 제품명: {self.prod_name}\n<:dot_white:1482000567562928271> 구매수량: {buy_count}개\n<:dot_white:1482000567562928271> 결제금액: {total_price:,}원\n<:dot_white:1482000567562928271> 남은 잔액: {user_money - total_price:,}원"))
-            dm_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            
-            review_btn = ui.Button(label="후기작성", style=discord.ButtonStyle.gray, emoji="<:bel:1482196301578764308>")
-            async def review_btn_callback(it_btn: discord.Interaction):
-                await it_btn.response.send_modal(ReviewModal(self.prod_name))
-            review_btn.callback = review_btn_callback
-            
-            view_btn = ui.Button(
-                label="제품보기", 
-                url=view_url, 
-                style=discord.ButtonStyle.link,
-                emoji="<:shop:1481994009499930766>"
-            )
-            
-            dm_v = ui.LayoutView().add_item(dm_con)
-            dm_v.add_item(ui.ActionRow(review_btn, view_btn))
-            await it.user.send(view=dm_v)
-
-        except Exception as e:
-            print(f"DM 전송 실패: {e}")
+# --- [수정] 메인 실행부 ---
+if __name__ == "__main__":
+    init_db() # DB 초기화 확인
+    
+    # 웹 서버 프로세스 별도 시작 (88번 포트)
+    web_p = multiprocessing.Process(target=lambda: uvicorn.run(app, host="0.0.0.0", port=88))
+    web_p.start()
+    
+    try:
+        asyncio.run(run_bot()) # 봇 실행 함수 이름에 맞춰 수정 (예: run_bot 또는 bot.start)
+    except KeyboardInterrupt:
+        web_p.terminate()
