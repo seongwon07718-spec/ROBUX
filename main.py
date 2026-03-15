@@ -1,16 +1,30 @@
-async def stock_edit_product_callback(self, it: discord.Interaction):
-    prod_name = it.data['values'][0]
-    if prod_name == "none": return
-    
-    # [중요] DB에서 현재 저장된 '실제 재고 리스트'를 가져옵니다.
-    conn = sqlite3.connect('vending_data.db')
-    cur = conn.cursor()
-    cur.execute("SELECT stock_data FROM products WHERE name = ?", (prod_name,))
-    res = cur.fetchone()
-    conn.close()
-    
-    # 데이터가 있으면 그 내용을, 없으면 빈 값을 준비합니다.
-    current_stock_list = res[0] if res and res[0] else ""
-    
-    # 가져온 실제 재고 데이터(current_stock_list)를 모달에 전달합니다.
-    await it.response.send_modal(StockDataListModal(prod_name, current_stock_list))
+class StockDataListModal(ui.Modal):
+    def __init__(self, name, current_data):
+        super().__init__(title=f"{name} 재고 관리")
+        self.name = name
+        
+        # [핵심 수정] default 자리에 current_data를 넣어줘야 실제 재고가 보입니다.
+        self.data_input = ui.TextInput(
+            label="재고 리스트",
+            style=discord.TextStyle.paragraph,
+            default=str(current_data), # ← "수정하거나 삭제하세요" 대신 실제 재고가 적힙니다.
+            placeholder="비어있음 (재고를 입력하거나 수정하세요)",
+            required=False
+        )
+        self.add_item(self.data_input)
+
+    async def on_submit(self, it: discord.Interaction):
+        # 사용자가 수정한 텍스트 전체를 가져옵니다.
+        updated_data = self.data_input.value
+        # 줄바꿈 기준으로 남은 재고 개수 다시 계산
+        new_count = len([l for l in updated_data.split('\n') if l.strip()])
+
+        conn = sqlite3.connect('vending_data.db')
+        cur = conn.cursor()
+        # 수정된 텍스트와 개수를 DB에 저장합니다.
+        cur.execute("UPDATE products SET stock_data = ?, stock = ? WHERE name = ?", 
+                    (updated_data, new_count, self.name))
+        conn.commit()
+        conn.close()
+        
+        await it.response.send_message(f"**__{self.name}__ 재고 수정 완료되었습니다 (현재: __{new_count}__개)**", ephemeral=True)
