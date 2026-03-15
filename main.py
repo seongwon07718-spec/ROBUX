@@ -6,7 +6,7 @@ class MeuLayout(ui.LayoutView):
         self.container.add_item(ui.TextDisplay("아래 버튼을 눌려 이용해주세요"))
         self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         
-        # 버튼 생성 및 콜백 즉시 연결
+        # 버튼 생성 및 콜백 연결
         buy = ui.Button(label="구매", emoji="<:buy:1481994292255002705>")
         buy.callback = self.buy_callback
         
@@ -19,14 +19,15 @@ class MeuLayout(ui.LayoutView):
         info = ui.Button(label="정보", emoji="<:info:1481993647774892043>")
         info.callback = self.info_callback
         
-        # 버튼들을 ActionRow에 담아 컨테이너에 추가
         self.container.add_item(ui.ActionRow(buy, shop, chage, info))
         self.add_item(self.container)
 
-    # --- 추가된 정보 조회 콜백 ---
+    # --- 정보 조회 콜백 (최종 수정본) ---
     async def info_callback(self, it: discord.Interaction):
         if await check_black(it): return
+        # 버튼 클릭에 대한 초기 응답 지연
         await it.response.defer(ephemeral=True)
+        
         u_id = str(it.user.id)
         conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
         cur.execute("SELECT money, total_spent FROM users WHERE user_id = ?", (u_id,))
@@ -44,6 +45,8 @@ class MeuLayout(ui.LayoutView):
         ])
 
         async def resp(i: discord.Interaction):
+            # 선택 시에도 응답 지연 처리 (반응 없음 방지)
+            await i.response.defer(ephemeral=True)
             selected = selecao.values[0]
             conn2 = sqlite3.connect('vending_data.db'); cur2 = conn2.cursor()
             
@@ -70,14 +73,16 @@ class MeuLayout(ui.LayoutView):
                 else:
                     log_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
                     log_con.add_item(ui.TextDisplay("구매 내역이 없습니다"))
-                
-            await i.response.send_message(view=ui.LayoutView().add_item(log_con), ephemeral=True)
+            
+            # 지연된 응답은 followup으로 전송
+            await i.followup.send(view=ui.LayoutView().add_item(log_con), ephemeral=True)
             
         selecao.callback = resp
         container.add_item(ui.ActionRow(selecao))
-        # defer 이후이므로 followup 사용
+        # 버튼 클릭에 대한 최종 응답
         await it.followup.send(view=ui.LayoutView().add_item(container), ephemeral=True)
 
+    # --- 기존 콜백 (변경 없음) ---
     async def shop_callback(self, it: discord.Interaction):
         if await check_black(it): return
         conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
