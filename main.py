@@ -8,28 +8,19 @@ class BankInfoLayout(ui.LayoutView):
         self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         self.container.add_item(ui.TextDisplay("-# 5분 이내로 입금해주셔야 자동충전됩니다"))
         
-        # 계좌복사 버튼 생성
-        copy_btn = ui.Button(label="계좌복사", style=discord.ButtonStyle.gray, emoji="📋")
-        copy_btn.callback = self.copy_callback
+        # 버튼을 self(인스턴스) 변수로 만들어 어디서든 접근 가능하게 합니다.
+        self.copy_btn = ui.Button(label="계좌복사", style=discord.ButtonStyle.gray, emoji="<:copy:1482673389679415316>")
+        self.copy_btn.callback = self.copy_callback
         
-        # 버튼을 액션로우에 담아 컨테이너에 추가
-        self.container.add_item(ui.ActionRow(copy_btn))
+        self.container.add_item(ui.ActionRow(self.copy_btn))
         self.add_item(self.container)
 
     async def copy_callback(self, it: discord.Interaction):
-        # 계좌번호 가져오기
-        account = BANK_CONFIG['account_num']
+        # 1. 버튼 비활성화 (self.copy_btn을 직접 수정)
+        self.copy_btn.disabled = True
         
-        # 버튼 비활성화 처리
-        # it.message.components[0].children[0]는 현재 클릭된 버튼을 의미합니다.
-        # 가장 확실한 방법은 클릭된 버튼의 disabled 속성을 바꾸고 메시지를 수정하는 것입니다.
-        for item in self.container.items:
-            if isinstance(item, ui.ActionRow):
-                for child in item.children:
-                    if isinstance(child, ui.Button) and child.label == "계좌복사":
-                        child.disabled = True # 버튼 비활성화
-        
-        # 메시지 수정과 함께 계좌번호를 일반 텍스트로 보내서 복사하기 편하게 함
+        # 2. 변경된 버튼 상태를 메시지에 반영
         await it.response.edit_message(view=self)
-        await it.followup.send(content=f"{account}", ephemeral=True)
-
+        
+        # 3. 계좌번호 전송 (사용자가 복사할 수 있도록)
+        await it.followup.send(content=f"{BANK_CONFIG['account_num']}", ephemeral=True)
