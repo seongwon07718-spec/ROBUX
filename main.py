@@ -1,32 +1,31 @@
-class StockDataListModal(ui.Modal):
-    def __init__(self, name, current_data):
-        super().__init__(title=f"{name} 재고 관리")
-        self.name = name
-        
-        # 핵심: placeholder가 아니라 'default'에 실제 데이터를 넣어야 눈에 보입니다.
-        self.data_input = ui.TextInput(
-            label="재고 리스트",
-            style=discord.TextStyle.paragraph,
-            default=str(current_data), # 여기에 DB에서 가져온 재고(3739, 4739 등)가 들어갑니다.
-            placeholder="재고가 비어있습니다.", # 데이터가 하나도 없을 때만 보이는 문구
-            required=False
-        )
-        self.add_item(self.data_input)
-
-    async def on_submit(self, it: discord.Interaction):
-        # 사용자가 수정(삭제 포함)한 최종 텍스트
-        updated_data = self.data_input.value
-        
-        # 줄바꿈 기준으로 남은 재고 개수 계산
-        new_count = len([l for l in updated_data.split('\n') if l.strip()])
-
-        conn = sqlite3.connect('vending_data.db')
-        cur = conn.cursor()
-        
-        # 수정된 리스트와 개수를 DB에 저장
-        cur.execute("UPDATE products SET stock_data = ?, stock = ? WHERE name = ?", 
-                    (updated_data, new_count, self.name))
-        conn.commit()
+        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+        cur.execute("SELECT DISTINCT category FROM products")
+        categories = [row[0] for row in cur.fetchall()]
         conn.close()
-        
-        await it.response.send_message(f"**__{self.name}__ 재고 수정 완료되었습니다 (현재: __{new_count}__개)**", ephemeral=True)
+
+        if not categories:
+            return await it.response.send_message("현재 등록된 제품 카테고리가 없습니다.", ephemeral=True)
+
+        cat_con = ui.Container(ui.TextDisplay("## 카테고리 선택"), accent_color=0xffffff)
+        cat_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        cat_con.add_item(ui.TextDisplay("원하시는 제품의 카테고리를 선택해주세요"))
+        cat_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        options = [discord.SelectOption(label=cat, value=cat) for cat in categories]
+        cat_select = ui.Select(placeholder="카테고리를 선택하세요", options=options)
+
+        async def cat_callback(interaction: discord.Interaction):
+            selected = cat_select.values[0]
+            
+            conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+            cur.execute("SELECT name, price, stock FROM products WHERE category = ?", (selected,))
+            products = cur.fetchall(); conn.close()
+
+            item_text = "\n".join([f"<:dot_white:1482000567562928271> 제품: {p[0]}\n<:dot_white:1482000567562928271> 가격: {p[1]:,}원\n<:dot_white:1482000567562928271> 재고: {p[2]}개 / 누적 판매: " for p in products]) if products else "제품이 없습니다"
+            
+            res_con = ui.Container(ui.TextDisplay(f"## {selected} 제품 목록"), accent_color=0xffffff)
+            res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            res_con.add_item(ui.TextDisplay(f"{item_text}"))
+            res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            res_con.add_item(ui.ActionRow(cat_select))
+            
+            await interaction.response.edit_message(view=ui.LayoutView().add_item(res_con))
