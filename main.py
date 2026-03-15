@@ -1,29 +1,39 @@
-class StockDataListModal(ui.Modal):
-    def __init__(self, name, current_data):
-        # 다른 부분은 바꾸지 않고 요청하신 구조를 유지합니다.
-        super().__init__(title=f"{name} 재고 관리")
-        self.name = name
-        
-        self.data_input = ui.TextInput(
-            label="재고 리스트",
-            style=discord.TextStyle.paragraph,
-            default=str(current_data), # 기존 재고 리스트를 입력창에 표시
-            placeholder="수정하거나 삭제하세요",
+class ProductEditModal(ui.Modal):
+    def __init__(self, category):
+        super().__init__(title=f"[{category}] 제품 설정")
+        self.category = category
+
+        self.prod_dropdown = ui.Label(
+            text=f"수정할 {category} 제품을 선택하세요",
+            component=ProductSelect(category=category)
+        )
+        self.add_item(self.prod_dropdown)
+
+        self.price_input = ui.TextInput(label="가격", placeholder="수정할 가격을 적어주세요", required=False)
+        self.add_item(self.price_input)
+
+        self.stock_input = ui.TextInput(
+            label="재고 입고", 
+            style=discord.TextStyle.paragraph, 
+            placeholder="재고를 추가해주세요",
             required=False
         )
-        self.add_item(self.data_input)
+        self.add_item(self.stock_input)
 
     async def on_submit(self, it: discord.Interaction):
-        updated_data = self.data_input.value
-        # 줄바꿈 기준으로 실제 데이터가 있는 줄만 계산
-        new_count = len([l for l in updated_data.split('\n') if l.strip()])
+        name = self.prod_dropdown.component.values[0]
+        if name == "none":
+            return await it.response.send_message("**관리할 제품이 없습니다**", ephemeral=True)
 
-        conn = sqlite3.connect('vending_data.db')
-        cur = conn.cursor()
-        # stock_data와 stock 수량을 동시에 업데이트
-        cur.execute("UPDATE products SET stock_data = ?, stock = ? WHERE name = ?", 
-                    (updated_data, new_count, self.name))
-        conn.commit()
-        conn.close()
+        lines = self.stock_input.value.split('\n')
+        add_count = len([l for l in lines if l.strip()])
+
+        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+        if self.price_input.value and self.price_input.value.isdigit():
+            cur.execute("UPDATE products SET price = ? WHERE name = ?", (int(self.price_input.value), name))
         
-        await it.response.send_message(f"**__{self.name}__ 재고 수정 완료되었습니다 (현재: __{new_count}__개)**", ephemeral=True)
+        if add_count > 0:
+            cur.execute("UPDATE products SET stock = stock + ? WHERE name = ?", (add_count, name))
+        
+        conn.commit(); conn.close()
+        await it.response.send_message(f"**__{name}__ 설정 및 __{add_count}__개 입고가 완료되었습니다**", ephemeral=True)
