@@ -1,28 +1,23 @@
-class StockProductSelectView(ui.LayoutView):
-    def __init__(self, category):
-        super().__init__(timeout=60)
-        self.category = category
-        self.con = ui.Container(ui.TextDisplay(f"## 📦 [{category}] 제품 선택"), accent_color=0x000000)
-        
-        # 해당 카테고리 제품만 가져오기
-        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-        cur.execute("SELECT name FROM products WHERE category = ?", (category,))
-        prods = cur.fetchall(); conn.close()
-        options = [discord.SelectOption(label=p[0], value=p[0]) for p in prods] if prods else [discord.SelectOption(label="제품 없음", value="none")]
-        
-        self.prod_select = ui.Select(placeholder="수정할 제품을 선택하세요", options=options)
-        self.prod_select.callback = self.prod_callback
-        self.con.add_item(ui.ActionRow(self.prod_select))
-        self.add_item(self.con)
+class StockFinalEditModal(ui.Modal):
+    def __init__(self, name, stock):
+        super().__init__(title=f"📝 {name} 재고 수정")
+        self.name = name
+        # 기존 재고를 default 값으로 넣어둠
+        self.edit_input = ui.TextInput(
+            label="수정할 재고 수량",
+            default=str(stock),
+            placeholder="숫자만 입력하세요",
+            required=True
+        )
+        self.add_item(self.edit_input)
 
-    async def prod_callback(self, it: discord.Interaction):
-        prod_name = self.prod_select.values[0]
-        if prod_name == "none": return
-        
-        # 현재 재고 값 가져오기
+    async def on_submit(self, it: discord.Interaction):
+        if not self.edit_input.value.isdigit():
+            return await it.response.send_message("❌ 숫자만 입력 가능합니다.", ephemeral=True)
+            
+        new_val = int(self.edit_input.value)
         conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-        cur.execute("SELECT stock FROM products WHERE name = ?", (prod_name,))
-        current_stock = cur.fetchone()[0]; conn.close()
+        cur.execute("UPDATE products SET stock = ? WHERE name = ?", (new_val, self.name))
+        conn.commit(); conn.close()
         
-        # 최종 단계: 재고 수정 모달 띄우기
-        await it.response.send_modal(StockFinalEditModal(prod_name, current_stock))
+        await it.response.send_message(f"✅ **{self.name}**의 재고가 **{new_val}개**로 수정되었습니다!", ephemeral=True)
