@@ -1,31 +1,25 @@
-        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-        cur.execute("SELECT DISTINCT category FROM products")
-        categories = [row[0] for row in cur.fetchall()]
-        conn.close()
-
-        if not categories:
-            return await it.response.send_message("현재 등록된 제품 카테고리가 없습니다.", ephemeral=True)
-
-        cat_con = ui.Container(ui.TextDisplay("## 카테고리 선택"), accent_color=0xffffff)
-        cat_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        cat_con.add_item(ui.TextDisplay("원하시는 제품의 카테고리를 선택해주세요"))
-        cat_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        options = [discord.SelectOption(label=cat, value=cat) for cat in categories]
-        cat_select = ui.Select(placeholder="카테고리를 선택하세요", options=options)
-
-        async def cat_callback(interaction: discord.Interaction):
-            selected = cat_select.values[0]
-            
-            conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-            cur.execute("SELECT name, price, stock FROM products WHERE category = ?", (selected,))
-            products = cur.fetchall(); conn.close()
-
-            item_text = "\n".join([f"<:dot_white:1482000567562928271> 제품: {p[0]}\n<:dot_white:1482000567562928271> 가격: {p[1]:,}원\n<:dot_white:1482000567562928271> 재고: {p[2]}개 / 누적 판매: " for p in products]) if products else "제품이 없습니다"
-            
-            res_con = ui.Container(ui.TextDisplay(f"## {selected} 제품 목록"), accent_color=0xffffff)
-            res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            res_con.add_item(ui.TextDisplay(f"{item_text}"))
-            res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            res_con.add_item(ui.ActionRow(cat_select))
-            
-            await interaction.response.edit_message(view=ui.LayoutView().add_item(res_con))
+def process_purchase(user_id, product_name):
+    """구매 성공 시 재고 차감 및 누적 판매량 증가"""
+    conn = sqlite3.connect('vending_data.db')
+    cur = conn.cursor()
+    
+    # 1. 재고 데이터 하나 가져오기 (가장 윗줄)
+    cur.execute("SELECT stock_data FROM products WHERE name = ?", (product_name,))
+    res = cur.fetchone()
+    if not res or not res[0]:
+        return None # 재고 없음
+    
+    stock_list = res[0].split('\n')
+    item_to_sell = stock_list[0] # 첫 번째 재고 코드
+    remaining_stock = "\n".join(stock_list[1:]) # 남은 재고 리스트
+    
+    # 2. DB 업데이트: 재고 1 감소, 누적 판매 1 증가, 재고 텍스트 갱신
+    cur.execute("""UPDATE products 
+                   SET stock = stock - 1, 
+                       sold_count = sold_count + 1, 
+                       stock_data = ? 
+                   WHERE name = ?""", (remaining_stock, product_name))
+    
+    conn.commit()
+    conn.close()
+    return item_to_sell
