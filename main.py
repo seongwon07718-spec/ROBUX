@@ -1,26 +1,30 @@
-class ReviewModal(ui.Modal, title="구매 후기 작성"):
-    rating = ui.TextInput(label="별점 (1~5)", placeholder="숫자 1~5 입력 (예: 5)", min_length=1, max_length=1)
-    content = ui.TextInput(label="후기 내용", style=discord.TextStyle.paragraph, placeholder="솔직한 후기를 남겨주세요!", min_length=5, max_length=200)
-
-    def __init__(self, prod_name):
-        super().__init__()
-        self.prod_name = prod_name
+class ProductModal(ui.Modal, title="카테고리 / 제품 설정"):
+    cat = ui.TextInput(label="카테고리")
+    name = ui.TextInput(label="제품명")
+    price = ui.TextInput(label="가격")
 
     async def on_submit(self, it: discord.Interaction):
-        if not self.rating.value.isdigit() or not (1 <= int(self.rating.value) <= 5):
-            return await it.response.send_message("❌ 별점은 1에서 5 사이의 숫자만 입력 가능합니다.", ephemeral=True)
+        if not self.price.value.isdigit():
+            return await it.response.send_message("가격은 숫자만 입력해주세요", ephemeral=True)
+        
+        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+        cur.execute("INSERT OR REPLACE INTO products (category, name, price, stock) VALUES (?, ?, ?, COALESCE((SELECT stock FROM products WHERE name = ?), 0))", 
+                    (self.cat.value, self.name.value, int(self.price.value), self.name.value))
+        conn.commit(); conn.close()
+        await it.response.send_message("✅ 설정 완료", ephemeral=True)
 
-        stars = "⭐️" * int(self.rating.value) # 요청하신 이모지로 설정
-        review_url = WEBHOOK_CONFIG.get("후기")
+class StockModal(ui.Modal, title="재고 수량 관리"):
+    name = ui.TextInput(label="제품명")
+    count = ui.TextInput(label="변경할 재고 수량")
 
-        review_con = ui.Container(ui.TextDisplay(f"## 📝 구매 후기 도착!"), accent_color=0xffd700)
-        review_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        review_con.add_item(ui.TextDisplay(f"**제품:** {self.prod_name}\n**작성자:** {it.user.mention}\n**별점:** {stars}"))
-        review_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        review_con.add_item(ui.TextDisplay(f"**내용:**\n{self.content.value}"))
+    async def on_submit(self, it: discord.Interaction):
+        if not self.count.value.isdigit():
+            return await it.response.send_message("재고 수량은 숫자만 입력해주세요", ephemeral=True)
 
-        async with aiohttp.ClientSession() as session:
-            webhook = discord.Webhook.from_url(review_url, session=session)
-            await webhook.send(view=ui.LayoutView().add_item(review_con), username="구매 후기 알림")
-
-        await it.response.send_message("✅ 후기가 성공적으로 등록되었습니다!", ephemeral=True)
+        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
+        cur.execute("UPDATE products SET stock = ? WHERE name = ?", (int(self.count.value), self.name.value))
+        if cur.rowcount == 0:
+            conn.close()
+            return await it.response.send_message("해당 이름의 제품을 찾을 수 없습니다", ephemeral=True)
+        conn.commit(); conn.close()
+        await it.response.send_message("✅ 재고 수정 완료", ephemeral=True)
