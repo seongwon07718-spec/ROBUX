@@ -1,15 +1,11 @@
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    # ... 다른 테이블 생성 코드들 ...
+        # [수정 위치: conn.commit() 직전]
+        web_key = str(uuid.uuid4()) # 중복 불가능한 랜덤 키 생성
+        cur.execute("INSERT INTO buy_log (user_id, product_name, stock_data, date, web_key) VALUES (?, ?, ?, ?, ?)",
+                    (u_id, self.prod_name, purchased_stock_text, time.strftime('%Y-%m-%d %H:%M'), web_key))
+        
+        conn.commit()
+        conn.close()
 
-    # buy_log 테이블 수정 (web_key 추가)
-    cursor.execute('''CREATE TABLE IF NOT EXISTS buy_log 
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      user_id TEXT, 
-                      product_name TEXT, 
-                      stock_data TEXT, 
-                      date TEXT,
-                      web_key TEXT)''') 
-    conn.commit()
-    conn.close()
+        # [수정 위치: view_url 생성 부분]
+        domain = "rbxshop.cloud:88" # 88번 포트 사용
+        view_url = f"http://{domain}/view?key={web_key}" # id 대신 key 사용 (보안)
