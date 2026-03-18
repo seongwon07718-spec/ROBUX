@@ -13,6 +13,28 @@ class PurchaseModal(ui.Modal):
         )
         self.add_item(self.count)
 
+    # 다른 기능은 건드리지 않고 웹훅 전송 함수만 추가
+    async def send_purchase_webhook(self, user, prod_name, count, price):
+        WEBHOOK_URL = "본인의_구매로그_웹훅_주소" # 여기에 웹훅 주소를 넣으세요
+        
+        log_con = ui.Container(ui.TextDisplay("## 구매 로그 알림"), accent_color=0xffffff)
+        log_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        log_con.add_item(ui.TextDisplay(
+            f"구매자: {user} ({user.id})\n"
+            f"제품명: {prod_name}\n"
+            f"구매 수량: {count}개\n"
+            f"결제 금액: {price:,}원"
+        ))
+        
+        log_v = ui.LayoutView().add_item(log_con)
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+                await webhook.send(view=log_v)
+        except Exception as e:
+            print(f"구매 로그 웹훅 전송 실패: {e}")
+
     async def on_submit(self, it: discord.Interaction):
         if not self.count.value.isdigit():
             err_con = ui.Container(ui.TextDisplay("## ❌ 입력 오류"), accent_color=0xff0000)
@@ -74,6 +96,9 @@ class PurchaseModal(ui.Modal):
         conn.commit()
         conn.close()
 
+        # 구매 성공 시 웹훅 전송 추가
+        await self.send_purchase_webhook(it.user, self.prod_name, buy_count, total_price)
+
         res_con.accent_color = 0x00ff00; res_con.add_item(ui.TextDisplay(f"## 구매 완료"))
         res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
         res_con.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> 제품명: {self.prod_name}\n<:dot_white:1482000567562928271> 구매 수량: {buy_count}개\n<:dot_white:1482000567562928271> 차감 금액: {total_price:,}원"))
@@ -94,6 +119,7 @@ class PurchaseModal(ui.Modal):
                 f"<:dot_white:1482000567562928271> 남은 잔액: {user_money - total_price:,}원"
             ))
             dm_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            
             review_btn = ui.Button(label="후기작성", style=discord.ButtonStyle.gray, emoji="<:bel:1482196301578764308>")
             async def review_btn_callback(it_btn: discord.Interaction):
                 await it_btn.response.send_modal(ReviewModal(self.prod_name))
@@ -106,6 +132,7 @@ class PurchaseModal(ui.Modal):
                 emoji="<:shop:1481994009499930766>"
             )
             
+            # 컨테이너 안에 버튼 포함
             dm_con.add_item(ui.ActionRow(review_btn, view_btn))
             
             dm_v = ui.LayoutView().add_item(dm_con)
