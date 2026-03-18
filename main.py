@@ -13,6 +13,29 @@ class PurchaseModal(ui.Modal):
         )
         self.add_item(self.count)
 
+    # 구매 로그 웹훅 전송 함수 (새로 추가)
+    async def send_purchase_webhook(self, user, prod_name, count, price):
+        # ⚠️ 여기에 구매로그 채널의 웹훅 URL을 입력하세요
+        WEBHOOK_URL = "본인의_구매로그_웹훅_주소"
+        
+        dm_con = ui.Container(ui.TextDisplay("## 구매 로그 알림"), accent_color=0xffffff)
+        dm_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        dm_con.add_item(ui.TextDisplay(
+            f"구매자: {user} ({user.id})\n"
+            f"제품명: {prod_name}\n"
+            f"구매 수량: {count}개\n"
+            f"결제 금액: {price:,}원"
+        ))
+        
+        dm_v = ui.LayoutView().add_item(dm_con)
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+                await webhook.send(view=dm_v)
+        except Exception as e:
+            print(f"구매 로그 웹훅 전송 실패: {e}")
+
     async def on_submit(self, it: discord.Interaction):
         if not self.count.value.isdigit():
             err_con = ui.Container(ui.TextDisplay("## ❌ 입력 오류"), accent_color=0xff0000)
@@ -73,6 +96,9 @@ class PurchaseModal(ui.Modal):
                     (u_id, self.prod_name, purchased_stock_text, time.strftime('%Y-%m-%d %H:%M'), web_key))
         conn.commit()
         conn.close()
+
+        # [핵심 추가] 구매 성공 시 웹훅 호출
+        await self.send_purchase_webhook(it.user, self.prod_name, buy_count, total_price)
 
         res_con.accent_color = 0x00ff00; res_con.add_item(ui.TextDisplay(f"## 구매 완료"))
         res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
