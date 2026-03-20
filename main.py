@@ -1,9 +1,14 @@
+async def on_submit(self, it: discord.Interaction):
+    # --- 이 줄을 추가해서 응답 시간을 벌고 중복 응답 에러를 방지합니다 ---
+    await it.response.defer(ephemeral=True) 
+    
+    # ... 기존 로직 (재고 차감, DB 업데이트 등) ...
 
-        await self.send_purchase_webhook(it.user, self.prod_name, buy_count, total_price)
+    # 385번 줄 근처 (기존 코드)
+    await self.send_purchase_webhook(it.user, self.prod_name, buy_count, total_price)
 
-        res_con.accent_color = 0x00ff00; res_con.add_item(ui.TextDisplay(f"## 구매 완료"))
-        res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        res_con.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> 제품명: {self.prod_name}\n<:dot_white:1482000567562928271> 구매 수량: {buy_count}개\n<:dot_white:1482000567562928271> 차감 금액: {total_price:,}원"))
-        res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        res_con.add_item(ui.TextDisplay("-# DM으로 제품 전송되었습니다"))
-        await it.edit_original_response(view=ui.LayoutView().add_item(res_con))
+    res_con.accent_color = 0x00ff00; res_con.add_item(ui.TextDisplay(f"## 구매 완료"))
+    # ... (중략) ...
+
+    # edit_original_response는 defer 이후에 사용하면 안전합니다.
+    await it.edit_original_response(view=ui.LayoutView().add_item(res_con))
