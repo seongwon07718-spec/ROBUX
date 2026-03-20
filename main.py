@@ -1,231 +1,208 @@
-import sqlite3
-import discord
-import asyncio
-import time
-import re
-from discord import ui
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"DONE SYNC COMMANDS - Logged in as {bot.user} (ID: {bot.user.id})")
 
-# ==========================================
-# [ SECTION 1: 블랙리스트 확인 로직 ]
-# ==========================================
-async def check_black(interaction: discord.Interaction):
-    u_id = str(interaction.user.id)
+@bot.tree.command(name="자판기", description="자판기 컨테이너를 전송합니다")
+async def vending(interaction: discord.Interaction):
+    await interaction.response.send_message("**자판기가 전송되었습니다**", ephemeral=True)
+    await interaction.channel.send(view=MeuLayout())
+
+@bot.tree.command(name="기본설정", description="입금 계좌 정보/자충 여부")
+async def set_account(interaction: discord.Interaction):
+    await interaction.response.send_modal(AccountSetupModal())
+
+@bot.tree.command(name="잔액관리", description="유저의 잔액을 추가/차감")
+@discord.app_commands.describe(유저="잔액을 관리할 유저", 금액="설정할 금액", 여부="추가 또는 차감 선택")
+@discord.app_commands.choices(여부=[
+    discord.app_commands.Choice(name="추가", value="추가"),
+    discord.app_commands.Choice(name="차감", value="차감")
+])
+async def balance_manage(interaction: discord.Interaction, 유저: discord.Member, 금액: int, 여부: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("관리자 권한이 필요합니다.", ephemeral=True)
+
+    u_id = str(유저.id)
     conn = sqlite3.connect('vending_data.db')
     cur = conn.cursor()
-    cur.execute("SELECT is_blacked FROM users WHERE user_id = ?", (u_id,))
-    row = cur.fetchone()
-    conn.close()
+
+    cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (u_id,))
     
-    if row and row[0] == 1:
-        return True 
-    return False
+    if 여부 == "추가":
+        cur.execute("UPDATE users SET money = money + ? WHERE user_id = ?", (금액, u_id))
+        method_text = "관리자 추가"
+    else:
+        cur.execute("UPDATE users SET money = money - ? WHERE user_id = ?", (금액, u_id))
+        method_text = "관리자 차감"
 
-# ==========================================
-# [ SECTION 2: 관리자 전용 기능 ]
-# ==========================================
+    cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
+                (u_id, 금액 if 여부 == "추가" else -금액, time.strftime('%Y-%m-%d %H:%M'), method_text))
+    
+    conn.commit()
+    conn.close()
 
-# 1. 충전 승인/취소 로그 뷰
-class AdminLogView(ui.LayoutView):
-    def __init__(self, user, name, amount, db_id):
-        super().__init__()
-        self.user, self.name, self.amount, self.db_id = user, name, amount, db_id
-        self.container = ui.Container(ui.TextDisplay(f"## 충전 신청"), accent_color=0xffffff)
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(
-            f"<:dot_white:1482000567562928271> 신청자: {user.mention}\n"
-            f"<:dot_white:1482000567562928271> 입금자명: {name}\n"
-            f"<:dot_white:1482000567562928271> 신청금액: {amount}원"
-        ))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    embed_color = 0x00ff00 if 여부 == "추가" else 0xff0000
+    container = ui.Container(ui.TextDisplay(f"## 잔액 {여부} 완료"), accent_color=embed_color)
+    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    container.add_item(ui.TextDisplay(f"대상: {유저.mention}\n금액: {금액:,}원\n잔액이 정상적으로 {여부}되었습니다"))
+    
+    await interaction.response.send_message(view=ui.LayoutView().add_item(container))
+
+    try:
+        dm_con = ui.Container(ui.TextDisplay(f"## 잔액 {여부} 안내"), accent_color=embed_color)
+        dm_con.add_item(ui.TextDisplay(f"관리자에 의해 잔액이 **{금액:,}원** {여부}되었습니다."))
+        await 유저.send(view=ui.LayoutView().add_item(dm_con))
+    except:
+        pass
+
+@bot.tree.command(name="블랙리스트", description="유저를 블랙리스트에 추가/해제")
+@discord.app_commands.describe(유저="블랙 관리할 유저", 여부="차단 또는 해제 선택")
+@discord.app_commands.choices(여부=[
+    discord.app_commands.Choice(name="차단", value=1),
+    discord.app_commands.Choice(name="해제", value=0)
+])
+async def black_manage(interaction: discord.Interaction, 유저: discord.Member, 여부: int):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("관리자 권한이 필요합니다", ephemeral=True)
+
+    u_id = str(유저.id)
+    conn = sqlite3.connect('vending_data.db')
+    cur = conn.cursor()
+    
+    cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (u_id,))
+    cur.execute("UPDATE users SET is_blacked = ? WHERE user_id = ?", (여부, u_id))
+    
+    conn.commit()
+    conn.close()
+
+    status_text = "차단" if 여부 == 1 else "해제"
+    color = 0xff0000 if 여부 == 1 else 0x00ff00
+    
+    container = ui.Container(ui.TextDisplay(f"## 블랙리스트 {status_text}"), accent_color=color)
+    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    container.add_item(ui.TextDisplay(f"대상: {유저.mention}\n해당 유저가 블랙리스트에서 {status_text}되었습니다"))
+    
+    await interaction.response.send_message(view=ui.LayoutView().add_item(container))
+
+@bot.tree.command(name="유저정보", description="유저의 상세 정보와 거래 내역을 조회합니다")
+@app_commands.describe(유저="정보를 조회할 유저", 파일="텍스트 파일로 내보내기 여부")
+@app_commands.choices(파일=[
+    app_commands.Choice(name="파일로 받기", value="yes"),
+    app_commands.Choice(name="파일 받지 않기", value="no")
+])
+async def user_info_manage(interaction: discord.Interaction, 유저: discord.Member, 파일: str = "no"):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("관리자 권한이 필요합니다.", ephemeral=True)
+
+    u_id = str(유저.id)
+    conn = sqlite3.connect('vending_data.db')
+    cur = conn.cursor()
+
+    cur.execute("SELECT money, total_spent, is_blacked FROM users WHERE user_id = ?", (u_id,))
+    user_row = cur.fetchone()
+    
+    cur.execute("SELECT amount, date, method FROM charge_logs WHERE user_id = ? ORDER BY date DESC LIMIT 10", (u_id,))
+    logs = cur.fetchall()
+    conn.close()
+
+    if not user_row:
+        return await interaction.response.send_message("해당 유저의 데이터가 존재하지 않습니다.", ephemeral=True)
+
+    money, total_spent, is_blacked = user_row
+    black_status = "O" if is_blacked == 1 else "X"
+
+    if 파일 == "yes":
+        report_text = f"=== 유저 정보 보고서 ===\n"
+        report_text += f"대상 유저: {유저.display_name} ({유저.id})\n"
+        report_text += f"보유 잔액: {money:,}원\n"
+        report_text += f"누적 충전: {total_spent:,}원\n"
+        report_text += f"블랙 여부: {black_status}\n\n"
+        report_text += "--- 최근 거래 내역 (최대 10개) ---\n"
         
-        approve_btn = ui.Button(label="완료", emoji="<:UpArrow:1482008374777483324>")
-        approve_btn.callback = self.approve_callback
-        
-        cancel_btn = ui.Button(label="취소", emoji="<:DownArrow:1482008377482678335>")
-        cancel_btn.callback = self.cancel_callback
-        
-        self.container.add_item(ui.ActionRow(approve_btn, cancel_btn))
-        self.add_item(self.container)
+        if logs:
+            for l in logs:
+                report_text += f"[{l[1]}] {l[2]}: {l[0]:,}원\n"
+        else:
+            report_text += "거래 내역이 없습니다.\n"
 
-    async def approve_callback(self, interaction: discord.Interaction):
-        amount_int = int(self.amount)
-        u_id = str(self.user.id)
-        
-        conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-        cur.execute("UPDATE users SET money = money + ?, total_spent = total_spent + ? WHERE user_id = ?", (amount_int, amount_int, u_id))
-        cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
-                    (u_id, amount_int, time.strftime('%Y-%m-%d %H:%M'), "수동(관리자)"))
-        conn.commit(); conn.close()
+        file = discord.File(io.BytesIO(report_text.encode('utf-8')), filename=f"user_info_{u_id}.txt")
+        return await interaction.response.send_message(f"```{유저.display_name}님의 상세 정보 파일입니다```", file=file, ephemeral=True)
 
-        database.update_status(self.db_id, "완료")
-        self.container.clear_items()
-        self.container.accent_color = 0x00ff00
-        self.container.add_item(ui.TextDisplay(f"## 충전 완료"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> 처리자: {interaction.user.mention}\n<:dot_white:1482000567562928271> 대상: {self.user.mention}\n<:dot_white:1482000567562928271> 금액: {self.amount}원"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay("-# 성공적으로 결과가 처리되었습니다"))
-        
-        await interaction.response.edit_message(view=self)
-        
-        try: 
-            dm_con = ui.Container(ui.TextDisplay("## 충전 완료"), accent_color=0x00ff00)
-            dm_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            dm_con.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> {self.amount}원 충전이 완료되었습니다"))
-            dm_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            dm_con.add_item(ui.TextDisplay("-# 저의 서버를 이용해주셔서 감사합니다"))
-            await self.user.send(view=ui.LayoutView().add_item(dm_con))
-        except: pass
+    container = ui.Container(ui.TextDisplay(f"## {유저.display_name}님의 정보"), accent_color=0xffffff)
+    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    container.add_item(ui.TextDisplay(f"보유 잔액: {money:,}원\n누적 충전: {total_spent:,}원\n블랙 여부: {black_status}"))
+    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    
+    select_options = [
+        discord.SelectOption(label="최근 거래 내역 확인", value="view_logs")
+    ]
+    
+    select_menu = ui.Select(placeholder="확인할 항목을 선택하세요", options=select_options)
 
-    async def cancel_callback(self, interaction: discord.Interaction):
-        database.update_status(self.db_id, "취소")
-        self.container.clear_items()
-        self.container.accent_color = 0xff0000
-        self.container.add_item(ui.TextDisplay(f"## 충전 취소"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> 처리자: {interaction.user.mention}\n<:dot_white:1482000567562928271> 대상: {self.user.mention}\n<:dot_white:1482000567562928271> 금액: {self.amount}원"))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay("-# 성공적으로 결과가 처리되었습니다"))
-        await interaction.response.edit_message(view=self)
-
-# 2. 계좌 정보 설정 모달
-class AccountSetupModal(ui.Modal, title="계좌 정보 설정"):
-    bank = ui.TextInput(label="은행명", placeholder="예: 카카오뱅크", min_length=2)
-    account = ui.TextInput(label="계좌번호", placeholder="하이픈 포함 입력")
-    owner = ui.TextInput(label="예금주", placeholder="성함 입력")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        global AUTO_LOG_ENABLED
-        BANK_CONFIG["bank_name"] = self.bank.value
-        BANK_CONFIG["account_num"] = self.account.value
-        BANK_CONFIG["owner"] = self.owner.value
-
-        setup_con = ui.Container(ui.TextDisplay("## 계좌 설정 완료"), accent_color=0x00ff00)
-        setup_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        setup_con.add_item(ui.TextDisplay(f"은행: {self.bank.value}\n계좌: {self.account.value}\n예금주: {self.owner.value}"))
-        
-        view = ui.LayoutView()
-        if "카카오뱅크" in self.bank.value or "카뱅" in self.bank.value:
-            allow_btn = ui.Button(label="자동충전 허용", style=discord.ButtonStyle.green)
-            deny_btn = ui.Button(label="자동충전 거부", style=discord.ButtonStyle.red)
+    async def select_callback(it: discord.Interaction):
+        if select_menu.values[0] == "view_logs":
+            log_con = ui.Container(ui.TextDisplay(f"## {유저.display_name}님의 최근 내역"), accent_color=0xffffff)
+            log_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            if logs:
+                log_text = "\n".join([f"• {l[1]} | {l[2]} | {l[0]:,}원" for l in logs])
+                log_con.add_item(ui.TextDisplay(log_text))
+            else:
+                log_con.add_item(ui.TextDisplay("거래 내역이 존재하지 않습니다"))
             
-            async def allow_cb(it):
-                global AUTO_LOG_ENABLED; AUTO_LOG_ENABLED = False
-                await it.response.send_message("**자동충전이 허용되었습니다 (로그 미발송)**", ephemeral=True)
+            await it.response.send_message(view=ui.LayoutView().add_item(log_con), ephemeral=True)
+
+    select_menu.callback = select_callback
+    container.add_item(ui.ActionRow(select_menu))
+    
+    await interaction.response.send_message(view=ui.LayoutView().add_item(container), ephemeral=True)
+
+@bot.tree.command(name="상품설정", description="자판기 상품 정보를 관리합니다")
+async def product_setting(it: discord.Interaction):
+    if not it.user.guild_permissions.administrator:
+        return await it.response.send_message("권한이 없습니다", ephemeral=True)
+    await it.response.send_message(view=ProductAdminLayout(), ephemeral=True)
+
+@bot.tree.command(name="업데이트_공지", description="설정된 웹훅으로 컨테이너 공지를 전송합니다")
+@app_commands.describe(내용="공지할 내용을 입력하세요")
+async def update_notice_container(it: discord.Interaction, 내용: str):
+    if not it.user.guild_permissions.administrator:
+        return await it.response.send_message("**관리자 권한이 필요합니다**", ephemeral=True)
+
+    target_url = WEBHOOK_CONFIG.get("업데이트")
+    if not target_url or "http" not in target_url:
+        return await it.response.send_message("**웹훅 URL이 설정되지 않았습니다**", ephemeral=True)
+
+    await it.response.defer(ephemeral=True)
+
+    notice_con = ui.Container(ui.TextDisplay("## 업데이트 안내"), accent_color=0xffffff)
+    notice_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    
+    processed_content = 내용.replace("\\n", "\n")
+    notice_con.add_item(ui.TextDisplay(f"{processed_content}"))
+    
+    notice_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    notice_con.add_item(ui.TextDisplay(f"`마지막 업데이트 시간: {time.strftime('%Y-%m-%d %H:%M')}`"))
+
+    async with aiohttp.ClientSession() as session:
+        webhook = discord.Webhook.from_url(target_url, session=session)
+        try:
+            view = ui.LayoutView().add_item(notice_con)
             
-            async def deny_cb(it):
-                global AUTO_LOG_ENABLED; AUTO_LOG_ENABLED = True
-                await it.response.send_message("**자동충전이 거부되었습니다 (로그 발송)**", ephemeral=True)
-            
-            allow_btn.callback, deny_btn.callback = allow_cb, deny_cb
-            setup_con.add_item(ui.ActionRow(allow_btn, deny_btn))
-        
-        view.add_item(setup_con)
-        await interaction.response.send_message(view=view, ephemeral=True)
+            await webhook.send(
+                view=view,
+                username="Service Update",
+                avatar_url=bot.user.avatar.url if bot.user.avatar else None
+            )
+            await it.followup.send("**공지가 웹훅으로 전송되었습니다**", ephemeral=True)
+        except Exception as e:
+            await it.followup.send(f"**전송 실패: {e}**", ephemeral=True)
 
-# ==========================================
-# [ SECTION 3: 사용자 전용 기능 ]
-# ==========================================
+def run_web():
+    uvicorn.run(app, host="127.0.0.1", port=8080)
 
-# 1. 충전 방식 선택 뷰
-class ChargeLayout(ui.LayoutView):
-    def __init__(self):
-        super().__init__()
-        container = ui.Container(ui.TextDisplay("## 충전 방식 선택"), accent_color=0xffffff)
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        container.add_item(ui.TextDisplay("원하시는 충전 수단을 선택해주세요"))
-        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        
-        bank = ui.Button(label="계좌이체", style=discord.ButtonStyle.gray, emoji="<:dot_white:1482000567562928271>")
-        bank.callback = self.bank_callback
-        
-        gift_card = ui.Button(label="문상결제", style=discord.ButtonStyle.gray, emoji="<:dot_white:1482000567562928271>")
-        gift_card.callback = self.gift_card_callback
-        
-        container.add_item(ui.ActionRow(bank, gift_card))
-        self.add_item(container)
+if __name__ == "__main__":
+    api_thread = Thread(target=run_fastapi, daemon=True)
+    api_thread.start()
 
-    async def bank_callback(self, it): await it.response.send_modal(BankModal())
-    async def gift_card_callback(self, it): await it.response.send_modal(CultureModal(bot, LOG_CHANNEL_ID))
-
-# 2. 계좌 정보 표시 뷰
-class BankInfoLayout(ui.LayoutView):
-    def __init__(self, name, amount, db_id):
-        super().__init__()
-        self.name, self.amount, self.db_id = name, amount, db_id
-        self.container = ui.Container(ui.TextDisplay(f"## 입금 정보"), accent_color=0xffffff)
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay(
-            f"<:dot_white:1482000567562928271> 은행명: {BANK_CONFIG['bank_name']}\n"
-            f"<:dot_white:1482000567562928271> 계좌번호: {BANK_CONFIG['account_num']}\n"
-            f"<:dot_white:1482000567562928271> 예금주: {BANK_CONFIG['owner']}\n"
-            f"<:dot_white:1482000567562928271> 충전금액: {self.amount}원"
-        ))
-        self.container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        self.container.add_item(ui.TextDisplay("-# 5분 이내로 입금해주셔야 자동충전됩니다"))
-        
-        self.copy_btn = ui.Button(label="계좌복사", style=discord.ButtonStyle.gray, emoji="<:copy:1482673389679415316>")
-        self.copy_btn.callback = self.copy_callback
-        self.container.add_item(ui.ActionRow(self.copy_btn))
-        self.add_item(self.container)
-
-    async def copy_callback(self, it: discord.Interaction):
-        self.copy_btn.disabled = True
-        await it.response.edit_message(view=self)
-        await it.followup.send(content=f"{BANK_CONFIG['account_num']}", ephemeral=True)
-
-# 3. 계좌이체 신청 모달 및 감시 로직
-class BankModal(ui.Modal, title="계좌이체 충전"):
-    name = ui.TextInput(label="입금자명", placeholder="입금하실 성함을 입력해주세요", min_length=2, max_length=10)
-    amount = ui.TextInput(label="충전금액", placeholder="금액을 입력해주세요 (숫자만)", min_length=1)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not re.fullmatch(r'[가-힣]+', self.name.value):
-            return await interaction.response.send_message("**입금자명은 한글로만 입력해주세요**", ephemeral=True)
-        if not self.amount.value.isdigit():
-            return await interaction.response.send_message("**충전금액은 숫자만 입력해주세요**", ephemeral=True)
-
-        db_id = database.insert_request(interaction.user.id, self.amount.value)
-        layout = BankInfoLayout(self.name.value, self.amount.value, db_id)
-        await interaction.response.send_message(view=layout, ephemeral=True)
-
-        if AUTO_LOG_ENABLED:
-            log_chan = bot.get_channel(LOG_CHANNEL_ID)
-            if log_chan: 
-                await log_chan.send(view=AdminLogView(interaction.user, self.name.value, self.amount.value, db_id))
-
-        name_val, amount_val = self.name.value, self.amount.value
-        key = f"{name_val}_{amount_val}"
-        asyncio.create_task(self.watch_deposit(interaction, layout, name_val, amount_val, key))
-
-    async def watch_deposit(self, interaction, layout, name, amount, key):
-        start_time = time.time()
-        while True:
-            if time.time() - start_time > 300: # 5분 초과 시
-                if key in pending_deposits: del pending_deposits[key]
-                database.update_status(layout.db_id, "시간초과")
-                layout.container.clear_items(); layout.container.accent_color = 0xff0000
-                layout.container.add_item(ui.TextDisplay("## 입금 시간 초과"))
-                layout.container.add_item(ui.TextDisplay("5분 이내에 입금이 확인되지 않아 취소되었습니다"))
-                try: await interaction.edit_original_response(view=layout)
-                except: pass
-                break
-
-            await asyncio.sleep(3)
-            if pending_deposits.get(key):
-                amount_int = int(amount); u_id = str(interaction.user.id)
-                conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
-                cur.execute("UPDATE users SET money = money + ?, total_spent = total_spent + ? WHERE user_id = ?", (amount_int, amount_int, u_id))
-                cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
-                            (u_id, amount_int, time.strftime('%Y-%m-%d %H:%M'), "자동(계좌)"))
-                conn.commit(); conn.close()
-                if key in pending_deposits: del pending_deposits[key]
-                database.update_status(layout.db_id, "완료")
-
-                layout.container.clear_items(); layout.container.accent_color = 0x00ff00
-                layout.container.add_item(ui.TextDisplay("## 충전 완료"))
-                layout.container.add_item(ui.TextDisplay(f"<:dot_white:1482000567562928271> 충전금액: {amount_int:,}원"))
-                layout.container.add_item(ui.TextDisplay("-# 성공적으로 충전이 완료되었습니다"))
-                try: await interaction.edit_original_response(view=layout)
-                except: pass
-                break
+    web_p = multiprocessing.Process(target=run_web)
+    web_p.start()
