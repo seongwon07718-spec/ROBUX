@@ -1,3 +1,17 @@
+import sqlite3
+import time
+import io
+import aiohttp
+import discord
+from discord import app_commands, ui
+from threading import Thread
+import multiprocessing
+import uvicorn
+
+# ==========================================
+# [ SECTION 1: 봇 초기 설정 및 기본 커맨드 ]
+# ==========================================
+
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -12,20 +26,22 @@ async def vending(interaction: discord.Interaction):
 async def set_account(interaction: discord.Interaction):
     await interaction.response.send_modal(AccountSetupModal())
 
+# ==========================================
+# [ SECTION 2: 관리자 도구 (유저 및 잔액 관리) ]
+# ==========================================
+
 @bot.tree.command(name="잔액관리", description="유저의 잔액을 추가/차감")
-@discord.app_commands.describe(유저="잔액을 관리할 유저", 금액="설정할 금액", 여부="추가 또는 차감 선택")
-@discord.app_commands.choices(여부=[
-    discord.app_commands.Choice(name="추가", value="추가"),
-    discord.app_commands.Choice(name="차감", value="차감")
+@app_commands.describe(유저="잔액을 관리할 유저", 금액="설정할 금액", 여부="추가 또는 차감 선택")
+@app_commands.choices(여부=[
+    app_commands.Choice(name="추가", value="추가"),
+    app_commands.Choice(name="차감", value="차감")
 ])
 async def balance_manage(interaction: discord.Interaction, 유저: discord.Member, 금액: int, 여부: str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("관리자 권한이 필요합니다.", ephemeral=True)
 
     u_id = str(유저.id)
-    conn = sqlite3.connect('vending_data.db')
-    cur = conn.cursor()
-
+    conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
     cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (u_id,))
     
     if 여부 == "추가":
@@ -37,51 +53,43 @@ async def balance_manage(interaction: discord.Interaction, 유저: discord.Membe
 
     cur.execute("INSERT INTO charge_logs (user_id, amount, date, method) VALUES (?, ?, ?, ?)", 
                 (u_id, 금액 if 여부 == "추가" else -금액, time.strftime('%Y-%m-%d %H:%M'), method_text))
-    
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
+    # 결과 전송
     embed_color = 0x00ff00 if 여부 == "추가" else 0xff0000
     container = ui.Container(ui.TextDisplay(f"## 잔액 {여부} 완료"), accent_color=embed_color)
     container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     container.add_item(ui.TextDisplay(f"대상: {유저.mention}\n금액: {금액:,}원\n잔액이 정상적으로 {여부}되었습니다"))
-    
     await interaction.response.send_message(view=ui.LayoutView().add_item(container))
 
+    # 유저 DM 알림
     try:
         dm_con = ui.Container(ui.TextDisplay(f"## 잔액 {여부} 안내"), accent_color=embed_color)
         dm_con.add_item(ui.TextDisplay(f"관리자에 의해 잔액이 **{금액:,}원** {여부}되었습니다."))
         await 유저.send(view=ui.LayoutView().add_item(dm_con))
-    except:
-        pass
+    except: pass
 
 @bot.tree.command(name="블랙리스트", description="유저를 블랙리스트에 추가/해제")
-@discord.app_commands.describe(유저="블랙 관리할 유저", 여부="차단 또는 해제 선택")
-@discord.app_commands.choices(여부=[
-    discord.app_commands.Choice(name="차단", value=1),
-    discord.app_commands.Choice(name="해제", value=0)
+@app_commands.describe(유저="블랙 관리할 유저", 여부="차단 또는 해제 선택")
+@app_commands.choices(여부=[
+    app_commands.Choice(name="차단", value=1),
+    app_commands.Choice(name="해제", value=0)
 ])
 async def black_manage(interaction: discord.Interaction, 유저: discord.Member, 여부: int):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("관리자 권한이 필요합니다", ephemeral=True)
 
     u_id = str(유저.id)
-    conn = sqlite3.connect('vending_data.db')
-    cur = conn.cursor()
-    
+    conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
     cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (u_id,))
     cur.execute("UPDATE users SET is_blacked = ? WHERE user_id = ?", (여부, u_id))
-    
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
     status_text = "차단" if 여부 == 1 else "해제"
     color = 0xff0000 if 여부 == 1 else 0x00ff00
-    
     container = ui.Container(ui.TextDisplay(f"## 블랙리스트 {status_text}"), accent_color=color)
     container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     container.add_item(ui.TextDisplay(f"대상: {유저.mention}\n해당 유저가 블랙리스트에서 {status_text}되었습니다"))
-    
     await interaction.response.send_message(view=ui.LayoutView().add_item(container))
 
 @bot.tree.command(name="유저정보", description="유저의 상세 정보와 거래 내역을 조회합니다")
@@ -95,15 +103,11 @@ async def user_info_manage(interaction: discord.Interaction, 유저: discord.Mem
         return await interaction.response.send_message("관리자 권한이 필요합니다.", ephemeral=True)
 
     u_id = str(유저.id)
-    conn = sqlite3.connect('vending_data.db')
-    cur = conn.cursor()
-
+    conn = sqlite3.connect('vending_data.db'); cur = conn.cursor()
     cur.execute("SELECT money, total_spent, is_blacked FROM users WHERE user_id = ?", (u_id,))
     user_row = cur.fetchone()
-    
     cur.execute("SELECT amount, date, method FROM charge_logs WHERE user_id = ? ORDER BY date DESC LIMIT 10", (u_id,))
-    logs = cur.fetchall()
-    conn.close()
+    logs = cur.fetchall(); conn.close()
 
     if not user_row:
         return await interaction.response.send_message("해당 유저의 데이터가 존재하지 않습니다.", ephemeral=True)
@@ -111,50 +115,32 @@ async def user_info_manage(interaction: discord.Interaction, 유저: discord.Mem
     money, total_spent, is_blacked = user_row
     black_status = "O" if is_blacked == 1 else "X"
 
+    # 파일 출력 로직
     if 파일 == "yes":
-        report_text = f"=== 유저 정보 보고서 ===\n"
-        report_text += f"대상 유저: {유저.display_name} ({유저.id})\n"
-        report_text += f"보유 잔액: {money:,}원\n"
-        report_text += f"누적 충전: {total_spent:,}원\n"
-        report_text += f"블랙 여부: {black_status}\n\n"
-        report_text += "--- 최근 거래 내역 (최대 10개) ---\n"
-        
-        if logs:
-            for l in logs:
-                report_text += f"[{l[1]}] {l[2]}: {l[0]:,}원\n"
-        else:
-            report_text += "거래 내역이 없습니다.\n"
+        report = f"=== 유저 정보 보고서 ===\n대상: {유저.display_name} ({유저.id})\n잔액: {money:,}원\n누적: {total_spent:,}원\n블랙: {black_status}\n\n--- 최근 거래 내역 ---\n"
+        report += "\n".join([f"[{l[1]}] {l[2]}: {l[0]:,}원" for l in logs]) if logs else "내역 없음"
+        file = discord.File(io.BytesIO(report.encode('utf-8')), filename=f"info_{u_id}.txt")
+        return await interaction.response.send_message(f"```{유저.display_name}님의 상세 정보입니다```", file=file, ephemeral=True)
 
-        file = discord.File(io.BytesIO(report_text.encode('utf-8')), filename=f"user_info_{u_id}.txt")
-        return await interaction.response.send_message(f"```{유저.display_name}님의 상세 정보 파일입니다```", file=file, ephemeral=True)
-
+    # 임베드 출력 로직
     container = ui.Container(ui.TextDisplay(f"## {유저.display_name}님의 정보"), accent_color=0xffffff)
     container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     container.add_item(ui.TextDisplay(f"보유 잔액: {money:,}원\n누적 충전: {total_spent:,}원\n블랙 여부: {black_status}"))
-    container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     
-    select_options = [
-        discord.SelectOption(label="최근 거래 내역 확인", value="view_logs")
-    ]
-    
-    select_menu = ui.Select(placeholder="확인할 항목을 선택하세요", options=select_options)
-
+    select_menu = ui.Select(placeholder="확인할 항목을 선택하세요", options=[discord.SelectOption(label="최근 거래 내역 확인", value="view_logs")])
     async def select_callback(it: discord.Interaction):
-        if select_menu.values[0] == "view_logs":
-            log_con = ui.Container(ui.TextDisplay(f"## {유저.display_name}님의 최근 내역"), accent_color=0xffffff)
-            log_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-            if logs:
-                log_text = "\n".join([f"• {l[1]} | {l[2]} | {l[0]:,}원" for l in logs])
-                log_con.add_item(ui.TextDisplay(log_text))
-            else:
-                log_con.add_item(ui.TextDisplay("거래 내역이 존재하지 않습니다"))
-            
-            await it.response.send_message(view=ui.LayoutView().add_item(log_con), ephemeral=True)
-
+        log_con = ui.Container(ui.TextDisplay(f"## 최근 내역"), accent_color=0xffffff)
+        log_text = "\n".join([f"• {l[1]} | {l[2]} | {l[0]:,}원" for l in logs]) if logs else "거래 내역이 존재하지 않습니다"
+        log_con.add_item(ui.TextDisplay(log_text))
+        await it.response.send_message(view=ui.LayoutView().add_item(log_con), ephemeral=True)
+    
     select_menu.callback = select_callback
     container.add_item(ui.ActionRow(select_menu))
-    
     await interaction.response.send_message(view=ui.LayoutView().add_item(container), ephemeral=True)
+
+# ==========================================
+# [ SECTION 3: 상품 및 공지 시스템 ]
+# ==========================================
 
 @bot.tree.command(name="상품설정", description="자판기 상품 정보를 관리합니다")
 async def product_setting(it: discord.Interaction):
@@ -173,36 +159,33 @@ async def update_notice_container(it: discord.Interaction, 내용: str):
         return await it.response.send_message("**웹훅 URL이 설정되지 않았습니다**", ephemeral=True)
 
     await it.response.defer(ephemeral=True)
-
     notice_con = ui.Container(ui.TextDisplay("## 업데이트 안내"), accent_color=0xffffff)
     notice_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    
-    processed_content = 내용.replace("\\n", "\n")
-    notice_con.add_item(ui.TextDisplay(f"{processed_content}"))
-    
+    notice_con.add_item(ui.TextDisplay(f"{내용.replace('\\n', '\n')}"))
     notice_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     notice_con.add_item(ui.TextDisplay(f"`마지막 업데이트 시간: {time.strftime('%Y-%m-%d %H:%M')}`"))
 
     async with aiohttp.ClientSession() as session:
         webhook = discord.Webhook.from_url(target_url, session=session)
         try:
-            view = ui.LayoutView().add_item(notice_con)
-            
-            await webhook.send(
-                view=view,
-                username="Service Update",
-                avatar_url=bot.user.avatar.url if bot.user.avatar else None
-            )
+            await webhook.send(view=ui.LayoutView().add_item(notice_con), username="Service Update", avatar_url=bot.user.avatar.url if bot.user.avatar else None)
             await it.followup.send("**공지가 웹훅으로 전송되었습니다**", ephemeral=True)
         except Exception as e:
             await it.followup.send(f"**전송 실패: {e}**", ephemeral=True)
+
+# ==========================================
+# [ SECTION 4: 서버 실행 및 스레드 관리 ]
+# ==========================================
 
 def run_web():
     uvicorn.run(app, host="127.0.0.1", port=8080)
 
 if __name__ == "__main__":
+    # FastAPI 및 웹 서버 병렬 실행
     api_thread = Thread(target=run_fastapi, daemon=True)
     api_thread.start()
 
     web_p = multiprocessing.Process(target=run_web)
     web_p.start()
+
+    # 봇 실행 코드는 여기에 (예: bot.run(TOKEN))
