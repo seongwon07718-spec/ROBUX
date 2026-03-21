@@ -14,7 +14,7 @@ BASE_STYLE = f"""
         align-items: center; 
         min-height: 100vh; 
         margin: 0; 
-        padding: 20px; 
+        padding: 0; /* 패딩 제거로 중앙 정렬 정확도 향상 */
         box-sizing: border-box; 
     }}
     
@@ -22,16 +22,17 @@ BASE_STYLE = f"""
     .card {{ 
         background: #0a0a0a; 
         border: 1px solid #1a1a1a; 
-        padding: 40px 25px; 
+        padding: 45px 30px; 
         border-radius: 28px; 
         text-align: center; 
-        width: 100%; 
-        max-width: 360px; /* 모바일에서 꽉 차지 않게 소폭 조정 */
+        width: 90%; 
+        max-width: 360px; 
         box-shadow: 0 25px 50px rgba(0,0,0,0.8); 
         display: flex; 
         flex-direction: column; 
-        align-items: center; /* 가로 중앙 */
-        justify-content: center; /* 세로 중앙 */
+        align-items: center; 
+        justify-content: center; 
+        box-sizing: border-box;
     }}
     
     /* 3. 로고 박스 정렬 */
@@ -51,6 +52,14 @@ BASE_STYLE = f"""
     h1 {{ font-size: 24px; font-weight: 700; margin: 0 0 10px 0; letter-spacing: -0.5px; width: 100%; }}
     .subtitle {{ color: #666; font-size: 14px; margin: 0 0 30px 0; line-height: 1.5; width: 100%; word-break: keep-all; }}
     
+    /* [핵심 수정] 캡차 위젯 정렬 및 버튼과의 간격 확보 */
+    .cf-turnstile {{ 
+        margin-bottom: 45px !important; /* 인증하기 버튼과 충분한 간격 생성 */
+        width: 100%; 
+        display: flex; 
+        justify-content: center; 
+    }}
+    
     /* 4. 사진에서 쏠려 보이던 상태 바 수정 */
     .status-alert {{ 
         background: #111; 
@@ -63,7 +72,7 @@ BASE_STYLE = f"""
         margin-bottom: 20px; 
         border-radius: 12px; 
         width: 100%; 
-        box-sizing: border-box; /* 패딩이 너비를 넘지 않게 고정 */
+        box-sizing: border-box; 
         display: block;
     }}
     
@@ -76,7 +85,7 @@ BASE_STYLE = f"""
         display: flex; 
         justify-content: space-between; 
         align-items: center; 
-        margin-bottom: 25px; 
+        margin-bottom: 30px; /* 아래 요소와 간격 조정 */
         font-size: 13px; 
         width: 100%; 
         box-sizing: border-box; 
@@ -91,9 +100,9 @@ BASE_STYLE = f"""
         color: #000; 
         border: none; 
         width: 100%; 
-        padding: 16px; 
+        padding: 18px; /* 버튼 클릭 영역 확대 */
         border-radius: 16px; 
-        font-size: 15px; 
+        font-size: 16px; 
         font-weight: 700; 
         display: flex; 
         justify-content: center; 
@@ -102,14 +111,14 @@ BASE_STYLE = f"""
         text-decoration: none;
     }}
     
-    .footer {{ color: #333; font-size: 11px; margin-top: 30px; letter-spacing: 1px; width: 100%; }}
+    .footer {{ color: #333; font-size: 11px; margin-top: 35px; letter-spacing: 1px; width: 100%; }}
     
     .fade {{ animation: fadeInUp 0.6s ease-out; }}
     @keyframes fadeInUp {{ from {{ opacity: 0; transform: translateY(15px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 
     /* 모바일 가로폭 최적화 */
     @media (max-width: 480px) {{
-        .card {{ padding: 35px 20px; }}
+        .card {{ padding: 35px 25px; }}
         h1 {{ font-size: 22px; }}
     }}
 </style>
