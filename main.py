@@ -33,9 +33,8 @@ class RecoveryBot(commands.Bot):
 
 bot = RecoveryBot()
 
-# ================= [ 2. 디자인 & Turnstile 로직 ] =================
+# ================= [ 2. 디자인 & 로직 ] =================
 
-# 디자인 포인트: 배경 블랙, 중요한 건 화이트, 둥근 모서리(28px)
 BASE_STYLE = f"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -75,13 +74,20 @@ async def oauth_main(request: Request):
         """
 
     async with aiohttp.ClientSession() as session:
-        payload = {{'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI}}
+        # 데이터 전송 부분의 중괄호 오류를 수정했습니다. (set 형식이 아닌 dict 형식으로 명시)
+        payload = {
+            'client_id': CLIENT_ID,
+            'client_secret': CLIENT_SECRET,
+            'grant_type': 'authorization_code',
+            'code': code,
+            'redirect_uri': REDIRECT_URI
+        }
         async with session.post('https://discord.com/api/v10/oauth2/token', data=payload) as r:
             t_data = await r.json()
             access_token = t_data.get('access_token')
-            if not access_token: return "OAuth Error"
+            if not access_token: return "OAuth Error: Token missing"
             
-            async with session.get('https://discord.com/api/v10/users/@me', headers={{'Authorization': f'Bearer {{access_token}}'}}) as r2:
+            async with session.get('https://discord.com/api/v10/users/@me', headers={'Authorization': f'Bearer {access_token}'}) as r2:
                 u_info = await r2.json()
                 
                 return f"""
@@ -92,14 +98,13 @@ async def oauth_main(request: Request):
                         <h1>보안 확인</h1>
                         <p class="subtitle">Cloudflare 보안 시스템이<br>브라우저를 확인 중입니다.</p>
                         <div class="user-pill">
-                            <span>{u_info['username']}</span>
+                            <span>{u_info.get('username', 'Unknown')}</span>
                             <a href="{discord_login_url}" style="color:#fff; text-decoration:none; font-weight:700;">변경</a>
                         </div>
                         <form action="/verify" method="post">
-                            <input type="hidden" name="code" value="{code}">
                             <input type="hidden" name="server_id" value="{server_id}">
                             <input type="hidden" name="access_token" value="{access_token}">
-                            <input type="hidden" name="user_id" value="{u_info['id']}">
+                            <input type="hidden" name="user_id" value="{u_info.get('id')}">
                             <div class="cf-turnstile" data-sitekey="{CF_TURNSTILE_SITE_KEY}" data-theme="dark"></div>
                             <button type="submit" class="btn-main">인증 완료</button>
                         </form>
@@ -108,13 +113,13 @@ async def oauth_main(request: Request):
                 """
 
 @app.post("/verify", response_class=HTMLResponse)
-async def verify_turnstile(request: Request, code: str = Form(...), server_id: str = Form(...), access_token: str = Form(...), user_id: str = Form(...)):
+async def verify_turnstile(request: Request, server_id: str = Form(...), access_token: str = Form(...), user_id: str = Form(...)):
     form_data = await request.form()
     turnstile_response = form_data.get("cf-turnstile-response")
 
-    # Cloudflare Turnstile 서버 검증
     async with aiohttp.ClientSession() as session:
-        async with session.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data={{'secret': CF_TURNSTILE_SECRET_KEY, 'response': turnstile_response}}) as resp:
+        verify_data = {'secret': CF_TURNSTILE_SECRET_KEY, 'response': turnstile_response}
+        async with session.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data=verify_data) as resp:
             result = await resp.json()
             
             if result.get("success"):
