@@ -6,11 +6,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from threading import Thread
 
-# [1. 필수 설정]
+# ================= [ 1. 설정 정보 ] =================
 TOKEN = "YOUR_BOT_TOKEN"
 CLIENT_ID = "YOUR_CLIENT_ID"
 CLIENT_SECRET = "YOUR_CLIENT_SECRET"
-REDIRECT_URI = "https://restore.v0ut.com" # HTTPS로 설정
+# 디스코드 포털 OAuth2 -> Redirects에 등록한 주소와 100% 일치해야 함
+REDIRECT_URI = "https://restore.v0ut.com" 
 
 app = FastAPI()
 intents = discord.Intents.all()
@@ -22,39 +23,34 @@ class RecoveryBot(commands.Bot):
     async def setup_hook(self):
         conn = sqlite3.connect('restore_user.db')
         cur = conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT, server_id TEXT, access_token TEXT, PRIMARY KEY(user_id, server_id))")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT, 
+                server_id TEXT, 
+                access_token TEXT, 
+                PRIMARY KEY(user_id, server_id)
+            )
+        """)
         conn.commit()
         conn.close()
         await self.tree.sync()
 
 bot = RecoveryBot()
 
-# [2. FastAPI: 블랙&화이트 웹 디자인 반영]
+# ================= [ 2. 블랙 & 화이트 웹 디자인 ] =================
+
 @app.get("/", response_class=HTMLResponse)
 async def oauth_main(request: Request):
     code = request.query_params.get("code")
+    # 주소창의 ?server_id= 값을 우선적으로 가져옴
     server_id = request.query_params.get("server_id") or request.query_params.get("state")
     
     if not code:
-        # 초기 접속 시 혹은 에러 시 화면
         return """
-        <html>
-            <head>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <style>
-                    body { background-color: #000; color: #fff; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-                    .card { border: 1px solid #333; padding: 40px; border-radius: 12px; text-align: center; max-width: 400px; width: 90%; }
-                    h1 { font-size: 24px; margin-bottom: 20px; font-weight: 700; }
-                    p { color: #888; line-height: 1.6; }
-                </style>
-            </head>
-            <body>
-                <div class="card">
-                    <h1>ACCESS DENIED</h1>
-                    <p>인증 코드가 올바르지 않거나 만료되었습니다.</p>
-                </div>
-            </body>
-        </html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>body{background:#000;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}
+        .card{border:1px solid #333;padding:40px;border-radius:8px;text-align:center;}</style></head>
+        <body><div class="card"><h1>INVALID ACCESS</h1><p>인증 코드가 누락되었습니다.</p></div></body></html>
         """
 
     async with aiohttp.ClientSession() as session:
@@ -75,39 +71,31 @@ async def oauth_main(request: Request):
                     conn.commit()
                     conn.close()
                 
-                # 인증 성공 화면 (Black & White 디자인)
+                # 성공 화면: 5entinal 스타일의 블랙 & 화이트 레이아웃
                 return f"""
-                <html>
-                    <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <style>
-                            body {{ background-color: #000; color: #fff; font-family: -apple-system, system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-                            .container {{ text-align: center; animation: fadeIn 0.8s ease-in-out; }}
-                            .logo {{ width: 80px; height: 80px; border: 2px solid #fff; border-radius: 50%; margin: 0 auto 30px; display: flex; justify-content: center; align-items: center; font-size: 30px; font-weight: bold; }}
-                            h1 {{ font-size: 28px; letter-spacing: -1px; margin-bottom: 10px; }}
-                            .status {{ color: #aaa; font-size: 14px; margin-bottom: 40px; }}
-                            .line {{ width: 50px; height: 1px; background: #fff; margin: 20px auto; }}
-                            @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
-                        </style>
-                    </head>
-                    <body>
-                        <div class="container">
-                            <div class="logo">V</div>
-                            <h1>VERIFIED</h1>
-                            <div class="line"></div>
-                            <p class="status">SERVER ID: {server_id}</p>
-                            <p style="font-size: 13px; color: #666;">인증이 완료되었습니다. 창을 닫아주세요.</p>
-                        </div>
-                    </body>
-                </html>
+                <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body {{ background-color: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+                    .container {{ text-align: center; border: 1px solid #222; padding: 50px 30px; border-radius: 15px; background: #050505; box-shadow: 0 10px 30px rgba(0,0,0,0.5); animation: fadeIn 0.8s ease; }}
+                    .icon {{ width: 70px; height: 70px; border: 1.5px solid #fff; border-radius: 50%; margin: 0 auto 25px; display: flex; justify-content: center; align-items: center; font-size: 32px; font-weight: 200; }}
+                    h1 {{ font-size: 26px; font-weight: 600; letter-spacing: 3px; margin: 10px 0; }}
+                    .divider {{ width: 40px; height: 1px; background: #fff; margin: 25px auto; opacity: 0.8; }}
+                    .details {{ color: #666; font-size: 13px; margin-top: 20px; text-transform: uppercase; letter-spacing: 1px; }}
+                    @keyframes fadeIn {{ from{{opacity:0; transform:translateY(20px);}} to{{opacity:1; transform:translateY(0);}} }}
+                </style></head>
+                <body><div class="container"><div class="icon">✓</div><h1>VERIFIED</h1><div class="divider"></div>
+                <p style="font-size:15px; color:#ccc;">SERVER ID: {server_id}</p>
+                <p class="details">인증이 성공적으로 완료되었습니다.<br>이 창을 닫으셔도 됩니다.</p></div></body></html>
                 """
-    return "인증 처리 중 오류가 발생했습니다."
+    return "인증 실패"
 
-# [3. Discord: 명령어 설정]
-@bot.tree.command(name="인증하기")
+# ================= [ 3. 디스코드 명령어 ] =================
+
+@bot.tree.command(name="인증하기", description="복구 인증 메뉴를 출력합니다 (공개 메시지).")
 async def authenticate(it: discord.Interaction):
     view = ui.View()
-    # 주소창에 ?server_id= 가 남도록 하기 위해 redirect_uri를 가공하여 링크 생성
+    
+    # 주소창에 server_id 파라미터를 강제로 남기기 위한 URL 구조
     auth_url = (
         f"https://discord.com/api/oauth2/authorize"
         f"?client_id={CLIENT_ID}"
@@ -115,18 +103,44 @@ async def authenticate(it: discord.Interaction):
         f"&response_type=code"
         f"&scope=identify%20guilds.join"
         f"&state={it.guild_id}"
-        f"&server_id={it.guild_id}" # 주소창 유지용 파라미터
+        f"&server_id={it.guild_id}"
     )
     
+    # [오류 수정] Action_Row 대신 ActionRow 또는 직접 View에 추가
     auth_btn = ui.Button(label="SECURITY VERIFY", url=auth_url, style=discord.ButtonStyle.link)
     view.add_item(auth_btn)
 
-    embed = discord.Embed(title="RESTORE SYSTEM", description="서버 보안 및 자동 복구 인증을 시작합니다.", color=0x000000)
-    embed.set_footer(text="Verified by restore.v0ut.com")
+    embed = discord.Embed(title="RESTORE SYSTEM", description="서버 보안 및 자동 복구 인증을 위해 아래 버튼을 클릭하세요.", color=0x000000)
+    embed.set_footer(text=f"Verified by restore.v0ut.com")
     
+    # ephemeral=False로 설정하여 모든 유저가 메시지를 볼 수 있게 함
     await it.response.send_message(embed=embed, view=view, ephemeral=False)
 
+@bot.tree.command(name="유저복구", description="인증된 유저들을 초대합니다.")
+@app_commands.checks.has_permissions(administrator=True)
+async def restore(it: discord.Interaction):
+    await it.response.send_message("🔄 복구 시작...", ephemeral=True)
+    conn = sqlite3.connect('restore_user.db')
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, access_token FROM users WHERE server_id = ?", (str(it.guild_id),))
+    users = cur.fetchall()
+    conn.close()
+
+    success, fail = 0, 0
+    async with aiohttp.ClientSession() as session:
+        for u_id, token in users:
+            url = f"https://discord.com/api/v10/guilds/{it.guild_id}/members/{u_id}"
+            async with session.put(url, headers={"Authorization": f"Bot {TOKEN}"}, json={"access_token": token}) as r:
+                if r.status in [201, 204]: success += 1
+                else: fail += 1
+                await asyncio.sleep(0.5)
+                
+    await it.followup.send(f"✅ 완료 (성공: {success} / 실패: {fail})")
+
+# ================= [ 4. 실행 ] =================
+
 def run_fastapi():
+    # Cloudflare 터널이 바라보는 8080 포트 실행
     uvicorn.run(app, host="0.0.0.0", port=8080)
 
 if __name__ == "__main__":
