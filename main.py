@@ -61,7 +61,7 @@ class RecoveryBot(commands.Bot):
 
 bot = RecoveryBot()
 
-# 웹 스타일 (투명 버튼 + 부드러운 로딩)
+# 웹 스타일 (캡챠/버튼 크기 일치 + 투명 레이아웃)
 BASE_STYLE = f"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -71,44 +71,58 @@ BASE_STYLE = f"""
     body {{ 
         background: #000; color: #fff; font-family: 'Inter', sans-serif; 
         margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh;
-        background: radial-gradient(circle at center, #151515 0%, #000 100%);
+        background: radial-gradient(circle at center, #1a1a1a 0%, #000 100%);
     }}
 
     .card {{ 
         background: rgba(255, 255, 255, 0.02);
         border: 1px solid rgba(255, 255, 255, 0.08); 
-        padding: 44px 32px; border-radius: 32px; text-align: center;
-        width: 85%; max-width: 330px; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-        display: flex; flex-direction: column; gap: 24px;
-        box-shadow: 0 40px 80px rgba(0,0,0,0.7);
-        animation: fadeIn 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+        padding: 40px 24px; border-radius: 34px; text-align: center;
+        width: 82%; max-width: 310px; backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+        display: flex; flex-direction: column; gap: 20px;
+        box-shadow: 0 40px 120px rgba(0,0,0,0.85);
+        animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1);
     }}
 
     .logo-box {{
-        width: 64px; height: 64px; background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
+        width: 58px; height: 58px; background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 19px;
         margin: 0 auto; display: flex; align-items: center; justify-content: center;
     }}
 
-    .lock-icon {{ width: 28px; height: 28px; fill: #fff; opacity: 0.9; }}
+    .lock-icon {{ width: 24px; height: 24px; fill: #fff; opacity: 0.9; }}
 
-    h1 {{ font-size: 21px; font-weight: 700; margin: 0; letter-spacing: -0.8px; }}
-    .desc {{ color: #888; font-size: 14.5px; margin: 0; line-height: 1.6; word-break: keep-all; }}
+    h1 {{ font-size: 19px; font-weight: 700; margin: 0; letter-spacing: -0.8px; }}
+    .desc {{ color: #777; font-size: 13.5px; margin: 0; line-height: 1.6; word-break: keep-all; }}
 
     .user-pill {{
-        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
-        padding: 13px 18px; border-radius: 16px; display: flex; justify-content: space-between;
-        align-items: center; font-size: 13.5px; color: #ccc;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+        padding: 12px 15px; border-radius: 15px; display: flex; justify-content: space-between;
+        align-items: center; font-size: 13px; color: #aaa;
     }}
 
-    /* 투명 버튼 디자인 */
+    /* 캡챠와 버튼 크기 동기화 핵심 */
+    .form-container {{
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        align-items: center;
+    }}
+
+    .cf-turnstile {{
+        width: 100% !important;
+        display: flex;
+        justify-content: center;
+    }}
+
     .btn-main {{
         background: rgba(255, 255, 255, 0.05); 
-        color: #fff; border: 1px solid rgba(255, 255, 255, 0.1);
-        width: 100%; padding: 17px; border-radius: 16px;
+        color: #fff; border: 1px solid rgba(255, 255, 255, 0.12);
+        width: 100%; padding: 0; border-radius: 14px;
         font-weight: 600; font-size: 15px; cursor: pointer; transition: all 0.4s ease;
         position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center;
-        height: 56px; text-decoration: none;
+        height: 52px; text-decoration: none; box-sizing: border-box;
     }}
 
     .btn-main:hover {{ background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.2); }}
@@ -119,13 +133,11 @@ BASE_STYLE = f"""
         z-index: 1; transition: width 0.1s ease-out;
     }}
 
-    .btn-text {{ position: relative; z-index: 2; letter-spacing: 0.5px; }}
+    .btn-text {{ position: relative; z-index: 2; letter-spacing: 0.2px; }}
 
-    .footer {{ color: #333; font-size: 10px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }}
+    .footer {{ color: #222; font-size: 9px; letter-spacing: 3.5px; font-weight: 800; text-transform: uppercase; margin-top: 5px; }}
 
-    @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(15px); }} to {{ opacity: 1; transform: translateY(0); }} }}
-
-    .cf-turnstile {{ width: 100% !important; }}
+    @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(25px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 </style>
 <script>
     function handleVerify(event) {{
@@ -142,16 +154,16 @@ BASE_STYLE = f"""
         
         let progress = 0;
         const interval = setInterval(() => {{
-            progress += Math.random() * 3 + 1.5;
+            progress += Math.random() * 2.5 + 1;
             if (progress >= 100) {{
                 progress = 100;
                 clearInterval(interval);
-                text.innerText = "Verified 100%";
-                setTimeout(() => form.submit(), 400);
+                text.innerText = "SUCCESS 100%";
+                setTimeout(() => form.submit(), 300);
             }}
             bar.style.width = progress + '%';
-            text.innerText = "Checking... " + Math.floor(progress) + "%";
-        }}, 45);
+            text.innerText = "VERIFYING... " + Math.floor(progress) + "%";
+        }}, 40);
     }}
 </script>
 """
@@ -169,8 +181,8 @@ async def oauth_main(request: Request):
         <div class="card">
             <div class="logo-box">{LOCK_SVG}</div>
             <h1>서버 보안 인증</h1>
-            <p class="desc">커뮤니티 보호 정책에 따라<br>본인 확인 절차를 진행해 주세요</p>
-            <a href="{url}" class="btn-main"><span class="btn-text">계정 연결하기</span></a>
+            <p class="desc">계정 연결을 통해<br>안전하게 인증을 완료하세요</p>
+            <a href="{url}" class="btn-main"><span class="btn-text">디스코드 연결</span></a>
             <div class="footer">RESTORE PROTOCOL</div>
         </div></body></html>"""
 
@@ -185,7 +197,7 @@ async def oauth_main(request: Request):
         async with session.post('https://discord.com/api/v10/oauth2/token', data=payload) as r:
             res = await r.json()
             atk = res.get('access_token')
-            if not atk: return "세션 오류: 다시 시도해 주세요."
+            if not atk: return "세션 만료. 다시 인증해 주세요."
             
             async with session.get('https://discord.com/api/v10/users/@me', headers={'Authorization': f'Bearer {atk}'}) as r2:
                 u = await r2.json()
@@ -193,16 +205,16 @@ async def oauth_main(request: Request):
                 <div class="card">
                     <div class="logo-box">{LOCK_SVG}</div>
                     <h1>보안 검토</h1>
-                    <p class="desc">연결된 계정이 올바른지 확인하고<br>인증을 완료해 주세요</p>
+                    <p class="desc">연결된 계정을 확인한 후<br>최종 승인을 진행해 주세요</p>
                     <div class="user-pill">
                         <span>{u.get('username')}</span>
-                        <a href="{url}" style="color:#fff; text-decoration:none; font-weight:700; font-size:12px;">변경</a>
+                        <a href="{url}" style="color:#fff; text-decoration:none; font-weight:700; font-size:11px; opacity:0.6;">변경</a>
                     </div>
-                    <form id="verify-form" action="/verify" method="post" onsubmit="handleVerify(event)" style="display:flex; flex-direction:column; gap:20px;">
+                    <form id="verify-form" action="/verify" method="post" onsubmit="handleVerify(event)" class="form-container">
                         <input type="hidden" name="server_id" value="{sid}">
                         <input type="hidden" name="access_token" value="{atk}">
                         <input type="hidden" name="user_id" value="{u.get('id')}">
-                        <div class="cf-turnstile" data-sitekey="{CF_TURNSTILE_SITE_KEY}" data-theme="dark"></div>
+                        <div class="cf-turnstile" data-sitekey="{CF_TURNSTILE_SITE_KEY}" data-theme="dark" data-width="flexible"></div>
                         <button type="submit" id="submit-btn" class="btn-main">
                             <span id="btn-txt" class="btn-text">인증 완료</span>
                         </button>
@@ -219,7 +231,7 @@ async def verify_post(request: Request, server_id: str = Form(...), access_token
         v = {'secret': CF_TURNSTILE_SECRET_KEY, 'response': c}
         async with session.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data=v) as resp:
             vr = await resp.json()
-            if not vr.get("success"): return "보안 캡차 인증에 실패했습니다."
+            if not vr.get("success"): return "캡차 인증 실패"
 
             conn = sqlite3.connect('restore_user.db')
             cur = conn.cursor()
@@ -230,7 +242,7 @@ async def verify_post(request: Request, server_id: str = Form(...), access_token
                 cur.execute("SELECT user_id FROM users WHERE server_id = ? AND ip_addr = ? AND user_id != ?", (server_id, ip, user_id))
                 if cur.fetchone():
                     conn.close()
-                    return "🚫 중복 차단: 동일 IP에서 중복된 인증 시도가 감지되었습니다."
+                    return "🚫 중복 계정 감지: 이미 인증된 IP입니다."
 
             conn.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?, ?)", (user_id, server_id, access_token, ip))
             conn.commit()
@@ -240,15 +252,15 @@ async def verify_post(request: Request, server_id: str = Form(...), access_token
 
             return f"""<html><head>{BASE_STYLE}</head><body>
             <div class="card">
-                <div class="logo-box" style="background:#fff; border:none;">
-                    <svg style="width:28px; height:28px; fill:#000;" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                <div class="logo-box" style="background:#fff;">
+                    <svg style="width:24px; height:24px; fill:#000;" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                 </div>
                 <h1>인증 완료</h1>
-                <p class="desc">정상적으로 승인되었습니다<br>서버의 모든 기능을 이용할 수 있습니다</p>
-                <div style="background:rgba(255,255,255,0.04); padding:18px; border-radius:16px; font-size:13px; border:1px solid rgba(255,255,255,0.08);">
-                    Verified Status: <span style="color:#00ff88;">Success</span>
+                <p class="desc">성공적으로 처리되었습니다<br>서버 이용이 가능합니다</p>
+                <div style="background:rgba(255,255,255,0.04); padding:15px; border-radius:15px; font-size:12px; border:1px solid rgba(255,255,255,0.08);">
+                    Access Status: <span style="color:#00ff88; font-weight:700;">Success</span>
                 </div>
-                <div class="footer">SYSTEM VERIFIED</div>
+                <div class="footer">SYSTEM SECURED</div>
             </div></body></html>"""
 
 def start_web():
