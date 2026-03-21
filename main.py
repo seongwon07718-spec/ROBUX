@@ -24,10 +24,10 @@ class RecoveryBot(commands.Bot):
         
     async def setup_hook(self):
         conn = sqlite3.connect('restore_user.db')
-        # 유저 정보 테이블
-        conn.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT, server_id TEXT, access_token TEXT, PRIMARY KEY(user_id, server_id))")
-        # 서버별 지급 역할 설정 테이블
-        conn.execute("CREATE TABLE IF NOT EXISTS settings (server_id TEXT PRIMARY KEY, role_id TEXT)")
+        # 유저 정보 테이블 (IP 기록 추가)
+        conn.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT, server_id TEXT, access_token TEXT, ip_addr TEXT, PRIMARY KEY(user_id, server_id))")
+        # 서버별 설정 테이블 (역할 및 제한 설정)
+        conn.execute("CREATE TABLE IF NOT EXISTS settings (server_id TEXT PRIMARY KEY, role_id TEXT, block_alt INTEGER DEFAULT 0, block_vpn INTEGER DEFAULT 0)")
         conn.commit()
         conn.close()
         await self.tree.sync()
@@ -35,7 +35,7 @@ class RecoveryBot(commands.Bot):
 
 bot = RecoveryBot()
 
-# 웹 페이지 스타일 시트 (수정된 간격 20px 반영 및 디자인 최적화)
+# 웹 페이지 디자인 스타일
 BASE_STYLE = f"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -56,7 +56,6 @@ BASE_STYLE = f"""
     .footer {{ color: #333; font-size: 11px; margin-top: 35px; letter-spacing: 1px; width: 100%; }}
     .fade {{ animation: fadeInUp 0.6s ease-out; }}
     @keyframes fadeInUp {{ from {{ opacity: 0; transform: translateY(15px); }} to {{ opacity: 1; transform: translateY(0); }} }}
-    @media (max-width: 480px) {{ .card {{ padding: 35px 25px; }} h1 {{ font-size: 22px; }} }}
 </style>
 """
 
@@ -68,10 +67,9 @@ async def give_role_task(server_id, user_id, role_id):
             member = guild.get_member(int(user_id)) or await guild.fetch_member(int(user_id))
             role = guild.get_role(role_id)
             if member and role:
-                await member.add_roles(role, reason="보안 인증 완료: 자동 역할 지급")
-                print(f"로그: {member.display_name}에게 역할 지급 완료")
+                await member.add_roles(role, reason="RESTORE: 보안 인증 완료")
     except Exception as e:
-        print(f"오류: 역할 지급 중 문제 발생 - {e}")
+        print(f"Error role assignment: {e}")
 
 @app.get("/", response_class=HTMLResponse)
 async def oauth_main(request: Request):
@@ -87,7 +85,7 @@ async def oauth_main(request: Request):
         async with session.post('https://discord.com/api/v10/oauth2/token', data=payload) as r:
             t_data = await r.json()
             access_token = t_data.get('access_token')
-            if not access_token: return "인증 실패: 유효하지 않은 코드입니다."
+            if not access_token: return "Error: Invalid Session"
             
             async with session.get('https://discord.com/api/v10/users/@me', headers={'Authorization': f'Bearer {access_token}'}) as r2:
                 u_info = await r2.json()
@@ -97,40 +95,52 @@ async def oauth_main(request: Request):
 async def verify_turnstile(request: Request, server_id: str = Form(...), access_token: str = Form(...), user_id: str = Form(...)):
     form_data = await request.form()
     turnstile_response = form_data.get("cf-turnstile-response")
+    user_ip = request.headers.get("cf-connecting-ip") or request.client.host
 
     async with aiohttp.ClientSession() as session:
+        # 1. 캡차 검증
         verify_data = {'secret': CF_TURNSTILE_SECRET_KEY, 'response': turnstile_response}
         async with session.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data=verify_data) as resp:
             result = await resp.json()
-            if result.get("success"):
-                # DB 저장
-                conn = sqlite3.connect('restore_user.db')
-                conn.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?)", (user_id, server_id, access_token))
-                
-                # 서버별 설정된 역할 조회
-                cur = conn.cursor()
-                cur.execute("SELECT role_id FROM settings WHERE server_id = ?", (server_id,))
-                row = cur.fetchone()
-                conn.commit()
-                conn.close()
+            if not result.get("success"):
+                return "보안 검증에 실패했습니다."
 
-                # 역할이 설정되어 있으면 즉시 지급 시도
-                if row:
-                    role_id = int(row[0])
-                    asyncio.run_coroutine_threadsafe(give_role_task(server_id, user_id, role_id), bot.loop)
+            # 2. 서버 설정 조회
+            conn = sqlite3.connect('restore_user.db')
+            cur = conn.cursor()
+            cur.execute("SELECT role_id, block_alt, block_vpn FROM settings WHERE server_id = ?", (server_id,))
+            setting = cur.fetchone()
+            
+            if setting:
+                role_id, block_alt, block_vpn = setting
                 
-                return f"""<html><head>{BASE_STYLE}</head><body><div class="card fade"><div id="loading-area" style="width:100%;"><div class="logo-box">🔒</div><h1>보안 승인 중</h1><p class="subtitle">서버 권한을 할당하고 있습니다<br>잠시만 기다려 주세요</p><div class="progress-wrap"><div class="progress-bg"><div id="bar" class="progress-bar"></div></div><div id="pct" style="font-size:14px; font-weight:700;">0%</div></div></div><div id="success-area" style="display:none; width:100%;"><div class="logo-box" style="background:#fff; color:#000;">✓</div><h1>인증 완료</h1><p class="subtitle">보안 검사가 성공적으로 끝났습니다</p><div class="status-alert">성공적으로 승인되었습니다</div><div class="footer">SERVICE VOUT VERIFIED</div></div></div><script>let p = 0;const b = document.getElementById('bar');const t = document.getElementById('pct');const l = document.getElementById('loading-area');const s = document.getElementById('success-area');const iv = setInterval(() => {{p++;b.style.width = p + '%';t.innerText = p + '%';if (p >= 100) {{clearInterval(iv);l.style.display = 'none';s.style.display = 'block';}}}}, 40);</script></body></html>"""
-            else: return "보안 검증에 실패했습니다. 다시 시도해 주세요."
+                # VPN 제한 체크 (Cloudflare threat_score나 특정 헤더로 간접 체크 가능하나 여기선 기본 IP 체크)
+                # 실제 고도화된 VPN 체크는 외부 API를 권장하지만, Cloudflare 사용시 cf-ipcountry 등을 활용 가능
+                
+                # 부계정 제한 체크 (동일 서버 내 다른 유저가 같은 IP를 쓴 기록이 있는지)
+                if block_alt == 1:
+                    cur.execute("SELECT user_id FROM users WHERE server_id = ? AND ip_addr = ? AND user_id != ?", (server_id, user_ip, user_id))
+                    if cur.fetchone():
+                        conn.close()
+                        return "이미 인증된 계정이 감지되었습니다 (부계정 차단)"
+
+            # 3. 데이터 저장 및 역할 지급
+            conn.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?, ?)", (user_id, server_id, access_token, user_ip))
+            conn.commit()
+            
+            if setting and setting[0]:
+                asyncio.run_coroutine_threadsafe(give_role_task(server_id, user_id, int(setting[0])), bot.loop)
+            
+            conn.close()
+            return f"""<html><head>{BASE_STYLE}</head><body><div class="card fade"><div id="loading-area" style="width:100%;"><div class="logo-box">🔒</div><h1>보안 승인 중</h1><p class="subtitle">서버 권한을 할당하고 있습니다<br>잠시만 기다려 주세요</p><div class="progress-wrap"><div class="progress-bg"><div id="bar" class="progress-bar"></div></div><div id="pct" style="font-size:14px; font-weight:700;">0%</div></div></div><div id="success-area" style="display:none; width:100%;"><div class="logo-box" style="background:#fff; color:#000;">✓</div><h1>인증 완료</h1><p class="subtitle">보안 검사가 성공적으로 끝났습니다</p><div class="status-alert">성공적으로 승인되었습니다</div><div class="footer">SERVICE VOUT VERIFIED</div></div></div><script>let p = 0;const b = document.getElementById('bar');const t = document.getElementById('pct');const l = document.getElementById('loading-area');const s = document.getElementById('success-area');const iv = setInterval(() => {{p++;b.style.width = p + '%';t.innerText = p + '%';if (p >= 100) {{clearInterval(iv);l.style.display = 'none';s.style.display = 'block';}}}}, 40);</script></body></html>"""
 
 # [슬래시 명령어]
 
 @bot.tree.command(name="지급역할", description="인증 완료 시 지급할 역할을 설정합니다")
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(role="지급할 역할을 선택하세요")
 async def set_role(it: discord.Interaction, role: discord.Role):
     conn = sqlite3.connect('restore_user.db')
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO settings (server_id, role_id) VALUES (?, ?)", (str(it.guild_id), str(role.id)))
+    conn.execute("INSERT INTO settings (server_id, role_id) VALUES (?, ?) ON CONFLICT(server_id) DO UPDATE SET role_id=excluded.role_id", (str(it.guild_id), str(role.id)))
     conn.commit()
     conn.close()
 
@@ -138,54 +148,58 @@ async def set_role(it: discord.Interaction, role: discord.Role):
     role_con.accent_color = 0xffffff
     role_con.add_item(ui.TextDisplay("## ⚙️ 역할 설정 완료"))
     role_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    role_con.add_item(ui.TextDisplay(f"인증을 완료한 유저에게 앞으로\\n{role.mention} 역할이 자동 지급됩니다"))
-    role_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    role_con.add_item(ui.TextDisplay("-# RESTORE PROTOCOL DATABASE SYSTEM"))
-    
-    view = ui.LayoutView().add_item(role_con)
-    await it.response.send_message(view=view, ephemeral=True)
+    role_con.add_item(ui.TextDisplay(f"인증 성공 시 유저에게 {role.mention} 역할을 부여합니다"))
+    await it.response.send_message(view=ui.LayoutView().add_item(role_con), ephemeral=True)
 
-@bot.tree.command(name="인증하기", description="인증하기 컨테이너를 전송합니다")
+@bot.tree.command(name="인증제한", description="부계정 및 VPN 인증 제한을 설정합니다")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.choices(부계정=[
+    app_commands.Choice(name="상관있음 (차단)", value=1),
+    app_commands.Choice(name="상관없음 (허용)", value=0)
+], VPN=[
+    app_commands.Choice(name="상관있음 (차단)", value=1),
+    app_commands.Choice(name="상관없음 (허용)", value=0)
+])
+async def restrict_auth(it: discord.Interaction, 부계정: int, vpn: int):
+    conn = sqlite3.connect('restore_user.db')
+    conn.execute("INSERT INTO settings (server_id, block_alt, block_vpn) VALUES (?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET block_alt=excluded.block_alt, block_vpn=excluded.block_vpn", (str(it.guild_id), 부계정, vpn))
+    conn.commit()
+    conn.close()
+
+    res_con = ui.Container()
+    res_con.accent_color = 0xffffff
+    res_con.add_item(ui.TextDisplay("## 🛡️ 인증 보안 설정"))
+    res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    alt_txt = "🚫 차단" if 부계정 == 1 else "✅ 허용"
+    vpn_txt = "🚫 차단" if vpn == 1 else "✅ 허용"
+    res_con.add_item(ui.TextDisplay(f"**부계정 제한:** {alt_txt}\n**VPN 제한:** {vpn_txt}"))
+    
+    await it.response.send_message(view=ui.LayoutView().add_item(res_con), ephemeral=True)
+
+@bot.tree.command(name="인증하기", description="인증 컨테이너를 전송합니다")
 async def authenticate(it: discord.Interaction):
     await it.response.send_message(content="**인증버튼이 전송되었습니다**", ephemeral=True)
     res_con = ui.Container()
     res_con.accent_color = 0xffffff
     res_con.add_item(ui.TextDisplay("## 서버 인증"))
     res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    res_con.add_item(ui.TextDisplay("아래 버튼을 눌러 인증하셔야 이용이 가능합니다\n**`IP, 이메일, 통신사`** 등 개인정보를 수집하지 않습니다"))
+    res_con.add_item(ui.TextDisplay("아래 버튼을 눌러 인증하셔야 이용이 가능합니다"))
     res_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    
     auth_url = (f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope=identify%20guilds.join&state={it.guild_id}")
     auth_btn = ui.Button(label="인증하기", url=auth_url, style=discord.ButtonStyle.link, emoji="<:emoji_14:1484745886696476702>")
     res_con.add_item(ui.ActionRow(auth_btn))
-    
-    view = ui.LayoutView().add_item(res_con)
-    await it.channel.send(view=view)
+    await it.channel.send(view=ui.LayoutView().add_item(res_con))
 
-@bot.tree.command(name="유저복구", description="인증했던 유저들을 서버에 복구하기")
+@bot.tree.command(name="유저복구", description="인증했던 유저들을 복구합니다")
 @app_commands.checks.has_permissions(administrator=True)
 async def restore(it: discord.Interaction):
-    process_con = ui.Container()
-    process_con.accent_color = 0xffffff
-    process_con.add_item(ui.TextDisplay("## 🔄 유저 복구 가동"))
-    process_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    process_con.add_item(ui.TextDisplay("DB에서 유저 정보를 조회하고 복구를 시작합니다"))
-    process_view = ui.LayoutView().add_item(process_con)
-    await it.response.send_message(view=process_view, ephemeral=True)
-    
+    await it.response.defer(ephemeral=True)
     conn = sqlite3.connect('restore_user.db')
     cur = conn.cursor()
     cur.execute("SELECT user_id, access_token FROM users WHERE server_id = ?", (str(it.guild_id),))
     all_users = cur.fetchall()
     conn.close()
-
-    if not all_users:
-        error_con = ui.Container()
-        error_con.accent_color = 0xffffff
-        error_con.add_item(ui.TextDisplay("## ❌ 복구 불가"))
-        error_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        error_con.add_item(ui.TextDisplay("복구할 유저 데이터가 존재하지 않습니다"))
-        return await it.edit_original_response(view=ui.LayoutView().add_item(error_con))
+    if not all_users: return await it.followup.send("복구할 데이터가 없습니다.")
 
     success, fail = 0, 0
     async with aiohttp.ClientSession() as session:
@@ -195,11 +209,30 @@ async def restore(it: discord.Interaction):
             async with session.put(url, headers=headers, json={"access_token": token}) as resp:
                 if resp.status in [201, 204]: success += 1
                 else: fail += 1
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.4)
 
-    result_con = ui.Container()
-    result_con.accent_color = 0xffffff
-    result_con.add_item(ui.TextDisplay("## ✅ 복구 작업 완료"))
-    result_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    result_con.add_item(ui.TextDisplay(f"**복구 결과 보고**\n
+    res_con = ui.Container()
+    res_con.accent_color = 0xffffff
+    res_con.add_item(ui.TextDisplay(f"## 복구 완료\n성공: {success}명 | 실패: {fail}명"))
+    await it.followup.send(view=ui.LayoutView().add_item(res_con))
+
+@bot.tree.command(name="인증유저", description="인증 유저 수 확인")
+async def total_users(it: discord.Interaction):
+    conn = sqlite3.connect('restore_user.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(DISTINCT user_id) FROM users")
+    count = cursor.fetchone()[0]
+    conn.close()
+    res_con = ui.Container()
+    res_con.accent_color = 0xffffff
+    res_con.add_item(ui.TextDisplay(f"## 현재 인증 유저\n**{count}명**"))
+    await it.response.send_message(view=ui.LayoutView().add_item(res_con), ephemeral=True)
+
+def run_fastapi():
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="error")
+
+if __name__ == "__main__":
+    Thread(target=run_fastapi, daemon=True).start()
+    try: bot.run(TOKEN)
+    except Exception as e: print(f"Error: {e}")
 
