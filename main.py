@@ -1,41 +1,30 @@
-import asyncio
-
-@bot.tree.command(name="인증유저", description="인증 완료된 유저 수를 확인합니다")
-async def total_users(it: discord.Interaction):
-    # 1. 처음 보여줄 '조회 중' 컨테이너 설정
-    loading_con = ui.Container()
-    loading_con.accent_color = 0xffffff
-    loading_con.add_item(ui.TextDisplay("## 🔍 데이터베이스 조회 중"))
-    loading_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    loading_con.add_item(ui.TextDisplay("서버에서 인증된 유저 정보를 불러오고 있습니다\\n잠시만 기다려 주세요"))
+@bot.tree.command(name="유저복구", description="인증했던 유저들을 서버에 복구하기")
+@app_commands.checks.has_permissions(administrator=True)
+async def restore(it: discord.Interaction):
+    await it.response.send_message("🔄 복구 프로세스를 가동합니다. 잠시만 기다려주세요...", ephemeral=True)
     
-    loading_view = ui.LayoutView().add_item(loading_con)
-    
-    # 먼저 '조회 중' 메시지 전송 (나에게만 보이게)
-    await it.response.send_message(view=loading_view, ephemeral=True)
-
-    # 2. 3초 대기 (조회하는 느낌 연출)
-    await asyncio.sleep(3)
-
-    # 3. 실제 DB 데이터 가져오기
     conn = sqlite3.connect('restore_user.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(DISTINCT user_id) FROM users")
-    user_count = cursor.fetchone()[0]
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, access_token FROM users WHERE server_id = ?", (str(it.guild_id),))
+    all_users = cur.fetchall()
     conn.close()
 
-    # 4. 결과 출력용 컨테이너 설정
-    verify_con = ui.Container()
-    verify_con.accent_color = 0xffffff 
-    
-    verify_con.add_item(ui.TextDisplay("## ✅ 인증 유저 통계"))
-    verify_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    # 강조를 위해 인원수 부분을 코드 블럭 처리했습니다
-    verify_con.add_item(ui.TextDisplay(f"현재 인증 완료된 유저수\\n**` {user_count}명 `**"))
-    verify_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-    verify_con.add_item(ui.TextDisplay("-# DB는 365일 안전하게 보관됩니다"))
-    
-    final_view = ui.LayoutView().add_item(verify_con)
+    if not all_users:
+        return await it.followup.send("❌ 복구할 유저 데이터가 존재하지 않습니다.")
 
-    # 5. 기존에 보냈던 메시지를 결과 컨테이너로 수정
-    await it.edit_original_response(view=final_view)
+    success, fail = 0, 0
+    async with aiohttp.ClientSession() as session:
+        for u_id, token in all_users:
+            url = f"https://discord.com/api/v10/guilds/{it.guild_id}/members/{u_id}"
+            headers = {
+                "Authorization": f"Bot {TOKEN}",
+                "Content-Type": "application/json"
+            }
+            async with session.put(url, headers=headers, json={"access_token": token}) as resp:
+                if resp.status in [201, 204]:
+                    success += 1
+                else:
+                    fail += 1
+                await asyncio.sleep(0.5)
+                
+    await it.followup.send(f"✅ 복구 완료! (성공: {success}명 / 실패: {fail}명)")
