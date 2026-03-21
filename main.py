@@ -1,23 +1,3 @@
-import discord
-from discord import app_commands, ui
-from discord.ext import commands
-import aiohttp, sqlite3, uvicorn, asyncio, json
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse
-from threading import Thread
-
-# 설정 정보
-TOKEN = "" # 봇 토큰 입력
-CLIENT_ID = "1482041261111382066"
-CLIENT_SECRET = "2IbFgl910fy8yd6WDCAvBGj9Asa-BsQi"
-REDIRECT_URI = "https://restore.v0ut.com" 
-
-CF_TURNSTILE_SITE_KEY = "0x4AAAAAACt7wUkh4DATyGf_"
-CF_TURNSTILE_SECRET_KEY = "0x4AAAAAACt7wYg5nw0sXHF4URhhszJq_EA"
-
-app = FastAPI()
-intents = discord.Intents.all()
-
 class RecoveryBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
@@ -213,29 +193,3 @@ async def verify_post(request: Request, server_id: str = Form(...), access_token
                 </div>
                 <div class="footer">VERIFIED SYSTEM</div>
             </div></body></html>"""
-
-# 슬래시 명령어 설정
-@bot.tree.command(name="지급역할", description="인증 완료 시 지급할 역할을 설정합니다")
-@app_commands.checks.has_permissions(administrator=True)
-async def set_role(it: discord.Interaction, role: discord.Role):
-    conn = sqlite3.connect('restore_user.db')
-    conn.execute("INSERT OR REPLACE INTO settings (server_id, role_id) VALUES (?, ?)", (str(it.guild_id), str(role.id)))
-    conn.commit()
-    conn.close()
-    await it.response.send_message(f"✅ 인증 완료 시 **{role.name}** 역할을 지급합니다.", ephemeral=True)
-
-@bot.tree.command(name="인증하기", description="인증 메세지를 전송합니다")
-async def send_auth(it: discord.Interaction):
-    embed = discord.Embed(title="🔒 보안 인증", description="서버 입장을 위해 아래 버튼을 눌러 본인 인증을 완료해 주세요.", color=0xffffff)
-    url = f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope=identify%20guilds.join&state={it.guild_id}"
-    view = ui.View()
-    view.add_item(ui.Button(label="인증 시작하기", url=url, style=discord.ButtonStyle.link))
-    await it.channel.send(embed=embed, view=view)
-
-def start_web():
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="error")
-
-if __name__ == "__main__":
-    Thread(target=start_web, daemon=True).start()
-    bot.run(TOKEN)
-
