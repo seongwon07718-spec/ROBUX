@@ -32,7 +32,7 @@ class RecoveryBot(commands.Bot):
 
 bot = RecoveryBot()
 
-# ================= [ 2. 디자인 (건드리지 않음 + 로딩바 추가) ] =================
+# ================= [ 2. 디자인 (모든 기기 정중앙 배열 + 마침표 제거) ] =================
 
 BASE_STYLE = f"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -40,36 +40,61 @@ BASE_STYLE = f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
     
-    body {{ background-color: #000; color: #fff; font-family: 'Inter', -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; overflow-x: hidden; }}
-    .card {{ background: #0a0a0a; border: 1px solid #1a1a1a; padding: 45px 35px; border-radius: 28px; text-align: center; width: 100%; max-width: 380px; box-shadow: 0 25px 50px rgba(0,0,0,0.8); box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
-    .logo-box {{ width: 75px; height: 75px; border-radius: 22px; background: #111; border: 1px solid #222; margin: 0 auto 30px; display: flex; justify-content: center; align-items: center; font-size: 32px; font-weight: 700; color: #fff; flex-shrink: 0; }}
+    /* 모든 기기 상하좌우 정중앙 정렬 */
+    body {{ 
+        background-color: #000; 
+        color: #fff; 
+        font-family: 'Inter', -apple-system, sans-serif; 
+        display: flex; 
+        justify-content: center; 
+        align-items: center; 
+        min-height: 100vh; 
+        margin: 0; 
+        padding: 20px; 
+        box-sizing: border-box; 
+    }}
+    
+    .card {{ 
+        background: #0a0a0a; 
+        border: 1px solid #1a1a1a; 
+        padding: 45px 35px; 
+        border-radius: 28px; 
+        text-align: center; 
+        width: 100%; 
+        max-width: 380px; 
+        box-shadow: 0 25px 50px rgba(0,0,0,0.8); 
+        box-sizing: border-box; 
+        display: flex; 
+        flex-direction: column; 
+        align-items: center; 
+        justify-content: center; 
+    }}
+    
+    .logo-box {{ width: 75px; height: 75px; border-radius: 22px; background: #111; border: 1px solid #222; margin-bottom: 30px; display: flex; justify-content: center; align-items: center; font-size: 32px; font-weight: 700; color: #fff; flex-shrink: 0; }}
     h1 {{ font-size: 26px; font-weight: 700; margin: 0 0 12px 0; letter-spacing: -1px; text-align: center; width: 100%; }}
-    .subtitle {{ color: #666; font-size: 14px; margin-bottom: 35px; line-height: 1.6; text-align: center; width: 100%; max-width: 300px; }}
-    .btn-main {{ background: #fff; color: #000; border: none; width: 100%; padding: 16px; border-radius: 16px; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; text-decoration: none; display: flex; justify-content: center; align-items: center; box-sizing: border-box; }}
-    .btn-main:hover {{ background: #e5e5e5; transform: translateY(-2px); }}
-    .status-alert {{ background: #111; border: 1px solid #222; border-left: 4px solid #fff; padding: 20px; text-align: left; font-size: 13px; color: #ccc; margin-bottom: 25px; border-radius: 14px; line-height: 1.5; width: 100%; box-sizing: border-box; }}
-    .user-pill {{ background: #111; border: 1px solid #222; border-radius: 50px; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; font-size: 13px; color: #888; width: 100%; box-sizing: border-box; gap: 10px; }}
-    .cf-turnstile {{ margin-bottom: 25px; width: 100%; display: flex; justify-content: center; }}
-    .footer {{ color: #333; font-size: 11px; margin-top: 35px; letter-spacing: 1px; width: 100%; text-align: center; }}
-    .fade {{ animation: fadeInUp 0.7s cubic-bezier(0.16, 1, 0.3, 1); }}
-    @keyframes fadeInUp {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
-
-    /* 로딩 바 핵심 스타일 */
+    .subtitle {{ color: #666; font-size: 14px; margin-bottom: 35px; line-height: 1.6; text-align: center; width: 100%; }}
+    
+    .btn-main {{ background: #fff; color: #000; border: none; width: 100%; padding: 16px; border-radius: 16px; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; text-decoration: none; display: flex; justify-content: center; align-items: center; }}
+    .status-alert {{ background: #111; border: 1px solid #222; border-left: 4px solid #fff; padding: 20px; text-align: center; font-size: 13px; color: #ccc; margin-bottom: 25px; border-radius: 14px; width: 100%; box-sizing: border-box; }}
+    .user-pill {{ background: #111; border: 1px solid #222; border-radius: 50px; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; font-size: 13px; color: #888; width: 100%; box-sizing: border-box; }}
+    
+    /* 로딩 바 */
     .progress-wrap {{ width: 100%; margin-bottom: 20px; }}
     .progress-bg {{ background: #1a1a1a; height: 6px; width: 100%; border-radius: 10px; overflow: hidden; margin-bottom: 8px; }}
     .progress-bar {{ background: #fff; height: 100%; width: 0%; transition: width 0.05s linear; }}
-    .pct {{ font-size: 14px; color: #fff; font-weight: 700; }}
+    
+    .footer {{ color: #333; font-size: 11px; margin-top: 35px; letter-spacing: 1px; text-align: center; }}
+    .fade {{ animation: fadeInUp 0.7s cubic-bezier(0.16, 1, 0.3, 1); }}
+    @keyframes fadeInUp {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 
     @media (max-width: 480px) {{
-        .card {{ padding: 35px 25px; border-radius: 24px; }}
+        .card {{ padding: 35px 25px; }}
         h1 {{ font-size: 22px; }}
-        .subtitle {{ font-size: 13px; }}
-        .logo-box {{ width: 65px; height: 65px; font-size: 28px; }}
     }}
 </style>
 """
 
-# ================= [ 3. 라우팅 로직 ] =================
+# ================= [ 3. 라우팅 로직 (오류 수정 완료) ] =================
 
 @app.get("/", response_class=HTMLResponse)
 async def oauth_main(request: Request):
@@ -78,15 +103,23 @@ async def oauth_main(request: Request):
     discord_url = f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope=identify%20guilds.join&state={server_id}"
 
     if not code:
-        return f"<html><head>{BASE_STYLE}</head><body><div class='card fade'><div class='logo-box'>S</div><h1>서버 보안 인증</h1><p class='subtitle'>계정을 연결하고 서버 접근 권한을<br>획득하세요.</p><a href='{discord_url}' class='btn-main'>Discord로 시작하기</a><div class='footer'>RESTORE PROTOCOL</div></div></body></html>"
+        return f"<html><head>{BASE_STYLE}</head><body><div class='card fade'><div class='logo-box'>S</div><h1>서버 보안 인증</h1><p class='subtitle'>계정을 연결하고 서버 접근 권한을<br>획득하세요</p><a href='{discord_url}' class='btn-main'>Discord로 시작하기</a><div class='footer'>RESTORE PROTOCOL</div></div></body></html>"
 
     async with aiohttp.ClientSession() as session:
-        payload = {{'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI}}
+        # 중복 괄호 {{}} 제거하여 TypeError 수정
+        payload = {
+            'client_id': CLIENT_ID, 
+            'client_secret': CLIENT_SECRET, 
+            'grant_type': 'authorization_code', 
+            'code': code, 
+            'redirect_uri': REDIRECT_URI
+        }
         async with session.post('https://discord.com/api/v10/oauth2/token', data=payload) as r:
             t_data = await r.json()
             access_token = t_data.get('access_token')
-            if not access_token: return "OAuth Error"
-            async with session.get('https://discord.com/api/v10/users/@me', headers={{'Authorization': f'Bearer {{access_token}}'}}) as r2:
+            if not access_token: return "인증 토큰을 가져오지 못했습니다"
+            
+            async with session.get('https://discord.com/api/v10/users/@me', headers={'Authorization': f'Bearer {access_token}'}) as r2:
                 u_info = await r2.json()
                 return f"""
                 <html><head>{BASE_STYLE}</head>
@@ -94,7 +127,7 @@ async def oauth_main(request: Request):
                     <div class="card fade">
                         <div class="logo-box">🔒</div>
                         <h1>보안 확인</h1>
-                        <p class="subtitle">Cloudflare 보안 시스템이<br>브라우저를 확인 중입니다.</p>
+                        <p class="subtitle">Cloudflare 보안 시스템이<br>브라우저를 확인 중입니다</p>
                         <div class="user-pill"><span>{u_info.get('username')}</span><a href="{discord_url}" style="color:#fff; text-decoration:none; font-weight:700;">변경</a></div>
                         <form action="/verify" method="post" style="width:100%;">
                             <input type="hidden" name="server_id" value="{server_id}"><input type="hidden" name="access_token" value="{access_token}"><input type="hidden" name="user_id" value="{u_info.get('id')}">
@@ -111,10 +144,11 @@ async def verify_turnstile(request: Request, server_id: str = Form(...), access_
     turnstile_response = form_data.get("cf-turnstile-response")
 
     async with aiohttp.ClientSession() as session:
-        verify_data = {{'secret': CF_TURNSTILE_SECRET_KEY, 'response': turnstile_response}}
+        verify_data = {'secret': CF_TURNSTILE_SECRET_KEY, 'response': turnstile_response}
         async with session.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data=verify_data) as resp:
             result = await resp.json()
             if result.get("success"):
+                # DB 저장
                 conn = sqlite3.connect('restore_user.db')
                 conn.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?)", (user_id, server_id, access_token))
                 conn.commit()
@@ -127,17 +161,17 @@ async def verify_turnstile(request: Request, server_id: str = Form(...), access_
                         <div id="loading-area" style="width:100%;">
                             <div class="logo-box">🔒</div>
                             <h1>보안 승인 중</h1>
-                            <p class="subtitle">서버 권한을 할당하고 있습니다.<br>잠시만 기다려 주세요.</p>
+                            <p class="subtitle">서버 권한을 할당하고 있습니다<br>잠시만 기다려 주세요</p>
                             <div class="progress-wrap">
                                 <div class="progress-bg"><div id="bar" class="progress-bar"></div></div>
-                                <div id="pct" class="pct">0%</div>
+                                <div id="pct" style="font-size:14px; font-weight:700;">0%</div>
                             </div>
                         </div>
                         <div id="success-area" style="display:none; width:100%;">
                             <div class="logo-box" style="background:#fff; color:#000;">✓</div>
                             <h1>인증 완료</h1>
-                            <p class="subtitle">보안 검사가 성공적으로 끝났습니다.</p>
-                            <div class="status-alert" style="text-align:center;">성공적으로 승인되었습니다.</div>
+                            <p class="subtitle">보안 검사가 성공적으로 끝났습니다</p>
+                            <div class="status-alert">성공적으로 승인되었습니다</div>
                             <div class="footer">SERVICE VOUT VERIFIED</div>
                         </div>
                     </div>
@@ -156,22 +190,26 @@ async def verify_turnstile(request: Request, server_id: str = Form(...), access_
                                 l.style.display = 'none';
                                 s.style.display = 'block';
                             }}
-                        }}, 40); // 40ms * 100 = 4000ms (4초)
+                        }}, 40);
                     </script>
                 </body></html>
                 """
-            else: return "검증 실패"
+            else: return "보안 검증에 실패했습니다"
 
 @bot.tree.command(name="인증하기", description="인증하기 컨테이너를 전송합니다")
 async def authenticate(it: discord.Interaction):
-    await it.response.send_message(content="✅ 인증하기가 전송되었습니다.", ephemeral=True)
+    # content와 view를 분리하여 400 에러 해결
+    await it.response.send_message(content="인증하기가 전송되었습니다", ephemeral=True)
+    
     res_con = ui.Container()
     res_con.accent_color = 0xffffff 
     res_con.add_item(ui.TextDisplay("## 서버 보안 인증"))
-    res_con.add_item(ui.TextDisplay("아래 버튼을 눌러 인증하셔야 서버 이용이 가능합니다.\\n**`IP, 이메일, 통신사`** 등은 일절 수집하지 않습니다."))
-    auth_url = f"https://discord.com/api/oauth2/authorize?client_id={{CLIENT_ID}}&redirect_uri={{REDIRECT_URI}}&response_type=code&scope=identify%20guilds.join&state={{it.guild_id}}"
+    res_con.add_item(ui.TextDisplay("아래 버튼을 눌러 인증하셔야 서버 이용이 가능합니다\\n**`IP, 이메일, 통신사`** 등은 일절 수집하지 않습니다"))
+    
+    auth_url = f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope=identify%20guilds.join&state={it.guild_id}"
     auth_btn = ui.Button(label="인증하기", url=auth_url, style=discord.ButtonStyle.link, emoji="<:emoji_14:1484745886696476702>")
     res_con.add_item(ui.ActionRow(auth_btn))
+    
     view = ui.LayoutView().add_item(res_con)
     await it.channel.send(view=view)
 
