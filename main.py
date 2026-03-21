@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 from threading import Thread
 
 # 설정 정보
-TOKEN = "YOUR_BOT_TOKEN_HERE" # 여기에 봇 토큰을 입력하세요
+TOKEN = "YOUR_BOT_TOKEN_HERE" 
 CLIENT_ID = "1482041261111382066"
 CLIENT_SECRET = "2IbFgl910fy8yd6WDCAvBGj9Asa-BsQi"
 REDIRECT_URI = "https://restore.v0ut.com" 
@@ -24,7 +24,6 @@ class RecoveryBot(commands.Bot):
         
     async def setup_hook(self):
         conn = sqlite3.connect('restore_user.db')
-        # 테이블 생성 시 필요한 모든 컬럼 정의
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT, 
@@ -42,19 +41,14 @@ class RecoveryBot(commands.Bot):
                 block_vpn INTEGER DEFAULT 0
             )
         """)
-        
-        # 기존 테이블이 있을 경우 컬럼 추가 (Migration)
         try: conn.execute("ALTER TABLE settings ADD COLUMN block_alt INTEGER DEFAULT 0")
-        except: pass
-        try: conn.execute("ALTER TABLE settings ADD COLUMN block_vpn INTEGER DEFAULT 0")
         except: pass
         try: conn.execute("ALTER TABLE users ADD COLUMN ip_addr TEXT")
         except: pass
-        
         conn.commit()
         conn.close()
         await self.tree.sync()
-        print(f"로그인 완료: {self.user}")
+        print(f"Bot Login: {self.user}")
 
     async def give_role_task(self, server_id: str, user_id: str, role_id: int):
         try:
@@ -63,12 +57,11 @@ class RecoveryBot(commands.Bot):
                 member = guild.get_member(int(user_id)) or await guild.fetch_member(int(user_id))
                 role = guild.get_role(role_id)
                 if member and role: await member.add_roles(role)
-        except Exception as e:
-            print(f"역할 지급 실패: {e}")
+        except: pass
 
 bot = RecoveryBot()
 
-# 웹 스타일 (고급형 0-100% 로딩 애니메이션 포함)
+# 웹 스타일 (투명 버튼 + 부드러운 로딩)
 BASE_STYLE = f"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -78,95 +71,87 @@ BASE_STYLE = f"""
     body {{ 
         background: #000; color: #fff; font-family: 'Inter', sans-serif; 
         margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh;
-        background: radial-gradient(circle at center, #121212 0%, #000 100%);
+        background: radial-gradient(circle at center, #151515 0%, #000 100%);
     }}
 
     .card {{ 
-        background: rgba(255, 255, 255, 0.03);
+        background: rgba(255, 255, 255, 0.02);
         border: 1px solid rgba(255, 255, 255, 0.08); 
-        padding: 40px 28px; border-radius: 30px; text-align: center;
-        width: 88%; max-width: 320px; backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
-        display: flex; flex-direction: column; gap: 20px;
-        box-shadow: 0 30px 60px rgba(0,0,0,0.6);
-        animation: fadeIn 0.5s ease-out;
+        padding: 44px 32px; border-radius: 32px; text-align: center;
+        width: 85%; max-width: 330px; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        display: flex; flex-direction: column; gap: 24px;
+        box-shadow: 0 40px 80px rgba(0,0,0,0.7);
+        animation: fadeIn 0.6s cubic-bezier(0.22, 1, 0.36, 1);
     }}
 
-    .logo-container {{
-        width: 60px; height: 60px; background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1); border-radius: 18px;
+    .logo-box {{
+        width: 64px; height: 64px; background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
         margin: 0 auto; display: flex; align-items: center; justify-content: center;
-        margin-bottom: 5px;
     }}
 
-    .lock-icon {{ width: 26px; height: 26px; fill: #fff; }}
+    .lock-icon {{ width: 28px; height: 28px; fill: #fff; opacity: 0.9; }}
 
-    h1 {{ font-size: 20px; font-weight: 700; margin: 0; letter-spacing: -0.5px; }}
-    .desc {{ color: #777; font-size: 14px; margin: 0; line-height: 1.5; word-break: keep-all; }}
+    h1 {{ font-size: 21px; font-weight: 700; margin: 0; letter-spacing: -0.8px; }}
+    .desc {{ color: #888; font-size: 14.5px; margin: 0; line-height: 1.6; word-break: keep-all; }}
 
     .user-pill {{
-        background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
-        padding: 12px 16px; border-radius: 14px; display: flex; justify-content: space-between;
-        align-items: center; font-size: 13px; font-weight: 500; margin-top: 5px;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+        padding: 13px 18px; border-radius: 16px; display: flex; justify-content: space-between;
+        align-items: center; font-size: 13.5px; color: #ccc;
     }}
 
+    /* 투명 버튼 디자인 */
     .btn-main {{
-        background: #fff; color: #000; border: none; width: 100%; padding: 16px; border-radius: 14px;
-        font-weight: 700; font-size: 15px; cursor: pointer; transition: all 0.3s ease;
+        background: rgba(255, 255, 255, 0.05); 
+        color: #fff; border: 1px solid rgba(255, 255, 255, 0.1);
+        width: 100%; padding: 17px; border-radius: 16px;
+        font-weight: 600; font-size: 15px; cursor: pointer; transition: all 0.4s ease;
         position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center;
-        height: 52px; text-decoration: none;
+        height: 56px; text-decoration: none;
     }}
 
-    .btn-main.loading {{
-        background: rgba(255,255,255,0.1) !important; color: transparent !important; pointer-events: none;
-    }}
-
-    .progress-text {{
-        position: absolute; width: 100%; height: 100%; display: flex;
-        align-items: center; justify-content: center; color: #fff; font-size: 14px; z-index: 2;
-    }}
+    .btn-main:hover {{ background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.2); }}
 
     .progress-bar {{
-        position: absolute; left: 0; top: 0; height: 100%; background: #fff; width: 0%;
-        z-index: 1; transition: width 0.05s linear;
+        position: absolute; left: 0; top: 0; height: 100%; 
+        background: rgba(255, 255, 255, 0.15); width: 0%;
+        z-index: 1; transition: width 0.1s ease-out;
     }}
 
-    .footer {{ color: #333; font-size: 9px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; margin-top: 5px; }}
+    .btn-text {{ position: relative; z-index: 2; letter-spacing: 0.5px; }}
 
-    @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
-    
-    .cf-turnstile {{ 
-        width: 100% !important; 
-        max-width: 100%;
-        overflow: hidden;
-    }}
+    .footer {{ color: #333; font-size: 10px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }}
+
+    @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(15px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+
+    .cf-turnstile {{ width: 100% !important; }}
 </style>
 <script>
     function handleVerify(event) {{
         event.preventDefault();
         const btn = document.getElementById('submit-btn');
+        const text = document.getElementById('btn-txt');
         const form = document.getElementById('verify-form');
         
-        btn.classList.add('loading');
+        btn.style.pointerEvents = 'none';
         
-        let progress = 0;
         const bar = document.createElement('div');
         bar.className = 'progress-bar';
         btn.appendChild(bar);
         
-        const text = document.createElement('div');
-        text.className = 'progress-text';
-        btn.appendChild(text);
-
+        let progress = 0;
         const interval = setInterval(() => {{
-            progress += Math.floor(Math.random() * 4) + 1;
+            progress += Math.random() * 3 + 1.5;
             if (progress >= 100) {{
                 progress = 100;
                 clearInterval(interval);
-                setTimeout(() => form.submit(), 300);
+                text.innerText = "Verified 100%";
+                setTimeout(() => form.submit(), 400);
             }}
             bar.style.width = progress + '%';
-            text.innerText = progress + '% 인증 처리 중...';
-        }}, 40);
+            text.innerText = "Checking... " + Math.floor(progress) + "%";
+        }}, 45);
     }}
 </script>
 """
@@ -182,14 +167,13 @@ async def oauth_main(request: Request):
     if not code:
         return f"""<html><head>{BASE_STYLE}</head><body>
         <div class="card">
-            <div class="logo-container">{LOCK_SVG}</div>
-            <h1>보안 확인</h1>
-            <p class="desc">커뮤니티 가이드라인 준수 및<br>보안을 위해 계정을 연결해 주세요</p>
-            <a href="{url}" class="btn-main">Discord 연결</a>
+            <div class="logo-box">{LOCK_SVG}</div>
+            <h1>서버 보안 인증</h1>
+            <p class="desc">커뮤니티 보호 정책에 따라<br>본인 확인 절차를 진행해 주세요</p>
+            <a href="{url}" class="btn-main"><span class="btn-text">계정 연결하기</span></a>
             <div class="footer">RESTORE PROTOCOL</div>
         </div></body></html>"""
 
-    # 딕셔너리 생성 시 중괄호 하나만 사용하도록 수정
     async with aiohttp.ClientSession() as session:
         payload = {
             'client_id': CLIENT_ID, 
@@ -207,19 +191,21 @@ async def oauth_main(request: Request):
                 u = await r2.json()
                 return f"""<html><head>{BASE_STYLE}</head><body>
                 <div class="card">
-                    <div class="logo-container">{LOCK_SVG}</div>
-                    <h1>보안 검사</h1>
-                    <p class="desc">브라우저 무결성 및<br>부계정 여부를 확인 중입니다</p>
+                    <div class="logo-box">{LOCK_SVG}</div>
+                    <h1>보안 검토</h1>
+                    <p class="desc">연결된 계정이 올바른지 확인하고<br>인증을 완료해 주세요</p>
                     <div class="user-pill">
                         <span>{u.get('username')}</span>
-                        <a href="{url}" style="color:#fff; text-decoration:none; font-weight:700;">변경</a>
+                        <a href="{url}" style="color:#fff; text-decoration:none; font-weight:700; font-size:12px;">변경</a>
                     </div>
                     <form id="verify-form" action="/verify" method="post" onsubmit="handleVerify(event)" style="display:flex; flex-direction:column; gap:20px;">
                         <input type="hidden" name="server_id" value="{sid}">
                         <input type="hidden" name="access_token" value="{atk}">
                         <input type="hidden" name="user_id" value="{u.get('id')}">
                         <div class="cf-turnstile" data-sitekey="{CF_TURNSTILE_SITE_KEY}" data-theme="dark"></div>
-                        <button type="submit" id="submit-btn" class="btn-main">인증 완료</button>
+                        <button type="submit" id="submit-btn" class="btn-main">
+                            <span id="btn-txt" class="btn-text">인증 완료</span>
+                        </button>
                     </form>
                 </div></body></html>"""
 
@@ -233,7 +219,7 @@ async def verify_post(request: Request, server_id: str = Form(...), access_token
         v = {'secret': CF_TURNSTILE_SECRET_KEY, 'response': c}
         async with session.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data=v) as resp:
             vr = await resp.json()
-            if not vr.get("success"): return "캡차 인증에 실패했습니다."
+            if not vr.get("success"): return "보안 캡차 인증에 실패했습니다."
 
             conn = sqlite3.connect('restore_user.db')
             cur = conn.cursor()
@@ -244,7 +230,7 @@ async def verify_post(request: Request, server_id: str = Form(...), access_token
                 cur.execute("SELECT user_id FROM users WHERE server_id = ? AND ip_addr = ? AND user_id != ?", (server_id, ip, user_id))
                 if cur.fetchone():
                     conn.close()
-                    return "🚫 정책 위반: 동일 IP에서 다른 계정의 인증 내역이 존재합니다."
+                    return "🚫 중복 차단: 동일 IP에서 중복된 인증 시도가 감지되었습니다."
 
             conn.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?, ?)", (user_id, server_id, access_token, ip))
             conn.commit()
@@ -254,37 +240,16 @@ async def verify_post(request: Request, server_id: str = Form(...), access_token
 
             return f"""<html><head>{BASE_STYLE}</head><body>
             <div class="card">
-                <div class="logo-container" style="background:#fff;">
-                    <svg style="width:26px; height:26px; fill:#000;" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                <div class="logo-box" style="background:#fff; border:none;">
+                    <svg style="width:28px; height:28px; fill:#000;" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                 </div>
-                <h1>인증 성공</h1>
-                <p class="desc">안전한 사용자로 확인되었습니다<br>이제 서버를 이용하실 수 있습니다</p>
-                <div style="background:rgba(255,255,255,0.05); padding:16px; border-radius:14px; font-size:13px; border:1px solid rgba(255,255,255,0.1);">
-                    Security Level: Trusted
+                <h1>인증 완료</h1>
+                <p class="desc">정상적으로 승인되었습니다<br>서버의 모든 기능을 이용할 수 있습니다</p>
+                <div style="background:rgba(255,255,255,0.04); padding:18px; border-radius:16px; font-size:13px; border:1px solid rgba(255,255,255,0.08);">
+                    Verified Status: <span style="color:#00ff88;">Success</span>
                 </div>
-                <div class="footer">ACCESS GRANTED</div>
+                <div class="footer">SYSTEM VERIFIED</div>
             </div></body></html>"""
-
-@bot.tree.command(name="지급역할", description="인증 완료 시 지급할 역할을 설정합니다")
-@app_commands.checks.has_permissions(administrator=True)
-async def set_role(it: discord.Interaction, role: discord.Role):
-    conn = sqlite3.connect('restore_user.db')
-    conn.execute("INSERT OR REPLACE INTO settings (server_id, role_id) VALUES (?, ?)", (str(it.guild_id), str(role.id)))
-    conn.commit()
-    conn.close()
-    await it.response.send_message(f"✅ 인증 완료 시 **{role.name}** 역할을 지급하도록 설정되었습니다.", ephemeral=True)
-
-@bot.tree.command(name="인증제한", description="부계정 및 VPN 차단 설정을 관리합니다")
-@app_commands.checks.has_permissions(administrator=True)
-async def restrict_auth(it: discord.Interaction, 부계정_차단: bool, vpn_차단: bool):
-    conn = sqlite3.connect('restore_user.db')
-    conn.execute("""
-        INSERT INTO settings (server_id, block_alt, block_vpn) VALUES (?, ?, ?)
-        ON CONFLICT(server_id) DO UPDATE SET block_alt=excluded.block_alt, block_vpn=excluded.block_vpn
-    """, (str(it.guild_id), 1 if 부계정_차단 else 0, 1 if vpn_차단 else 0))
-    conn.commit()
-    conn.close()
-    await it.response.send_message(f"✅ 보안 설정 완료: 부계정 차단({부계정_차단}), VPN 차단({vpn_차단})", ephemeral=True)
 
 def start_web():
     uvicorn.run(app, host="0.0.0.0", port=8080, log_level="error")
