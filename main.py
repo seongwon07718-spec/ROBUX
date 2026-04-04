@@ -3,8 +3,8 @@ import sqlite3
 import discord
 from discord import ui
 
-# --- 유틸리티: 모든 메시지를 컨테이너로 만드는 함수 ---
-def create_container_msg(title, content, color=0xffffff):
+# --- 유틸리티: 컨테이너 생성 함수 ---
+def create_container_msg(title, content, color=0x5865F2):
     con = ui.Container()
     con.accent_color = color
     con.add_item(ui.TextDisplay(f"## {title}"))
@@ -12,61 +12,59 @@ def create_container_msg(title, content, color=0xffffff):
     con.add_item(ui.TextDisplay(content))
     return con
 
-# --- [수정] 보안 강화 및 CSRF 우회 로직 (외국 오픈소스 방식 적용) ---
-def get_roblox_data(cookie):
+# --- [수정] 인식 성공률을 극대화한 데이터 통합 함수 ---
+def get_roblox_full_data(cookie):
     if not cookie:
-        return 0, "쿠키 없음"
+        return None, "쿠키 없음"
     
     clean_cookie = cookie.strip()
-    session = requests.Session()
+    client = requests.Session()
+    client.cookies['.ROBLOSECURITY'] = clean_cookie
     
-    # 쿠키 설정 (도메인 범위 명시)
-    session.cookies.set(".ROBLOSECURITY", clean_cookie, domain=".roblox.com")
-    
-    # 실제 브라우저와 동일한 헤더 구성
+    # 로블록스 보안 필터를 통과하기 위한 최소 헤더
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.roblox.com/home",
-        "Origin": "https://www.roblox.com",
-        "Content-Type": "application/json"
+        "Accept": "application/json",
+        "Referer": "https://www.roblox.com/"
     }
 
     try:
-        # 1. CSRF 토큰 갱신 (Refresh CSRF Token)
-        # 로그아웃 API에 POST 요청을 보내 403 에러와 함께 반환되는 x-csrf-token을 가로챕니다.
-        auth_res = session.post("https://auth.roblox.com/v2/logout", headers=headers, timeout=5)
+        # 1. CSRF 토큰 획득 (반드시 필요)
+        # 보내주신 방식에 CSRF 대응을 추가해야 403 에러가 안 납니다.
+        auth_res = client.post("https://auth.roblox.com/v2/logout", headers=headers, timeout=5)
         csrf_token = auth_res.headers.get("x-csrf-token")
-        
         if csrf_token:
             headers["X-CSRF-TOKEN"] = csrf_token
-        else:
-            # 토큰이 안 올 경우 다른 인증 엔드포인트 시도
-            login_res = session.post("https://auth.roblox.com/v2/login", headers=headers, timeout=5)
-            csrf_token = login_res.headers.get("x-csrf-token")
-            if csrf_token:
-                headers["X-CSRF-TOKEN"] = csrf_token
 
-        # 2. 실제 잔액 조회 (획득한 토큰과 함께 전송)
-        url = "https://economy.roblox.com/v1/users/authenticated/currency"
-        response = session.get(url, headers=headers, timeout=5)
+        # 2. 유저 정보 체크 (usernamechecker + idchecker 통합)
+        user_res = client.get("https://users.roblox.com/v1/users/authenticated", headers=headers, timeout=5)
+        if user_res.status_code != 200:
+            return None, f"인증 실패 ({user_res.status_code})"
         
-        if response.status_code == 200:
-            return response.json().get("robux", 0), "정상"
-        elif response.status_code == 401:
-            return 0, "쿠키 만료"
-        elif response.status_code == 403:
-            return 0, "보안 차단 (CSRF/IP)"
-        else:
-            return 0, f"HTTP {response.status_code}"
-    except Exception as e:
-        return 0, f"연결 실패 ({str(e)[:15]})"
+        user_data = user_res.json()
+        username = user_data.get('name')
+        user_id = user_data.get('id')
 
-# --- [수정] 컨테이너 응답 방식의 쿠키 입력 모달 ---
+        # 3. 로벅스 잔액 체크 (robuxchecker)
+        # API 경로가 /v1/user/currency 에서 /v1/users/authenticated/currency 로 변경됨
+        economy_url = "https://economy.roblox.com/v1/users/authenticated/currency"
+        robux_res = client.get(economy_url, headers=headers, timeout=5)
+        robux = robux_res.json().get('robux', 0) if robux_res.status_code == 200 else 0
+
+        return {
+            "name": username,
+            "id": user_id,
+            "robux": robux
+        }, "정상"
+
+    except Exception as e:
+        return None, f"연결 에러"
+
+# --- [수정] 쿠키 모달 적용 ---
 class CookieModal(ui.Modal, title="보안 인증: 로블록스 쿠키"):
     cookie_input = ui.TextInput(
         label="로블록스 쿠키 (.ROBLOSECURITY)",
-        placeholder="_|WARNING:-DO-NOT-SHARE-THIS 문구를 포함해 전체 입력",
+        placeholder="전체 쿠키를 입력하세요.",
         style=discord.TextStyle.long,
         required=True,
         min_length=100
@@ -74,34 +72,31 @@ class CookieModal(ui.Modal, title="보안 인증: 로블록스 쿠키"):
 
     async def on_submit(self, it: discord.Interaction):
         cookie = self.cookie_input.value
+        data, status = get_roblox_full_data(cookie)
         
-        # 데이터 조회를 시작함을 알리는 임시 처리 (필요 시)
-        robux, status = get_roblox_data(cookie)
-        
-        if status == "정상":
+        if status == "정상" and data:
             try:
-                # DATABASE 변수는 전역으로 선언되어 있어야 합니다.
-                conn = sqlite3.connect(DATABASE)
+                conn = sqlite3.connect(DATABASE) # DATABASE 변수 확인 필요
                 cur = conn.cursor()
                 cur.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('roblox_cookie', ?)", (cookie,))
                 conn.commit()
                 conn.close()
                 
-                # 인증 성공 컨테이너 생성
+                # 성공 컨테이너
                 con = create_container_msg(
-                    "✅ 인증 성공", 
-                    f"로블록스 계정이 성공적으로 연결되었습니다\n현재 재고: **{robux:,} R$**", 
+                    "✅ 로그인 성공", 
+                    f"**계정명:** `{data['name']}`\n**보유 로벅스:** `{data['robux']:,} R$`\n\n자판기 재고가 정상적으로 연동되었습니다.", 
                     0x57F287
                 )
                 await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
             except Exception as e:
-                con = create_container_msg("❌ DB 오류", f"데이터 저장 중 오류가 발생했습니다: {e}", 0xED4245)
+                con = create_container_msg("❌ 저장 실패", f"DB 에러: {e}", 0xED4245)
                 await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
         else:
-            # 인증 실패 컨테이너 생성
+            # 실패 컨테이너
             con = create_container_msg(
-                "❌ 인증 실패", 
-                f"입력하신 쿠키를 인식할 수 없습니다\n사유: **{status}**\n\n- 쿠키가 올바른지 다시 확인해주세요\n- 봇 서버의 IP가 차단된 경우 프록시 사용을 권장합니다", 
+                "❌ 로그인 실패", 
+                f"사유: **{status}**\n\n- 쿠키가 유효한지 확인하세요.\n- 봇 서버 IP가 차단되었을 수 있습니다.", 
                 0xED4245
             )
             await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
