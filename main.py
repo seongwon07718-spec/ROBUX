@@ -18,94 +18,146 @@ def get_container_view(title, description, color=0x5865F2):
     view.add_item(con)
     return view
 
-# --- [강화] 3중 체크 및 정밀 상세 조회 ---
+# --- [정밀] 상세 정보 조회 (이름, 판매자, 가격 100% 추출) ---
 def fetch_gamepass_details(pass_id, admin_cookie=None):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json"
     }
     cookies = {".ROBLOSECURITY": admin_cookie} if admin_cookie else {}
 
-    # 1단계: Economy API (가장 정확함)
     try:
-        url1 = f"https://economy.roblox.com/v1/game-passes/{pass_id}/details"
-        res1 = requests.get(url1, headers=headers, cookies=cookies, timeout=5)
-        if res1.status_code == 200:
-            data = res1.json()
+        # 가장 데이터가 풍부한 Economy API 사용
+        url = f"https://economy.roblox.com/v1/game-passes/{pass_id}/details"
+        res = requests.get(url, headers=headers, cookies=cookies, timeout=5)
+        
+        if res.status_code == 200:
+            data = res.json()
+            # 필드명이 대문자로 시작하는 경우가 많으므로 정확히 매칭
             return {
-                "id": pass_id, "name": data.get("Name"), "price": data.get("PriceInRobux") or 0,
-                "sellerId": data.get("Creator", {}).get("Id"), "productId": data.get("ProductId"), "isForSale": data.get("IsForSale")
+                "id": pass_id,
+                "name": data.get("Name", "알 수 없는 상품"),
+                "price": data.get("PriceInRobux") or 0,
+                "sellerName": data.get("Creator", {}).get("Name", "알 수 없는 판매자"),
+                "sellerId": data.get("Creator", {}).get("Id"),
+                "productId": data.get("ProductId"),
+                "isForSale": data.get("IsForSale", False)
             }
-    except: pass
-
-    # 2단계: Apis v1 (백업용)
-    try:
-        url2 = f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/details"
-        res2 = requests.get(url2, headers=headers, cookies=cookies, timeout=5)
-        if res2.status_code == 200:
-            data = res2.json()
-            return {
-                "id": pass_id, "name": data.get("name"), "price": data.get("price") or 0,
-                "sellerId": data.get("creatorId"), "productId": data.get("productId"), "isForSale": True
-            }
-    except: pass
-
+    except Exception as e:
+        print(f"조회 에러: {e}")
     return None
 
-# --- [강화] 링크에서 게임패스 ID만 정밀 추출하는 함수 ---
-def extract_pass_id(input_str):
-    # 1. 링크 형태일 때 (roblox.com/game-pass/123456/...)
-    link_match = re.search(r'game-pass/(\d+)', input_str)
-    if link_match:
-        return link_match.group(1)
-    
-    # 2. 카탈로그 링크 형태일 때 (roblox.com/catalog/123456/...)
-    catalog_match = re.search(r'catalog/(\d+)', input_str)
-    if catalog_match:
-        return catalog_match.group(1)
+# --- 구매 실행 로직 (CSRF 포함) ---
+def execute_purchase(cookie, info):
+    session = requests.Session()
+    session.cookies.set(".ROBLOSECURITY", cookie, domain=".roblox.com")
+    headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
+    try:
+        # CSRF 토큰 갱신
+        auth_res = session.post("https://auth.roblox.com/v2/logout", headers=headers)
+        token = auth_res.headers.get("x-csrf-token")
+        if not token: return False, "토큰 획득 실패"
+        headers["X-CSRF-TOKEN"] = token
 
-    # 3. 그냥 숫자만 있을 때
-    nums = re.findall(r'\d+', input_str)
-    if nums:
-        # 가장 긴 숫자를 ID로 추정 (보통 게임패스 ID는 김)
-        return max(nums, key=len)
-    
-    return None
+        # 실제 구매 API
+        buy_url = f"https://economy.roblox.com/v1/purchases/products/{info['productId']}"
+        payload = {
+            "expectedCurrency": 1, 
+            "expectedPrice": info['price'], 
+            "expectedSellerId": info['sellerId']
+        }
+        buy_res = session.post(buy_url, headers=headers, json=payload, timeout=10)
+        
+        if buy_res.status_code == 200:
+            res_json = buy_res.json()
+            if res_json.get("purchased"): return True, "성공"
+            return False, res_json.get("reason", "구매 거부됨")
+        return False, f"HTTP {buy_res.status_code}"
+    except Exception as e:
+        return False, str(e)
 
-# --- 구매 실행 및 모달 클래스 ---
+# --- [수정] 버튼 작동이 확실한 확인 뷰 ---
 class GamepassConfirmView(ui.LayoutView):
     def __init__(self, info, money, user_id, cookie):
         super().__init__(timeout=120)
-        self.info, self.money, self.user_id, self.cookie = info, money, str(user_id), cookie
+        self.info = info
+        self.money = money
+        self.user_id = str(user_id)
+        self.cookie = cookie
 
     async def build(self):
         con = ui.Container()
         con.accent_color = 0x5865F2
-        desc = f"**상품**: `{self.info['name']}`\n**가격**: `{self.info['price']} R$`\n**결제**: `{self.money:,}원`"
-        con.add_item(ui.TextDisplay(f"### 🛒 구매 확인\n{desc}"))
+        
+        # 정보 출력 레이아웃
+        info_text = (
+            f"**📦 상품명**: `{self.info['name']}`\n"
+            f"**👤 판매자**: `{self.info['sellerName']}`\n"
+            f"**💰 가격**: `{self.info['price']:,} R$`\n"
+            f"**💳 결제 예정**: `{self.money:,}원`"
+        )
+        con.add_item(ui.TextDisplay(f"### 🛒 구매 정보 확인\n{info_text}"))
+        
+        # 버튼 액션 로우
         row = ui.ActionRow()
-        btn = ui.Button(label="구매 확정", style=discord.ButtonStyle.success)
-        btn.callback = self.self_confirm
-        row.add_item(btn)
+        
+        # 확정 버튼
+        btn_confirm = ui.Button(label="구매 확정", style=discord.ButtonStyle.success, emoji="✅")
+        btn_confirm.callback = self.on_confirm_click # 콜백 연결
+        
+        # 취소 버튼
+        btn_cancel = ui.Button(label="취소하기", style=discord.ButtonStyle.danger, emoji="✖️")
+        btn_cancel.callback = self.on_cancel_click # 콜백 연결
+        
+        row.add_item(btn_confirm)
+        row.add_item(btn_cancel)
         con.add_item(row)
-        self.clear_items(); self.add_item(con)
+        
+        self.clear_items()
+        self.add_item(con)
         return self
 
-    async def self_confirm(self, it: discord.Interaction):
-        # (기존 execute_purchase 로직 실행 부분... 중략)
-        pass
+    # 확정 버튼 클릭 시 실행
+    async def on_confirm_click(self, it: discord.Interaction):
+        conn = sqlite3.connect(DATABASE)
+        cur = conn.cursor()
+        cur.execute("SELECT balance FROM users WHERE user_id = ?", (self.user_id,))
+        row = cur.fetchone()
 
-class GamepassModal(ui.Modal, title="로블록스 게임패스 구매"):
-    id_input = ui.TextInput(label="게임패스 ID 또는 링크", placeholder="여기에 붙여넣으세요.", required=True)
+        if not row or row[0] < self.money:
+            conn.close()
+            return await it.response.edit_message(view=get_container_view("❌ 잔액 부족", "충전 후 이용해 주세요.", 0xED4245))
+
+        await it.response.edit_message(view=get_container_view("⌛ 처리 중", "로블록스 서버와 통신 중입니다...", 0xFEE75C))
+
+        success, msg = execute_purchase(self.cookie, self.info)
+        
+        if success:
+            order_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
+            cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (self.money, self.user_id))
+            cur.execute("INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'SUCCESS')",
+                        (order_id, self.user_id, self.money, self.info['price']))
+            conn.commit()
+            await it.edit_original_response(view=get_container_view("✅ 구매 성공", f"주문번호: `{order_id}`\n성공적으로 지급되었습니다.", 0x57F287))
+        else:
+            await it.edit_original_response(view=get_container_view("❌ 구매 실패", f"사유: `{msg}`", 0xED4245))
+        conn.close()
+
+    # 취소 버튼 클릭 시 실행
+    async def on_cancel_click(self, it: discord.Interaction):
+        await it.response.edit_message(view=get_container_view("취소됨", "구매 요청이 취소되었습니다.", 0x99AAB5))
+
+# --- 모달 클래스 ---
+class GamepassModal(ui.Modal, title="게임패스 구매 정보 입력"):
+    id_input = ui.TextInput(label="게임패스 ID 또는 링크", placeholder="여기에 입력하세요.", required=True)
 
     async def on_submit(self, it: discord.Interaction):
         raw_val = self.id_input.value.strip()
+        nums = re.findall(r'\d+', raw_val)
+        if not nums:
+            return await it.response.send_message(view=get_container_view("❌ 오류", "ID를 인식할 수 없습니다.", 0xED4245), ephemeral=True)
         
-        # [핵심] ID 추출 로직 호출
-        pass_id = extract_pass_id(raw_val)
-        
-        if not pass_id:
-            return await it.response.send_message(view=get_container_view("❌ 인식 오류", "올바른 ID나 링크를 입력해주세요.", 0xED4245), ephemeral=True)
+        pass_id = max(nums, key=len)
 
         conn = sqlite3.connect(DATABASE)
         cur = conn.cursor()
@@ -115,17 +167,15 @@ class GamepassModal(ui.Modal, title="로블록스 게임패스 구매"):
         r_row = cur.fetchone()
         conn.close()
 
-        admin_cookie = c_row[0] if c_row else None
-        
-        # 정보 조회 (3중 체크)
-        info = fetch_gamepass_details(pass_id, admin_cookie)
-        
+        if not c_row:
+            return await it.response.send_message(view=get_container_view("❌ 설정 오류", "쿠키가 등록되지 않았습니다.", 0xED4245), ephemeral=True)
+
+        info = fetch_gamepass_details(pass_id, c_row[0])
         if not info:
-            # 404 로그가 남지 않도록 여기서 상세 처리
-            return await it.response.send_message(view=get_container_view("❌ 찾을 수 없음", f"ID `{pass_id}`에 해당하는 게임패스 정보를 불러올 수 없습니다.\n판매 중인지 확인해주세요.", 0xED4245), ephemeral=True)
+            return await it.response.send_message(view=get_container_view("❌ 정보 없음", "해당 ID의 정보를 가져올 수 없습니다.", 0xED4245), ephemeral=True)
 
         rate = int(r_row[0]) if r_row else 1000
         money = int((info['price'] / rate) * 10000)
 
-        view_obj = GamepassConfirmView(info, money, it.user.id, admin_cookie)
+        view_obj = GamepassConfirmView(info, money, it.user.id, c_row[0])
         await it.response.send_message(view=await view_obj.build(), ephemeral=True)
