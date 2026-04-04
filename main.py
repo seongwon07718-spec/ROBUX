@@ -1,61 +1,50 @@
 import requests
 
-def get_roblox_balance(cookie):
-    # 1. 세션 생성 및 초기 설정
+def roblox_login_global(cookie):
+    # 1. 초기 설정 (공백/따옴표 제거는 필수)
+    auth_cookie = cookie.strip().strip('"').strip("'")
+    
+    # 해외 봇들이 사용하는 표준 세션 구성
     session = requests.Session()
+    session.cookies.set(".ROBLOSECURITY", auth_cookie, domain=".roblox.com")
     
-    # 쿠키에서 불필요한 따옴표나 공백 완벽 제거
-    clean_cookie = cookie.strip().strip('"').strip("'")
-    
-    # 세션에 쿠키 탑재 (공식 방식)
-    session.cookies.set(".ROBLOSECURITY", clean_cookie, domain=".roblox.com")
-    
-    # RoProxy를 사용해 보안 차단 우회 (도메인만 변경)
-    BASE_URL = "roproxy.com"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    # [중요] 해외 서버 우회용 RoProxy 사용 (직접 연결 시 차단될 확률 90%)
+    # 만약 본인 PC(한국 IP)에서 직접 돌릴 거라면 roproxy.com을 roblox.com으로 바꾸세요.
+    target_domain = "roproxy.com" 
+
+    standard_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept": "application/json",
-        "Content-Type": "application/json"
+        "Referer": f"https://www.{target_domain}/"
     }
 
     try:
-        # 2. X-CSRF-TOKEN 획득 (공식 가이드 Step 2)
-        # 로그아웃 API에 빈 POST를 날려 403 에러와 함께 토큰을 낚아챕니다.
-        auth_url = f"https://auth.{BASE_URL}/v2/logout"
-        auth_res = session.post(auth_url, headers=headers)
-        
-        # 헤더에서 토큰 추출
-        csrf_token = auth_res.headers.get("x-csrf-token")
-        
-        if not csrf_token:
-            # 토큰이 안 오면 쿠키가 이미 유효하지 않은 상태일 확률이 매우 높음
-            return 0, "CSRF 토큰 획득 실패 (쿠키 유효성 확인 필요)"
+        # STEP 1: CSRF 토큰 탈취 (해외 개발자들의 '국룰' 방식)
+        # 로블록스는 POST 요청 시 토큰이 없으면 403 에러와 함께 헤더에 토큰을 실어 보냅니다.
+        token_response = session.post(f"https://auth.{target_domain}/v2/logout", headers=standard_headers)
+        x_token = token_response.headers.get("x-csrf-token")
 
-        # 세션 헤더에 토큰 고정 (이후 모든 요청에 자동 포함)
-        session.headers.update({"X-CSRF-TOKEN": csrf_token})
-        
-        # 3. 인증된 사용자 정보 확인 (공식 가이드 예시)
-        # 먼저 로그인이 잘 되었는지(내 계정 정보가 뜨는지) 확인
-        user_url = f"https://users.{BASE_URL}/v1/users/authenticated"
-        user_res = session.get(user_url, headers=headers)
-        
-        if user_res.status_code != 200:
-            return 0, f"인증 실패 (상태 코드: {user_res.status_code})"
+        if not x_token:
+            return "토큰 획득 실패: 쿠키가 이미 죽었거나 IP가 블랙리스트입니다."
 
-        # 4. 최종 로벅스 잔액 가져오기
-        economy_url = f"https://economy.{BASE_URL}/v1/users/authenticated/currency"
-        response = session.get(economy_url, headers=headers)
-        
-        if response.status_code == 200:
-            return response.json().get("robux", 0), "성공"
+        # 세션 전체에 토큰 고정
+        session.headers.update({"X-CSRF-TOKEN": x_token})
+
+        # STEP 2: 실제 데이터 호출 (잔액 확인)
+        economy_url = f"https://economy.{target_domain}/v1/users/authenticated/currency"
+        final_res = session.get(economy_url, headers=standard_headers)
+
+        if final_res.status_code == 200:
+            data = final_res.json()
+            return f"성공! 잔액: {data.get('robux', 0)} Robux"
+        elif final_res.status_code == 401:
+            return "실패: 쿠키 무효화 (IP 불일치 가능성)"
         else:
-            return 0, f"잔액 조회 실패 ({response.status_code})"
+            return f"실패: 보안 차단 ({final_res.status_code})"
 
     except Exception as e:
-        return 0, f"오류 발생: {str(e)}"
+        return f"연결 오류: {str(e)}"
 
-# 사용법
-# my_cookie = "여기에 쿠키 전체 복사"
-# robux, status = get_roblox_balance(my_cookie)
-# print(f"결과: {robux} 로벅스 / 상태: {status}")
+# --- 실행부 ---
+# COOKIE = "여기에 전체 쿠키 입력"
+# print(roblox_login_global(COOKIE))
