@@ -7,18 +7,17 @@ if __name__ == "__main__":
         row = cur.fetchone()
     
     api = RobloxAPI(row[0] if row else None)
-    
-    # Jailbreak universe_id = 606849621 (게임패스 많은 유명 게임)
-    universe_id = 606849621
+    universe_id = 606849621  # Jailbreak
     
     urls = [
-        f"https://games.roblox.com/v1/games/{universe_id}/game-passes?limit=100",
-        f"https://www.roblox.com/games/{universe_id}/game-pass/get-game-passes?pageNumber=1",
-        f"https://apis.roblox.com/universes/v1/{universe_id}/game-passes?limit=100",
+        # ✅ 2025년 8월 이후 공식 새 엔드포인트
+        f"https://apis.roblox.com/game-passes/v1/universes/{universe_id}/game-passes?passView=Full&limit=100",
+        # ✅ roproxy 경유
+        f"https://apis.roproxy.com/game-passes/v1/universes/{universe_id}/game-passes?passView=Full&limit=100",
     ]
     
     for url in urls:
         resp = api.session.get(url)
         print(f"\nURL: {url}")
         print(f"status: {resp.status_code}")
-        print(f"body: {resp.text[:400]}")
+        print(f"body: {resp.text[:500]}")
