@@ -4,30 +4,40 @@ def check_roblox_login(cookie):
     if not cookie:
         return False, "쿠키 없음"
     
-    # 1. 쿠키 전처리
+    # 1. 쿠키 전처리 (공백 및 따옴표 제거)
     auth_cookie = cookie.strip().strip('"').strip("'")
+    
+    # .ROBLOSECURITY= 문구가 이미 포함되어 있는지 확인 후 처리
+    if not auth_cookie.startswith(".ROBLOSECURITY="):
+        full_cookie = f".ROBLOSECURITY={auth_cookie}"
+    else:
+        full_cookie = auth_cookie
     
     session = requests.Session()
     
     # 2. 브라우저 헤더 설정
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Cookie": f".ROBLOSECURITY={auth_cookie}",
+        "Cookie": full_cookie,
         "Accept": "application/json",
-        "Referer": "https://roblox.com"
     }
 
     try:
-        # 3. 내 계정 정보 가져오는 API (가장 가볍고 보안이 덜함)
-        # 이 API는 CSRF 토큰(X-CSRF-TOKEN)이 필요 없어서 로그인 체크용으로 최고임
-        user_info_url = "https://roblox.com"
+        # 3. 실제 유저 인증 정보를 반환하는 API 주소로 수정
+        user_info_url = "https://users.roblox.com/v1/users/authenticated"
         response = session.get(user_info_url, headers=headers, timeout=10)
 
         if response.status_code == 200:
             user_data = response.json()
             user_name = user_data.get('name', 'Unknown')
             user_id = user_data.get('id', 'Unknown')
-            return True, f"로그인 성공! (계정명: {user_name}, ID: {user_id})"
+            
+            # 4. 로그인 성공 시 로벅스 정보까지 가져오기 (선택 사항)
+            economy_url = f"https://economy.roblox.com/v1/users/{user_id}/currency"
+            economy_res = session.get(economy_url, headers=headers, timeout=5)
+            robux = economy_res.json().get('robux', 0) if economy_res.status_code == 200 else "정보 없음"
+            
+            return True, f"로그인 성공! (계정명: {user_name}, ID: {user_id}, 로벅스: {robux})"
         
         elif response.status_code == 401:
             return False, "쿠키가 만료되었거나 틀림 (Unauthorized)"
@@ -36,12 +46,13 @@ def check_roblox_login(cookie):
             return False, f"서버 거부 (HTTP {response.status_code})"
 
     except Exception as e:
-        return False, f"연결 오류: {str(e)[:20]}"
+        # 에러 메시지를 조금 더 상세히 출력하도록 수정
+        return False, f"연결 오류: {str(e)}"
 
-# --- VS Code 실행부 ---
+# --- 실행부 ---
 if __name__ == "__main__":
-    # 여기에 복사한 쿠키를 넣으세요
-    my_cookie = "_|WARNING:-DO-NOT-SHARE-..." 
+    # 반드시 _|WARNING:-DO-NOT-SHARE- 로 시작하는 전체 쿠키를 넣으세요.
+    my_cookie = "여기에_복사한_쿠키_입력" 
     
     success, message = check_roblox_login(my_cookie)
     
