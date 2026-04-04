@@ -1,35 +1,13 @@
-def fetch_gamepass_price(pass_id, admin_cookie=None):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
-    }
-    cookies = {".ROBLOSECURITY": admin_cookie} if admin_cookie else {}
+    # 모달 내부 on_submit 예시
+    pass_id = extract_pass_id(raw_val) # 알렉스님이 보내준 사진의 그 함수
     
-    try:
-        # 1순위: 가장 정확한 Economy API
-        url = f"https://economy.roblox.com/v1/game-passes/{pass_id}/details"
-        res = requests.get(url, headers=headers, cookies=cookies, timeout=5)
-        
-        if res.status_code == 200:
-            data = res.json()
-            # 로블록스 API의 다양한 가격 필드명을 모두 체크
-            price = data.get("PriceInRobux") # 보통 대문자로 옴
-            if price is None:
-                price = data.get("price") # 소문자 케이스 체크
-            
-            if price is not None:
-                return int(price) # 숫자로 변환해서 반환
-                
-        # 2순위: 1단계 실패 시 Apis 엔드포인트로 재시도
-        fallback_url = f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/details"
-        res2 = requests.get(fallback_url, headers=headers, cookies=cookies, timeout=5)
-        if res2.status_code == 200:
-            data2 = res2.json()
-            price = data2.get("price") or data2.get("PriceInRobux")
-            if price is not None:
-                return int(price)
+    # [수정된 가격 추출 방식]
+    gamepass_price = fetch_gamepass_price(pass_id, admin_cookie)
+    
+    if gamepass_price == 0:
+        # 가격이 0원(무료)이거나 정보를 못 불러온 경우 처리
+        # (필요하다면 여기서 "정보를 불러올 수 없습니다" 메시지 출력)
+        pass
 
-    except Exception as e:
-        print(f"가격 추출 중 오류: {e}")
-    
-    return 0 # 찾지 못하면 0 반환
+    # 비율(rate)에 따른 원화 계산
+    money = int((gamepass_price / rate) * 10000) 
