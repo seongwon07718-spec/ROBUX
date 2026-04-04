@@ -6,22 +6,5 @@ if __name__ == "__main__":
         row = cur.fetchone()
     
     api = RobloxAPI(row[0])
-    
-    # Jailbreak VIP 게임패스 - RegionalPricing 없는 유명 게임패스
-    test_passes = [
-        109156388,  # Jailbreak VIP
-        32750592,   # Jailbreak Criminal
-    ]
-    
-    for pid in test_passes:
-        resp = api.session.get(
-            f"https://apis.roblox.com/game-passes/v1/game-passes/{pid}/details"
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            features = data.get("enabledFeatures", [])
-            price_info = data.get("priceInformation") or {}
-            price = price_info.get("defaultPriceInRobux") or price_info.get("price") or 0
-            print(f"pass_id={pid} name={data.get('name')} price={price} features={features}")
-        else:
-            print(f"pass_id={pid} status={resp.status_code}")
+    result = api.buy_gamepass(113083961)
+    print(f"결과: {result}")
