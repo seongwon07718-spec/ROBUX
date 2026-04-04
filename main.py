@@ -1,23 +1,28 @@
-def get_user_places(self, user_id: int) -> list[dict]:
-    games = []
-    cursor = ""
-    while True:
-        url = f"https://games.roblox.com/v2/users/{user_id}/games?limit=50&sortOrder=Asc"
-        if cursor:
-            url += f"&cursor={cursor}"
-        resp = self.session.get(url)
-        if resp.status_code != 200:
-            break
-        body = resp.json()
-        for g in body.get("data", []):
-            # isPublic 체크 제거 (API가 이미 공개 게임만 반환)
-            root_place = g.get("rootPlace") or {}
-            games.append({
-                "id": g.get("id"),  # Universe ID
-                "name": g.get("name") or "이름 없는 게임",
-                "rootPlaceId": root_place.get("id"),  # ✅ 중첩 구조 수정
-            })
-        cursor = body.get("nextPageCursor") or ""
-        if not cursor:
-            break
-    return games
+    def get_place_gamepasses(self, universe_id: int) -> list[dict]:
+        passes = []
+        cursor = ""
+        while True:
+            url = (
+                f"https://games.roblox.com/v1/games/{universe_id}/game-passes"
+                f"?limit=100&sortOrder=Asc"
+            )
+            if cursor:
+                url += f"&cursor={cursor}"
+            resp = self.session.get(url)
+            if resp.status_code != 200:
+                break
+            body = resp.json()
+            for p in body.get("data", []):
+                if p.get("price") is not None:
+                    passes.append(p)
+            cursor = body.get("nextPageCursor") or ""
+            if not cursor:
+                break
+        return passes
+
+    # ── 게임패스 상품 정보 ────────────────────────────────────────────────────
+    def get_gamepass_product_info(self, pass_id: int) -> dict | None:
+        resp = self.session.get(
+            f"https://economy.roblox.com/v1/game-pass/{pass_id}/product-info"
+        )
+        return resp.json() if resp.status_code == 200 else None
