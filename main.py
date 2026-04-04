@@ -1,35 +1,50 @@
 def get_place_gamepasses(self, universe_id: int) -> list[dict]:
     """
-    catalog v2 API - GamePass만 필터링해서 조회
+    게임패스 조회 - marketplace API 사용
     """
     passes = []
-    cursor = ""
+    page = 1
     while True:
         url = (
-            f"https://catalog.roblox.com/v2/search/items/details"
-            f"?Category=34&universeId={universe_id}&limit=30"
+            f"https://www.roblox.com/games/get-game-passes"
+            f"?gameId={universe_id}&page={page}&pageSize=100"
         )
-        if cursor:
-            url += f"&cursor={cursor}"
         resp = self.session.get(url)
-        print(f"[게임패스v2] status={resp.status_code} body={resp.text[:500]}")
+        print(f"[게임패스] status={resp.status_code} body={resp.text[:500]}")
         
         if resp.status_code != 200:
             break
             
         body = resp.json()
-        for p in body.get("data", []):
-            # GamePass만 필터
-            if p.get("itemType") != "GamePass":
-                continue
-            passes.append({
-                "id": p.get("id"),
-                "name": p.get("name") or "이름 없음",
-                "price": p.get("price") or 0,
-            })
-        cursor = body.get("nextPageCursor") or ""
-        if not cursor:
+        items = body if isinstance(body, list) else body.get("data", [])
+        
+        if not items:
             break
+            
+        for p in items:
+            price = (
+                p.get("Price")
+                or p.get("price")
+                or p.get("PriceInRobux")
+                or 0
+            )
+            name = (
+                p.get("Name")
+                or p.get("name")
+                or "이름 없음"
+            )
+            pid = p.get("PassId") or p.get("id") or p.get("Id")
+            
+            if pid and price > 0:
+                passes.append({
+                    "id": pid,
+                    "name": name,
+                    "price": price,
+                })
+        
+        if len(items) < 100:
+            break
+        page += 1
     
     print(f"[게임패스 최종] {passes}")
     return passes
