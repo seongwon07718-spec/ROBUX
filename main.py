@@ -1,55 +1,58 @@
     def get_gamepass_product_info(self, pass_id: int) -> dict | None:
+        # ✅ v2/assets API로 정확한 ProductId 조회
         resp = self.session.get(
-            f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/details"
+            f"https://economy.roblox.com/v2/assets/{pass_id}/details"
         )
-        if resp.status_code != 200:
-            return None
+        print(f"[v2/assets] status={resp.status_code} body={resp.text[:400]}")
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "ProductId": data.get("ProductId"),
+                "PriceInRobux": data.get("PriceInRobux") or 0,
+                "Creator": {
+                    "Id": (data.get("Creator") or {}).get("CreatorTargetId")
+                    or (data.get("Creator") or {}).get("Id")
+                },
+            }
+        return None
 
-        data = resp.json()
-        price_info = data.get("priceInformation") or {}
+    def buy_gamepass(self, pass_id: int) -> dict:
+        info = self.get_gamepass_product_info(pass_id)
+        if not info:
+            return {"purchased": False, "reason": "상품 정보 조회 실패"}
 
-        # ✅ RegionalPricing 있으면 regionalPrice 우선
-        price = int(
-            price_info.get("regionalPrice")
-            or price_info.get("price")
-            or price_info.get("defaultPriceInRobux")
-            or 0
-        )
+        product_id = info.get("ProductId")
+        price = int(info.get("PriceInRobux") or 0)
+        seller_id = (info.get("Creator") or {}).get("Id")
 
-        # price가 0이면 economy API로 폴백
-        if price == 0:
-            resp2 = self.session.get(
-                f"https://economy.roblox.com/v1/game-pass/{pass_id}/product-info"
-            )
-            if resp2.status_code == 200:
-                data2 = resp2.json()
-                price = int(data2.get("PriceInRobux") or 0)
-                return {
-                    "ProductId": data2.get("ProductId") or pass_id,
-                    "PriceInRobux": price,
-                    "Creator": {"Id": (data2.get("Creator") or {}).get("Id")},
-                }
+        print(f"[구매시도] product_id={product_id} price={price} seller_id={seller_id}")
 
-        place_id = data.get("placeId")
-        creator_id = None
-        if place_id:
-            u_resp = self.session.get(
-                f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
-            )
-            if u_resp.status_code == 200:
-                universe_id = u_resp.json().get("universeId")
-                if universe_id:
-                    g_resp = self.session.get(
-                        f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-                    )
-                    if g_resp.status_code == 200:
-                        games = g_resp.json().get("data", [])
-                        if games:
-                            creator_id = games[0].get("creator", {}).get("id")
+        if not product_id:
+            return {"purchased": False, "reason": "ProductId 없음"}
 
-        print(f"[상품정보] price={price} creator_id={creator_id}")
-        return {
-            "ProductId": data.get("gamePassId") or pass_id,
-            "PriceInRobux": price,
-            "Creator": {"Id": creator_id},
+        token = self.get_csrf_token()
+        if not token:
+            return {"purchased": False, "reason": "CSRF 토큰 획득 실패"}
+
+        headers = {
+            "x-csrf-token": token,
+            "Content-Type": "application/json",
+            "Referer": f"https://www.roblox.com/game-pass/{pass_id}",
+            "Origin": "https://www.roblox.com",
         }
+        resp = self.session.post(
+            f"https://economy.roblox.com/v1/purchases/products/{product_id}",
+            json={
+                "expectedCurrency": 1,
+                "expectedPrice": price,
+                "expectedSellerId": seller_id,
+                "saleLocationType": "Website",
+            },
+            headers=headers,
+        )
+        print(f"[구매결과] status={resp.status_code} body={resp.text}")
+
+        try:
+            return resp.json()
+        except Exception:
+            return {"purchased": False, "reason": f"HTTP {resp.status_code}"}
