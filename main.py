@@ -1,8 +1,4 @@
-import requests
-import sqlite3
-
-# 1. 로블록스 데이터 및 로그인 상태 확인 함수
-def get_roblox_auth_result(cookie):
+def get_roblox_data(cookie):
     """
     쿠키의 유효성을 검사하고 결과를 반환합니다.
     반환값: (성공여부, 로벅스 수량 또는 에러메시지)
@@ -36,43 +32,36 @@ def get_roblox_auth_result(cookie):
     except:
         return False, "로블록스 서버와 연결할 수 없습니다."
 
-# 2. UI 컨테이너 생성 유틸리티
-def create_result_container(is_success, detail):
-    """
-    성공/실패 여부에 따라 색상과 내용을 다르게 생성합니다.
-    """
-    con = ui.Container()
-    
-    if is_success:
-        # ✅ 등록 성공 (초록색)
-        con.accent_color = 0x57F287 
-        con.add_item(ui.TextDisplay("## ✨ 쿠키 등록 성공"))
-        con.add_item(ui.Separator(spacing=2))
-        con.add_item(ui.TextDisplay(f"정상적으로 인증되었습니다.\n현재 잔액: **{detail:,} R$**"))
-    else:
-        # ❌ 등록 실패 (빨간색)
-        con.accent_color = 0xED4245 
-        con.add_item(ui.TextDisplay("## ⚠️ 쿠키 등록 실패"))
-        con.add_item(ui.Separator(spacing=2))
-        con.add_item(ui.TextDisplay(f"이유: **{detail}**\n다시 확인 후 입력해 주세요."))
-        
-    return con
+class CookieModal(ui.Modal, title="로블록스 쿠키 등록"):
+    cookie_input = ui.TextInput(
+        label="로블록스 쿠키",
+        placeholder="_|WARNING:-DO-NOT-SHARE-THIS... 전체 입력",
+        style=discord.TextStyle.long,
+        required=True
+    )
 
-# 3. 실제 등록 처리 예시 (모달이나 버튼 이벤트 내부에 작성)
-async def process_cookie_registration(interaction, input_cookie):
-    # 검증 시도
-    success, result = get_roblox_auth_result(input_cookie)
+    async def on_submit(self, it: discord.Interaction):
+        cookie = self.cookie_input.value
+        robux, status = get_roblox_data(cookie)
+        
+        if status == "정상":
+            conn = sqlite3.connect(DATABASE)
+            cur = conn.cursor()
+            cur.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('roblox_cookie', ?)", (cookie,))
+            conn.commit()
+            conn.close()
+            
+            con = create_container_msg("✅ 인증 성공", f"로블록스 계정이 연결되었습니다!\n현재 재고: **{robux:,} R$**", 0x57F287)
+            await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
+        else:
+            con = create_container_msg("❌ 인증 실패", f"쿠키 인식 실패: `{status}`\n사유를 확인해주세요.", 0xED4245)
+            await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
+@bot.tree.command(name="자판기", description="로벅스 자판기를 전송합니다.")
+async def spawn_vending(it: discord.Interaction):
+    con_notif = create_container_msg("-# - 자판기가 성공적으로 전송되었습니다", 0x5865F2)
+    await it.response.send_message(view=ui.LayoutView().add_item(con_notif), ephemeral=True)
     
-    if success:
-        # DB에 쿠키 저장 (성공했을 때만)
-        conn = sqlite3.connect(DATABASE)
-        cur = conn.cursor()
-        cur.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('roblox_cookie', ?)", (input_cookie,))
-        conn.commit()
-        conn.close()
-    
-    # 결과 컨테이너 생성
-    result_ui = create_result_container(success, result)
-    
-    # 결과 전송 (에페머럴 등을 활용해 본인에게만 보이게 가능)
-    await interaction.response.send_message(embeds=[], view=ui.LayoutView().add_item(result_ui), ephemeral=True)
+    view = RobuxVending(bot)
+    con = await view.build_main_menu()
+    msg = await it.channel.send(view=ui.LayoutView().add_item(con))
+    bot.vending_msg_info[it.channel_id] = msg.id
