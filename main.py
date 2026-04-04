@@ -1,13 +1,29 @@
-    # 모달 내부 on_submit 예시
-    pass_id = extract_pass_id(raw_val) # 알렉스님이 보내준 사진의 그 함수
-    
-    # [수정된 가격 추출 방식]
-    gamepass_price = fetch_gamepass_price(pass_id, admin_cookie)
-    
-    if gamepass_price == 0:
-        # 가격이 0원(무료)이거나 정보를 못 불러온 경우 처리
-        # (필요하다면 여기서 "정보를 불러올 수 없습니다" 메시지 출력)
-        pass
+class GamepassModal(ui.Modal, title="게임패스 방식"):
+    id_input = ui.TextInput(label="게임패스 ID 또는 링크", placeholder="게임패스 ID 또는 링크를 적어주세요", required=True)
 
-    # 비율(rate)에 따른 원화 계산
-    money = int((gamepass_price / rate) * 10000) 
+    async def on_submit(self, it: discord.Interaction):
+        raw_val = self.id_input.value.strip()
+        pass_id = extract_pass_id(raw_val)
+        
+        if not pass_id:
+            return await it.response.send_message(view=get_container_view("❌ 인식 오류", "올바른 ID나 링크를 입력해주세요.", 0xED4245), ephemeral=True)
+
+        conn = sqlite3.connect(DATABASE)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
+        c_row = cur.fetchone()
+        cur.execute("SELECT value FROM config WHERE key = 'robux_rate'")
+        r_row = cur.fetchone()
+        conn.close()
+
+        admin_cookie = c_row[0] if c_row else None
+        info = fetch_gamepass_details(pass_id, admin_cookie)
+        
+        if not info:
+            return await it.response.send_message(view=get_container_view("❌ 찾을 수 없음", f"ID `{pass_id}` 정보를 불러올 수 없습니다.", 0xED4245), ephemeral=True)
+
+        rate = int(r_row[0]) if r_row else 1000
+        money = int((info['price'] / rate) * 10000)
+
+        view_obj = GamepassConfirmView(info, money, it.user.id, admin_cookie)
+        await it.response.send_message(view=await view_obj.build(), ephemeral=True)
