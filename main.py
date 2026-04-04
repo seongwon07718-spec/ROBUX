@@ -1,31 +1,13 @@
 import requests
-import sqlite3
-import json
-import random
-import string
-import discord
-from discord import ui
-import html
 import re
+import json
+import sqlite3
+import html # 이름 특수문자 처리를 위해 추가
 
 DATABASE = 'robux_shop.db'
 
-# -----------------------------------
-# 1️⃣ ID 및 링크 추출 함수
-# -----------------------------------
-def extract_pass_id(input_str):
-    link_match = re.search(r'game-pass/(\d+)', input_str)
-    if link_match: return link_match.group(1)
-    catalog_match = re.search(r'catalog/(\d+)', input_str)
-    if catalog_match: return catalog_match.group(1)
-    nums = re.findall(r'\d+', input_str)
-    if nums: return max(nums, key=len)
-    return None
-
-# -----------------------------------
-# 2️⃣ 정보 조회 함수 (성공했던 3단 우회 로직 그대로)
-# -----------------------------------
 def fetch_gamepass_details(pass_id):
+    # DB에서 쿠키 가져오기
     conn = sqlite3.connect(DATABASE)
     cur = conn.cursor()
     cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
@@ -42,174 +24,93 @@ def fetch_gamepass_details(pass_id):
         "Referer": "https://www.roblox.com/"
     }
 
+    # --- 1차: 공식 Economy API (가장 권장) ---
     try:
-        # 1차: Economy API
         api_url = f"https://economy.roblox.com/v1/game-passes/{pass_id}/details"
         res = session.get(api_url, headers=headers, timeout=5)
+
         if res.status_code == 200:
             data = res.json()
-            raw_name = data.get("Name") or data.get("name") or "Unknown"
+            # [수정] 이름 파싱 강화: API 응답에서도 unescape 적용
+            raw_name = data.get("Name") or data.get("name") or "이름 없음"
+            clean_name = html.unescape(raw_name).strip()
+            
             price = data.get("PriceInRobux")
             if price is None: price = data.get("price", 0)
+            
             return {
                 "id": pass_id,
-                "name": html.unescape(raw_name).strip(),
+                "name": clean_name,
                 "price": int(price),
                 "sellerId": data.get("Creator", {}).get("Id") or data.get("creatorId"),
-                "productId": data.get("ProductId")
+                "productId": data.get("ProductId"),
+                "source": "API"
             }
     except: pass
 
+    # --- 2차: 웹 페이지 JSON 데이터 (__NEXT_DATA__) ---
     try:
-        # 2차: 웹 페이지 JSON 파싱
         url = f"https://www.roblox.com/game-pass/{pass_id}"
-        res = session.get(url, headers=headers, timeout=5)
+        res = session.get(url, headers=headers, timeout=10)
+
         if res.status_code == 200:
+            # 인코딩 설정 중요 (이름 깨짐 방지)
             res.encoding = 'utf-8'
             match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text)
             if match:
                 data = json.loads(match.group(1))
                 props = data.get("props", {}).get("pageProps", {})
-                info = props.get("gamePassInfo") or props.get("gamePass") or {}
-                raw_name = info.get("name") or info.get("Name") or "Unknown"
-                price = info.get("price") or info.get("PriceInRobux") or 0
+                # 경로 다변화 대응
+                gamepass = props.get("gamePassInfo") or props.get("gamePass") or {}
+
+                raw_name = gamepass.get("name") or gamepass.get("Name") or "이름 없음"
+                clean_name = html.unescape(raw_name).strip()
+
+                price = gamepass.get("price") or gamepass.get("PriceInRobux") or 0
                 return {
                     "id": pass_id,
-                    "name": html.unescape(raw_name).strip(),
+                    "name": clean_name,
                     "price": int(price),
-                    "sellerId": info.get("creatorId"),
-                    "productId": info.get("productId")
+                    "sellerId": gamepass.get("creatorId"),
+                    "productId": gamepass.get("productId"),
+                    "source": "WEB_JSON"
                 }
     except: pass
 
-    return None
-
-# -----------------------------------
-# 3️⃣ 구매 실행 함수 (InvalidArguments 해결 버전)
-# -----------------------------------
-def purchase_gamepass(product_id, expected_price, seller_id):
-    conn = sqlite3.connect(DATABASE)
-    cur = conn.cursor()
-    cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-    row = cur.fetchone()
-    conn.close()
-
-    if not row or not row[0]: return {"success": False, "message": "쿠키가 설정되지 않았습니다."}
-
-    session = requests.Session()
-    session.cookies.set(".ROBLOSECURITY", row[0], domain=".roblox.com")
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Referer": "https://www.roblox.com/"
-    }
-
+    # --- 3차: HTML 텍스트 강제 파싱 (최후의 수단) ---
     try:
-        # CSRF 토큰 갱신
-        auth_res = session.post("https://auth.roblox.com/v2/logout", headers=headers)
-        csrf_token = auth_res.headers.get("x-csrf-token")
-        if not csrf_token: return {"success": False, "message": "CSRF 토큰 획득 실패"}
-        headers["X-CSRF-TOKEN"] = csrf_token
-
-        # 실제 구매 POST
-        purchase_url = f"https://economy.roblox.com/v1/purchases/products/{product_id}"
-        payload = {
-            "expectedCurrency": 1,
-            "expectedPrice": int(expected_price),
-            "expectedSellerId": int(seller_id) if seller_id else 1
-        }
-        res = session.post(purchase_url, headers=headers, data=json.dumps(payload), timeout=10)
-        
+        res = session.get(f"https://www.roblox.com/game-pass/{pass_id}", headers=headers, timeout=10)
         if res.status_code == 200:
-            data = res.json()
-            if data.get("purchased") is True:
-                return {"success": True, "message": "성공"}
-            return {"success": False, "message": data.get("reason") or "잔액 부족 또는 중복 소유"}
-        return {"success": False, "message": f"서버 오류: {res.status_code}"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
+            res.encoding = 'utf-8'
+            
+            # 이름 추출 강화: h1 태그나 title 태그에서 정밀하게 뽑기
+            name_match = re.search(r'<h1[^>]*>(.*?)</h1>', res.text, re.DOTALL)
+            if not name_match:
+                name_match = re.search(r'<title>(.*?)</title>', res.text)
+            
+            name = "Unknown"
+            if name_match:
+                # 태그 제거 및 HTML 엔티티 변환
+                name = re.sub(r'<[^>]*>', '', name_match.group(1))
+                name = html.unescape(name).replace(" - Roblox", "").strip()
 
-# -----------------------------------
-# 4️⃣ 구매 확인 및 버튼 콜백 (컨테이너 UI)
-# -----------------------------------
-class GamepassConfirmView(ui.LayoutView):
-    def __init__(self, info, money, user_id):
-        super().__init__(timeout=120)
-        self.info, self.money, self.user_id = info, money, str(user_id)
+            price_match = re.search(r'data-expected-price="(\d+)"', res.text)
+            if not price_match:
+                price_match = re.search(r'(\d[\d,]*)\s*Robux', res.text)
 
-    async def build(self):
-        con = ui.Container()
-        con.accent_color = 0x5865F2
-        price_info = (
-            f"-# - **상품**: {self.info['name']}\n"
-            f"-# - **가격**: {self.info['price']:,} 로벅스\n"
-            f"-# - **금액**: {self.money:,}원"
-        )
-        con.add_item(ui.TextDisplay(f"### <:acy2:1489883409001091142>  구매 확인\n{price_info}"))
-        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        row = ui.ActionRow()
-        btn_confirm = ui.Button(label="진행", style=discord.ButtonStyle.gray, emoji="<:upvote:1489930275868770305>")
-        btn_confirm.callback = self.self_confirm
-        btn_cancel = ui.Button(label="취소", style=discord.ButtonStyle.gray, emoji="<:downvote:1489930277450158080>")
-        btn_cancel.callback = self.self_cancel
-        row.add_item(btn_confirm)
-        row.add_item(btn_cancel)
-        con.add_item(row)
-        self.clear_items()
-        self.add_item(con)
-        return self
+            price = 0
+            if price_match:
+                price = int(price_match.group(1).replace(",", ""))
 
-    async def self_confirm(self, it: discord.Interaction):
-        conn = sqlite3.connect(DATABASE)
-        cur = conn.cursor()
-        cur.execute("SELECT balance FROM users WHERE user_id = ?", (self.user_id,))
-        user_row = cur.fetchone()
-        
-        if not user_row or user_row[0] < self.money:
-            conn.close()
-            return await it.response.edit_message(view=get_container_view("❌ 잔액 부족", "충전 후 시도해주세요.", 0xED4245))
+            return {
+                "id": pass_id,
+                "name": name,
+                "price": price,
+                "sellerId": None,
+                "productId": None,
+                "source": "HTML_PARSING"
+            }
+    except: pass
 
-        await it.response.edit_message(view=get_container_view("⌛ 처리 중", "구매를 진행 중입니다...", 0xFEE75C))
-
-        result = purchase_gamepass(self.info['productId'], self.info['price'], self.info['sellerId'])
-        
-        if result["success"]:
-            order_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
-            cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (self.money, self.user_id))
-            cur.execute("INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'SUCCESS')",
-                        (order_id, self.user_id, self.money, self.info['price']))
-            conn.commit()
-            await it.edit_original_response(view=get_container_view("✅ 구매 성공", f"주문번호: `{order_id}`", 0x57F287))
-        else:
-            await it.edit_original_response(view=get_container_view("❌ 구매 실패", f"사유: `{result['message']}`", 0xED4245))
-        conn.close()
-
-    async def self_cancel(self, it: discord.Interaction):
-        await it.response.edit_message(view=get_container_view("취소됨", "구매가 취소되었습니다.", 0x99AAB5))
-
-# -----------------------------------
-# 5️⃣ 메인 모달
-# -----------------------------------
-class GamepassModal(ui.Modal, title="게임패스 구매"):
-    id_input = ui.TextInput(label="아이디 또는 링크", placeholder="여기에 입력하세요.", required=True)
-
-    async def on_submit(self, it: discord.Interaction):
-        await it.response.defer(ephemeral=True)
-        pass_id = extract_pass_id(self.id_input.value.strip())
-        if not pass_id:
-            return await it.followup.send(view=get_container_view("❌ 오류", "ID가 올바르지 않습니다.", 0xED4245), ephemeral=True)
-
-        info = fetch_gamepass_details(pass_id)
-        if not info or not info.get('productId'):
-            return await it.followup.send(view=get_container_view("❌ 조회 실패", "정보를 가져오지 못했습니다.", 0xED4245), ephemeral=True)
-
-        conn = sqlite3.connect(DATABASE); cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'robux_rate'")
-        r_row = cur.fetchone(); conn.close()
-        rate = int(r_row[0]) if r_row else 1000
-        money = int((info['price'] / rate) * 10000) if info['price'] > 0 else 0
-
-        view_obj = GamepassConfirmView(info, money, it.user.id)
-        await it.followup.send(view=await view_obj.build(), ephemeral=True)
+    return None
 
