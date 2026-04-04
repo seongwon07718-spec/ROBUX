@@ -7,19 +7,19 @@ if __name__ == "__main__":
         row = cur.fetchone()
     
     api = RobloxAPI(row[0] if row else None)
-    test_universe = 29407759
+    
+    # itemconfiguration - creatorId 방식으로 시도
+    # Litozinnamon 유저 ID로 직접 조회
+    creator_id = 55516750  # Litozinnamon 유저ID
     
     urls = [
-        # 최신 API 후보들
-        f"https://games.roblox.com/v1/games/{test_universe}/game-passes?limit=100&sortOrder=Asc",
-        f"https://apis.roblox.com/game-passes/v1/games/{test_universe}/game-passes?limit=100",
-        f"https://economy.roblox.com/v2/game-passes?universeId={test_universe}&limit=100",
-        f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=GamePass&isArchived=false&groupId={test_universe}&limit=100",
-        f"https://www.roblox.com/api/game-pass/game/{test_universe}/game-pass-page?pageNumber=1",
+        f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=GamePass&isArchived=false&limit=100",
+        f"https://apis.roblox.com/toolbox-service/v1/marketplace?assetType=GamePass&creatorType=User&creatorTargetId={creator_id}&limit=100",
+        f"https://catalog.roblox.com/v1/search/items?Category=34&CreatorType=User&CreatorTargetId={creator_id}&limit=30",
     ]
     
     for url in urls:
         resp = api.session.get(url)
         print(f"\nURL: {url}")
         print(f"status: {resp.status_code}")
-        print(f"body: {resp.text[:300]}")
+        print(f"body: {resp.text[:400]}")
