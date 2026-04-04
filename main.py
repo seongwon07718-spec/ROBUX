@@ -2,9 +2,6 @@ import discord
 from discord import ui
 import sqlite3
 import requests
-import asyncio
-import random
-import string
 import re
 import json
 
@@ -20,9 +17,8 @@ def extract_pass_id(input_str):
     if nums: return max(nums, key=len)
     return None
 
-# --- [수정] 404 방지 및 가격 정밀 파싱 함수 (일반 함수로 유지) ---
+# --- [수정] 가격 0원 및 404 방지 함수 ---
 def fetch_gamepass_details(pass_id):
-    # DB에서 쿠키 로드
     conn = sqlite3.connect(DATABASE)
     cur = conn.cursor()
     cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
@@ -30,63 +26,64 @@ def fetch_gamepass_details(pass_id):
     conn.close()
     
     admin_cookie = row[0] if row else None
-    
     session = requests.Session()
     if admin_cookie:
         session.cookies.set(".ROBLOSECURITY", admin_cookie, domain=".roblox.com")
 
-    # 브라우저처럼 보이기 위한 필수 헤더
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
         "Referer": "https://www.roblox.com/"
     }
 
     try:
-        # 1차 시도: 공식 API
+        # 1차: Economy API 시도
         url = f"https://economy.roblox.com/v1/game-passes/{pass_id}/details"
         res = session.get(url, headers=headers, timeout=5)
         
         if res.status_code == 200:
             data = res.json()
-            # 가격 필드 대소문자 모두 대응
+            # 가격 필드 대소문자 정밀 체크
             price = data.get("PriceInRobux")
-            if price is None: price = data.get("price", 0)
+            if price is None: price = data.get("price")
+            if price is None: price = 0
             
             return {
                 "id": pass_id,
-                "name": data.get("Name") or data.get("name", "Unknown"),
-                "price": int(price), # 반드시 정수로 변환
+                "name": data.get("Name") or data.get("name") or "Unknown",
+                "price": int(price),
                 "sellerId": data.get("Creator", {}).get("Id") or data.get("creatorId"),
                 "productId": data.get("ProductId")
             }
-        
-        # 2차 시도: 웹 JSON 파싱 (API 404 대비)
+            
+        # 2차: 웹 페이지 JSON 파싱 (API 404 발생 시)
         web_url = f"https://www.roblox.com/game-pass/{pass_id}"
         web_res = session.get(web_url, headers=headers, timeout=5)
         if web_res.status_code == 200:
             match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', web_res.text)
             if match:
                 web_data = json.loads(match.group(1))
-                info = web_data.get("props", {}).get("pageProps", {}).get("gamePassInfo") or {}
+                props = web_data.get("props", {}).get("pageProps", {})
+                info = props.get("gamePassInfo") or props.get("gamePass") or {}
+                
+                price = info.get("price") or info.get("PriceInRobux") or 0
                 return {
                     "id": pass_id,
                     "name": info.get("name") or "Unknown",
-                    "price": int(info.get("price") or 0),
+                    "price": int(price),
                     "sellerId": info.get("creatorId"),
                     "productId": info.get("productId")
                 }
     except Exception as e:
-        print(f"조회 중 오류 발생: {e}")
+        print(f"API Response Log Error: {e}")
     
     return None
 
-# --- [수정] 모달 클래스 (await 오류 해결) ---
+# --- [수정] 모달 클래스 (디스코드 응답 오류 해결) ---
 class GamepassModal(ui.Modal, title="게임패스 방식"):
-    id_input = ui.TextInput(label="게임패스 ID 또는 링크", placeholder="게임패스 ID 또는 링크를 적어주세요", required=True)
+    id_input = ui.TextInput(label="게임패스 ID 또는 링크", placeholder="아이디나 링크를 입력하세요.", required=True)
 
     async def on_submit(self, it: discord.Interaction):
-        # 타임아웃 방지
+        # 1. 타임아웃 방지 (생각 중... 상태 돌입)
         await it.response.defer(ephemeral=True)
         
         raw_val = self.id_input.value.strip()
@@ -95,13 +92,13 @@ class GamepassModal(ui.Modal, title="게임패스 방식"):
         if not pass_id:
             return await it.followup.send(content="❌ 올바른 ID나 링크를 입력해주세요.", ephemeral=True)
 
-        # [해결] fetch_gamepass_details는 일반 함수이므로 await를 붙이지 않습니다!
+        # 2. 정보 가져오기 (일반 함수이므로 await 없음)
         info = fetch_gamepass_details(pass_id)
         
-        if not info:
-            return await it.followup.send(content=f"❌ ID `{pass_id}` 정보를 불러올 수 없습니다. (쿠키/ID 확인 필요)", ephemeral=True)
+        if not info or info.get('price') is None:
+            return await it.followup.send(content=f"❌ ID `{pass_id}` 정보를 불러올 수 없습니다.", ephemeral=True)
 
-        # 비율 로드 및 가격 계산
+        # 3. 비율 로드 및 가격 계산
         conn = sqlite3.connect(DATABASE)
         cur = conn.cursor()
         cur.execute("SELECT value FROM config WHERE key = 'robux_rate'")
@@ -109,8 +106,13 @@ class GamepassModal(ui.Modal, title="게임패스 방식"):
         conn.close()
 
         rate = int(r_row[0]) if r_row else 1000
-        money = int((info['price'] / rate) * 10000)
+        # 가격이 0원이면 에러 방지
+        money = int((info['price'] / rate) * 10000) if info['price'] > 0 else 0
 
-        # 확인 창 띄우기 (이후 로직 생략)
-        await it.followup.send(content=f"🔎 상품: {info['name']}\n💰 가격: {info['price']} Robux\n💳 결제금액: {money}원", ephemeral=True)
+        # 4. 결과 전송 (defer()를 썼으므로 it.followup.send 사용!)
+        # 여기서는 GamepassConfirmView 같은 커스텀 뷰를 보낸다고 가정합니다.
+        # await it.followup.send(view=await GamepassConfirmView(info, money, it.user.id).build(), ephemeral=True)
+        
+        # 테스트용 메시지 출력
+        await it.followup.send(content=f"✅ 확인됨: {info['name']}\n💰 가격: {info['price']} Robux\n💳 금액: {money}원", ephemeral=True)
 
