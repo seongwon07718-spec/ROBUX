@@ -8,20 +8,17 @@ if __name__ == "__main__":
     
     api = RobloxAPI(row[0] if row else None)
     
-    # 게임패스 있는 유명 유저들
-    test_users = ["Badimo", "asimo3089"]
+    # Jailbreak universe_id = 606849621 (게임패스 많은 유명 게임)
+    universe_id = 606849621
     
-    for username in test_users:
-        uid = api.get_user_id(username)
-        print(f"\n{username} ID: {uid}")
-        
-        url = f"https://catalog.roblox.com/v1/search/items/details?Category=34&CreatorType=User&CreatorTargetId={uid}&limit=30"
+    urls = [
+        f"https://games.roblox.com/v1/games/{universe_id}/game-passes?limit=100",
+        f"https://www.roblox.com/games/{universe_id}/game-pass/get-game-passes?pageNumber=1",
+        f"https://apis.roblox.com/universes/v1/{universe_id}/game-passes?limit=100",
+    ]
+    
+    for url in urls:
         resp = api.session.get(url)
-        body = resp.json()
-        
-        for item in body.get("data", []):
-            at = item.get("assetType")
-            if at == 34:  # GamePass만
-                print(f"  ✅ 게임패스! id={item.get('id')} name={item.get('name')} price={item.get('price')}")
-            else:
-                print(f"  ❌ assetType={at} name={item.get('name')}")
+        print(f"\nURL: {url}")
+        print(f"status: {resp.status_code}")
+        print(f"body: {resp.text[:400]}")
