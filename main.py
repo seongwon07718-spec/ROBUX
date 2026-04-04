@@ -1,30 +1,33 @@
-if __name__ == "__main__":
-    import sqlite3
+def get_place_gamepasses(self, universe_id: int) -> list[dict]:
+    passes = []
+    page_token = ""
+    while True:
+        url = (
+            f"https://apis.roproxy.com/game-passes/v1/universes/{universe_id}/game-passes"
+            f"?passView=Full&pageSize=100"
+        )
+        if page_token:
+            url += f"&pageToken={page_token}"
+        
+        resp = self.session.get(url)
+        if resp.status_code != 200:
+            break
+        
+        body = resp.json()
+        for p in body.get("gamePasses", []):
+            price = p.get("price")
+            pass_id = p.get("id")
+            name = p.get("displayName") or p.get("name") or "이름 없음"
+            
+            if pass_id and price and price > 0:
+                passes.append({
+                    "id": pass_id,
+                    "name": name,
+                    "price": price,
+                })
+        
+        page_token = body.get("nextPageToken") or ""
+        if not page_token:
+            break
     
-    with sqlite3.connect("robux_shop.db") as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-        row = cur.fetchone()
-    
-    cookie = row[0] if row else None
-    api = RobloxAPI(cookie)
-    
-    creator_id = 2837719  # asimo3089
-    
-    # 방법 1: 쿠키 세션으로 시도
-    url = f"https://apis.roblox.com/game-passes/v1/users/{creator_id}/game-passes?count=100&exclusiveStartId="
-    resp = api.session.get(url)
-    print(f"[방법1] status: {resp.status_code} body: {resp.text[:400]}")
-    
-    # 방법 2: Authorization 헤더 추가
-    headers = {
-        "Cookie": f".ROBLOSECURITY={cookie}",
-        "Authorization": f"Bearer {cookie}",
-    }
-    resp2 = api.session.get(url, headers=headers)
-    print(f"[방법2] status: {resp2.status_code} body: {resp2.text[:400]}")
-    
-    # 방법 3: roproxy 경유
-    url3 = f"https://apis.roproxy.com/game-passes/v1/users/{creator_id}/game-passes?count=100&exclusiveStartId="
-    resp3 = api.session.get(url3)
-    print(f"[방법3] status: {resp3.status_code} body: {resp3.text[:400]}")
+    return passes
