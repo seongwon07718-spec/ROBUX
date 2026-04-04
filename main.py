@@ -1,3 +1,10 @@
+import requests
+import sqlite3
+import discord
+from discord import ui
+
+# [참고] DATABASE 변수와 create_container_msg 함수는 기존 코드에 정의된 것을 사용합니다.
+
 def get_roblox_data(cookie):
     """
     쿠키의 유효성을 검사하고 결과를 반환합니다.
@@ -42,20 +49,26 @@ class CookieModal(ui.Modal, title="로블록스 쿠키 등록"):
 
     async def on_submit(self, it: discord.Interaction):
         cookie = self.cookie_input.value
-        robux, status = get_roblox_data(cookie)
+        # get_roblox_data는 (성공여부, 로벅스_또는_에러메시지)를 반환함
+        is_success, result = get_roblox_data(cookie)
         
-        if status == "정상":
+        if is_success:
+            # ✅ 인증 및 등록 성공
             conn = sqlite3.connect(DATABASE)
             cur = conn.cursor()
             cur.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('roblox_cookie', ?)", (cookie,))
             conn.commit()
             conn.close()
             
-            con = create_container_msg("✅ 인증 성공", f"로블록스 계정이 연결되었습니다!\n현재 재고: **{robux:,} R$**", 0x57F287)
+            # 초록색 컨테이너 (result는 로벅스 수량)
+            con = create_container_msg("✅ 쿠키 등록 성공", f"로블록스 계정이 성공적으로 연결되었습니다!\n현재 재고: **{result:,} R$**", 0x57F287)
             await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
         else:
-            con = create_container_msg("❌ 인증 실패", f"쿠키 인식 실패: `{status}`\n사유를 확인해주세요.", 0xED4245)
+            # ❌ 인증 실패 (result는 에러 메시지)
+            # 빨간색 컨테이너 (0xED4245)
+            con = create_container_msg("❌ 쿠키 등록 실패", f"인증에 실패하였습니다.\n사유: `{result}`", 0xED4245)
             await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
+
 @bot.tree.command(name="자판기", description="로벅스 자판기를 전송합니다.")
 async def spawn_vending(it: discord.Interaction):
     con_notif = create_container_msg("-# - 자판기가 성공적으로 전송되었습니다", 0x5865F2)
