@@ -1,6 +1,4 @@
-import requests
-
-def check_roblox_login(cookie):
+def get_roblox_data(cookie):
     if not cookie:
         return False, "쿠키 없음"
     
@@ -49,14 +47,10 @@ def check_roblox_login(cookie):
         # 에러 메시지를 조금 더 상세히 출력하도록 수정
         return False, f"연결 오류: {str(e)}"
 
-# --- 실행부 ---
-if __name__ == "__main__":
-    # 반드시 _|WARNING:-DO-NOT-SHARE- 로 시작하는 전체 쿠키를 넣으세요.
-    my_cookie = "여기에_복사한_쿠키_입력" 
-    
-    success, message = check_roblox_login(my_cookie)
-    
-    if success:
-        print(f"✅ {message}")
-    else:
-        print(f"❌ {message}")
+def create_container_msg(title, content, color=0x5865F2):
+    con = ui.Container()
+    con.accent_color = color
+    con.add_item(ui.TextDisplay(f"## {title}"))
+    con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    con.add_item(ui.TextDisplay(content))
+    return con
