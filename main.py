@@ -1,57 +1,59 @@
+import requests
+import sqlite3
+
+# [주의] DATABASE 변수는 기존 코드의 경로에 맞게 설정하세요.
+DATABASE = "your_database_path.db" 
+
 def get_roblox_data(cookie):
+    """
+    쿠키를 통해 로그인 상태와 로벅스 수량만 반환합니다.
+    반환값: (성공여부, 로벅스 수량 또는 에러메시지)
+    """
     if not cookie:
         return False, "쿠키 없음"
     
-    # 1. 쿠키 전처리 (공백 및 따옴표 제거)
     auth_cookie = cookie.strip().strip('"').strip("'")
-    
-    # .ROBLOSECURITY= 문구가 이미 포함되어 있는지 확인 후 처리
     if not auth_cookie.startswith(".ROBLOSECURITY="):
         full_cookie = f".ROBLOSECURITY={auth_cookie}"
     else:
         full_cookie = auth_cookie
     
     session = requests.Session()
-    
-    # 2. 브라우저 헤더 설정
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         "Cookie": full_cookie,
-        "Accept": "application/json",
     }
 
     try:
-        # 3. 실제 유저 인증 정보를 반환하는 API 주소로 수정
+        # 1. 유저 인증 확인
         user_info_url = "https://users.roblox.com/v1/users/authenticated"
         response = session.get(user_info_url, headers=headers, timeout=10)
 
         if response.status_code == 200:
-            user_data = response.json()
-            user_name = user_data.get('name', 'Unknown')
-            user_id = user_data.get('id', 'Unknown')
+            user_id = response.json().get('id')
             
-            # 4. 로그인 성공 시 로벅스 정보까지 가져오기 (선택 사항)
+            # 2. 로벅스 수량 확인
             economy_url = f"https://economy.roblox.com/v1/users/{user_id}/currency"
             economy_res = session.get(economy_url, headers=headers, timeout=5)
-            robux = economy_res.json().get('robux', 0) if economy_res.status_code == 200 else "정보 없음"
             
-            return True, f"로그인 성공! (계정명: {user_name}, ID: {user_id}, 로벅스: {robux})"
+            if economy_res.status_code == 200:
+                robux_amount = economy_res.json().get('robux', 0)
+                # 성공 시: True와 숫자 반환
+                return True, robux_amount
+            return False, "로벅스 확인 실패"
         
-        elif response.status_code == 401:
-            return False, "쿠키가 만료되었거나 틀림 (Unauthorized)"
-        
-        else:
-            return False, f"서버 거부 (HTTP {response.status_code})"
+        return False, "인증 실패"
 
-    except Exception as e:
-        # 에러 메시지를 조금 더 상세히 출력하도록 수정
-        return False, f"연결 오류: {str(e)}"
+    except Exception:
+        return False, "연결 오류"
 
 def create_container_msg(title, content, color=0x5865F2):
+    """컨테이너 생성 유틸리티"""
     con = ui.Container()
     con.accent_color = color
     con.add_item(ui.TextDisplay(f"## {title}"))
-    con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+    # discord.SeparatorSpacing 등 라이브러리 사양에 맞춰 호출
+    con.add_item(ui.Separator(spacing=2)) 
     con.add_item(ui.TextDisplay(content))
     return con
 
@@ -61,6 +63,7 @@ class RobuxVending(ui.LayoutView):
         self.bot = bot
 
     async def build_main_menu(self):
+        # 1. DB에서 쿠키 가져오기
         conn = sqlite3.connect(DATABASE)
         cur = conn.cursor()
         cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
@@ -68,5 +71,24 @@ class RobuxVending(ui.LayoutView):
         conn.close()
 
         cookie = row[0] if row else None
-        robux, status = get_roblox_data(cookie)
-        stock_display = f"{robux:,} R$" if status == "정상" else f"({status})"
+        
+        # 2. 로블록스 데이터 가져오기
+        is_success, result = get_roblox_data(cookie)
+
+        if is_success:
+            # ✅ 로그인 성공: 초록색 컨테이너 (0x57F287)
+            title = "✅ 시스템 정상"
+            display_text = f"현재 가용한 로벅스 재고: **{result:,} R$**"
+            container_color = 0x57F287 
+        else:
+            # ❌ 로그인 실패: 빨간색 컨테이너 (0xED4245)
+            title = "⚠️ 시스템 점검 필요"
+            display_text = f"상태: **{result}**\n관리자에게 문의하거나 쿠키를 갱신하세요."
+            container_color = 0xED4245
+
+        # 3. 컨테이너 생성 및 반환
+        msg_container = create_container_msg(title, display_text, color=container_color)
+        
+        # 이후 로직 (self.add_item 등) 수행
+        self.add_item(msg_container)
+        return self
