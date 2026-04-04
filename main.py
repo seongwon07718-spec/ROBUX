@@ -7,11 +7,15 @@ if __name__ == "__main__":
         row = cur.fetchone()
     
     api = RobloxAPI(row[0])
+    my_id = 7941150727  # amp_AlexisGod
     
-    # 쿠키 계정 잔액 확인
-    resp = api.session.get("https://economy.roblox.com/v1/users/authenticated/robux-balance")
-    print(f"잔액확인: {resp.status_code} {resp.text}")
+    urls = [
+        f"https://economy.roblox.com/v1/users/{my_id}/currency",
+        f"https://economy.roblox.com/v2/users/{my_id}/transaction-totals?timeFrame=Year&transactionType=summary",
+        "https://economy.roblox.com/v1/user/currency",
+    ]
     
-    # 계정 정보 확인  
-    resp2 = api.session.get("https://users.roblox.com/v1/users/authenticated")
-    print(f"계정정보: {resp2.status_code} {resp2.text}")
+    for url in urls:
+        resp = api.session.get(url)
+        print(f"status={resp.status_code} body={resp.text[:200]}")
+        print(f"URL: {url}\n")
