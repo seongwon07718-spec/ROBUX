@@ -9,15 +9,11 @@ if __name__ == "__main__":
     api = RobloxAPI(row[0] if row else None)
     user_id = 5725475  # Litozinnamon
     
-    # GamePass = assetType 34
-    urls = [
-        f"https://catalog.roblox.com/v1/search/items/details?Category=34&CreatorType=User&CreatorTargetId={user_id}&limit=30",
-        f"https://catalog.roblox.com/v1/search/items?assetType=GamePass&CreatorType=User&CreatorTargetId={user_id}&limit=30",
-        f"https://economy.roblox.com/v1/assets?assetType=34&userId={user_id}&limit=100",
-    ]
+    # details API로 전체 데이터 확인
+    url = f"https://catalog.roblox.com/v1/search/items/details?Category=34&CreatorType=User&CreatorTargetId={user_id}&limit=30"
+    resp = api.session.get(url)
+    body = resp.json()
     
-    for url in urls:
-        resp = api.session.get(url)
-        print(f"\nURL: {url}")
-        print(f"status: {resp.status_code}")
-        print(f"body: {resp.text[:400]}")
+    print("전체 itemType 목록:")
+    for item in body.get("data", []):
+        print(f"  id={item.get('id')} itemType={item.get('itemType')} assetType={item.get('assetType')} name={item.get('name')} price={item.get('price')}")
