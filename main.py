@@ -1,42 +1,37 @@
-    def get_gamepass_product_info(self, pass_id: int) -> dict | None:
-        resp = self.session.get(
-            f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/details"
-        )
-        if resp.status_code != 200:
-            return None
+    def buy_gamepass(self, pass_id: int) -> dict:
+        info = self.get_gamepass_product_info(pass_id)
+        if not info:
+            return {"purchased": False, "reason": "상품 정보 조회 실패"}
 
-        data = resp.json()
-        price_info = data.get("priceInformation") or {}
-        price = (
-            price_info.get("price")
-            or price_info.get("defaultPriceInRobux")
-            or 0
-        )
-        place_id = data.get("placeId")
+        price = info.get("PriceInRobux", 0)
+        seller_id = (info.get("Creator") or {}).get("Id")
 
-        # ✅ placeId → universeId → 소유자 ID 조회
-        creator_id = None
-        if place_id:
-            # place_id로 universe 정보 조회
-            u_resp = self.session.get(
-                f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
-            )
-            if u_resp.status_code == 200:
-                universe_id = u_resp.json().get("universeId")
-                if universe_id:
-                    # universe 소유자 조회
-                    g_resp = self.session.get(
-                        f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-                    )
-                    if g_resp.status_code == 200:
-                        games = g_resp.json().get("data", [])
-                        if games:
-                            creator = games[0].get("creator", {})
-                            creator_id = creator.get("id")
+        print(f"[구매시도] pass_id={pass_id} price={price} seller_id={seller_id}")
 
-        print(f"[파싱] price={price} creator_id={creator_id}")
-        return {
-            "ProductId": data.get("gamePassId") or pass_id,
-            "PriceInRobux": price,
-            "Creator": {"Id": creator_id},
+        token = self.get_csrf_token()
+        if not token:
+            return {"purchased": False, "reason": "CSRF 토큰 획득 실패"}
+
+        headers = {
+            "x-csrf-token": token,
+            "Content-Type": "application/json",
+            "Referer": f"https://www.roblox.com/game-pass/{pass_id}",
+            "Origin": "https://www.roblox.com",
         }
+
+        # ✅ expectedPrice 정확히 전달
+        resp = self.session.post(
+            f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/purchase",
+            json={
+                "expectedPrice": price,      # ✅ 반드시 int
+                "expectedCurrency": 1,
+                "expectedSellerId": seller_id,
+            },
+            headers=headers,
+        )
+        print(f"[구매결과] status={resp.status_code} body={resp.text}")
+
+        try:
+            return resp.json()
+        except Exception:
+            return {"purchased": False, "reason": f"HTTP {resp.status_code}"}
