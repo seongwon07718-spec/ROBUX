@@ -1,5 +1,6 @@
 class RobuxVending(ui.LayoutView):
     def __init__(self, bot):
+        # 타임아웃을 None으로 설정하여 상호작용 만료 방지
         super().__init__(timeout=None)
         self.bot = bot
 
@@ -39,6 +40,9 @@ class RobuxVending(ui.LayoutView):
         
         row_btns = ui.ActionRow(charge, info, shop)
         con.add_item(row_btns)
+        
+        # [중요] 기존 아이템을 비워주어야 상호작용 오류(중복 아이템)가 발생하지 않습니다.
+        self.clear_items()
         self.add_item(con)
         return con
 
@@ -66,10 +70,12 @@ class MyBot(commands.Bot):
                 view = RobuxVending(self)
                 con = await view.build_main_menu()
                 
-                await msg.edit(view=ui.LayoutView().add_item(con))
+                # 새로운 LayoutView에 컨테이너를 담아 전송
+                await msg.edit(view=ui.LayoutView(timeout=None).add_item(con))
             except Exception as e:
                 print(f"Update Error: {e}")
 
     @stock_updater.before_loop
     async def before_stock_updater(self):
         await self.wait_until_ready()
+
