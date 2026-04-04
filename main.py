@@ -1,50 +1,17 @@
-def get_place_gamepasses(self, universe_id: int) -> list[dict]:
-    """
-    게임패스 조회 - marketplace API 사용
-    """
-    passes = []
-    page = 1
-    while True:
-        url = (
-            f"https://www.roblox.com/games/get-game-passes"
-            f"?gameId={universe_id}&page={page}&pageSize=100"
-        )
-        resp = self.session.get(url)
-        print(f"[게임패스] status={resp.status_code} body={resp.text[:500]}")
-        
-        if resp.status_code != 200:
-            break
-            
-        body = resp.json()
-        items = body if isinstance(body, list) else body.get("data", [])
-        
-        if not items:
-            break
-            
-        for p in items:
-            price = (
-                p.get("Price")
-                or p.get("price")
-                or p.get("PriceInRobux")
-                or 0
-            )
-            name = (
-                p.get("Name")
-                or p.get("name")
-                or "이름 없음"
-            )
-            pid = p.get("PassId") or p.get("id") or p.get("Id")
-            
-            if pid and price > 0:
-                passes.append({
-                    "id": pid,
-                    "name": name,
-                    "price": price,
-                })
-        
-        if len(items) < 100:
-            break
-        page += 1
+if __name__ == "__main__":
+    api = RobloxAPI()
     
-    print(f"[게임패스 최종] {passes}")
-    return passes
+    # 여러 엔드포인트 직접 테스트
+    test_universe = 29407759
+    
+    urls = [
+        f"https://games.roblox.com/v1/games/{test_universe}/game-passes?limit=100",
+        f"https://www.roblox.com/games/get-game-passes?gameId={test_universe}&page=1&pageSize=100",
+        f"https://catalog.roblox.com/v1/search/items?Category=34&creatorTargetId={test_universe}&limit=30",
+    ]
+    
+    for url in urls:
+        resp = api.session.get(url)
+        print(f"\nURL: {url}")
+        print(f"status: {resp.status_code}")
+        print(f"body: {resp.text[:300]}")
