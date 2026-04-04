@@ -1,61 +1,64 @@
 import requests
+import re
 
-def get_roblox_data_final(cookie):
+def get_roblox_data_ultimate(cookie):
     if not cookie:
         return 0, "쿠키 없음"
     
-    # 1. 쿠키 정리 (공백 제거 및 필수 문구 포함 확인)
-    clean_cookie = cookie.strip()
+    # [필수] 쿠키에서 불필요한 따옴표나 공백 완벽 제거
+    clean_cookie = cookie.strip().strip('"').strip("'")
     
+    # .ROBLOSECURITY 문구가 누락되었다면 붙여주기 (가끔 실수하는 부분)
+    if not clean_cookie.startswith("_|WARNING:-DO-NOT-SHARE-THIS"):
+        return 0, "쿠키 형식 오류 (Warning 문구 포함 전체 복사 필요)"
+
     session = requests.Session()
-    # 도메인은 .roblox.com 그대로 설정 (쿠키는 원래 도메인 기준)
+    
+    # 쿠키 설정 (도메인 설정 시 .roblox.com과 roblox.com 둘 다 커버)
     session.cookies.set(".ROBLOSECURITY", clean_cookie, domain=".roblox.com")
     
-    # RoProxy는 roblox.com 대신 roproxy.com을 사용합니다.
-    # 이를 통해 지역 제한(Region Lock)과 기본적인 보안 차단을 우회합니다.
-    BASE_URL = "roproxy.com" 
+    # RoProxy 도메인 사용
+    BASE_URL = "roproxy.com"
     
+    # 실제 브라우저와 거의 동일한 헤더 (이게 핵심)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": f"https://www.{BASE_URL}",
-        "Referer": f"https://www.{BASE_URL}/"
+        "Referer": f"https://www.{BASE_URL}/",
+        "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
     }
 
     try:
-        # [STEP 1] CSRF 토큰 획득 (가장 중요)
-        # 로블록스는 보안상 빈 POST 요청을 보낼 때 헤더에 토큰을 담아 에러를 뱉습니다.
+        # [1단계] 쿠키 생존 확인 (가장 가벼운 API 호출)
+        # 여기서 401이 뜨면 진짜로 쿠키가 죽은 겁니다.
+        test_url = f"https://users.{BASE_URL}/v1/users/authenticated"
+        test_res = session.get(test_url, headers=headers, timeout=10)
+        
+        if test_res.status_code == 401:
+            return 0, "쿠키 사망 (IP 차단 혹은 실제 만료)"
+        
+        # [2단계] CSRF 토큰 갱신
         auth_url = f"https://auth.{BASE_URL}/v2/logout"
         auth_res = session.post(auth_url, headers=headers, timeout=10)
-        
         csrf_token = auth_res.headers.get("x-csrf-token")
         
         if not csrf_token:
-            # 토큰이 안 오면 쿠키가 이미 만료되었거나 IP가 강하게 차단된 것
-            return 0, "CSRF 토큰 획득 실패 (쿠키 만료 의심)"
+            return 0, "CSRF 획득 실패 (프록시 서버 문제 가능성)"
 
-        # 획득한 토큰을 헤더에 추가
         headers["X-CSRF-TOKEN"] = csrf_token
         
-        # [STEP 2] 실제 로벅스 잔액 요청
+        # [3단계] 잔액 확인
         economy_url = f"https://economy.{BASE_URL}/v1/users/authenticated/currency"
         response = session.get(economy_url, headers=headers, timeout=10)
         
         if response.status_code == 200:
-            robux_amount = response.json().get("robux", 0)
-            return robux_amount, "정상"
-        elif response.status_code == 401:
-            return 0, "쿠키 만료"
-        elif response.status_code == 403:
-            return 0, "보안 차단 (Token/IP Issue)"
+            return response.json().get("robux", 0), "성공"
         else:
-            return 0, f"에러 발생: {response.status_code}"
+            return 0, f"최종 실패 ({response.status_code})"
 
     except Exception as e:
-        return 0, f"연결 실패: {str(e)}"
-
-# --- 실행 예시 ---
-# user_cookie = "_|WARNING:-DO-NOT-SHARE-THIS..." # 여기에 쿠키 입력
-# robux, msg = get_roblox_data_final(user_cookie)
-# print(f"결과: {robux} Robux / 상태: {msg}")
+        return 0, f"연결 에러: {str(e)}"
