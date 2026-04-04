@@ -1,54 +1,42 @@
-    async def build_main_menu(self):
-        """실시간 재고를 비활성화된 버튼에 표시하도록 수정된 버전"""
-        conn = sqlite3.connect(DATABASE)
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-        row = cur.fetchone()
-        conn.close()
+def get_roblox_data(cookie):
+    if not cookie:
+        return 0, "쿠키 없음"
+    
+    url = "https://economy.roblox.com/v1/users/authenticated/currency"
+    headers = {
+        "Cookie": f".ROBLOSECURITY={cookie}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            return response.json().get("robux", 0), "정상"
+        elif response.status_code == 401:
+            return 0, "쿠키 만료"
+        else:
+            return 0, f"에러 {response.status_code}"
+    except:
+        return 0, "연결 실패"
 
-        cookie = row[0] if row else None
+class CookieModal(ui.Modal, title="로블록스 쿠키 입력"):
+    cookie_input = ui.TextInput(
+        label="로블록스 쿠키 (.ROBLOSECURITY)",
+        placeholder="이곳에 쿠키를 입력하세요",
+        style=discord.TextStyle.long,
+        required=True
+    )
+
+    async def on_submit(self, it: discord.Interaction):
+        cookie = self.cookie_input.value
         robux, status = get_roblox_data(cookie)
-        # 상태에 따른 재고 텍스트 설정
-        stock_display = f"{robux:,} R$" if status == "정상" else "점검 중"
-
-        con = ui.Container()
-        con.accent_color = 0x5865F2
-        
-        # 1. 지급 방식 안내
-        con.add_item(ui.TextDisplay("### <:emoji_18:1487422236838334484>  지급방식\n-# - 겜패 선물 방식\n-# - 인게임 선물 방식"))
-        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        
-        # 2. 실시간 재고 타이틀 및 버튼형 표시
-        con.add_item(ui.TextDisplay("### <:emoji_18:1487422236838334484>  실시간 재고"))
-        
-        # [수정] 누를 수 없는 버튼(disabled=True)을 만들어 재고를 표시
-        stock_button = ui.Button(
-            label=f"현재 재고: {stock_display}", 
-            style=discord.ButtonStyle.secondary, 
-            disabled=True,
-            emoji="📦"
-        )
-        con.add_item(ui.ActionRow(stock_button))
-        
-        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        
-        # 3. 버튼 안내
-        con.add_item(ui.TextDisplay(f"### <:emoji_18:1487422236838334484>  버튼 안내\n-# - **Charge** - 충전하기 / 24시간 자동 충전\n-# - **Info** - 내 정보 / 거래내역 확인하기\n-# - **Buying** - 로벅스 구매하기 / 24시간 구매 가능"))
-
-        # 4. 하단 조작 버튼들
-        charge = ui.Button(label="Charge", custom_id="charge", style=discord.ButtonStyle.blurple, emoji="<:dot_white:1485105325500797069>")
-        charge.callback = self.main_callback
-        
-        info = ui.Button(label="Info", style=discord.ButtonStyle.blurple, emoji="<:dot_white:1485105325500797069>")
-        info.callback = self.info_callback
-
-        shop = ui.Button(label="Buying", style=discord.ButtonStyle.blurple, emoji="<:dot_white:1485105325500797069>")
-        shop.callback = self.shop_callback
-        
-        row_btns = ui.ActionRow(charge, info, shop)
-        con.add_item(row_btns)
-        
-        self.clear_items()
-        self.add_item(con)
-        return con
-
+        if status == "정상":
+            conn = sqlite3.connect(DATABASE)
+            cur = conn.cursor()
+            cur.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('roblox_cookie', ?)", (cookie,))
+            conn.commit()
+            conn.close()
+            await it.response.send_message(f"✅ 로그인 성공! 현재 재고: `{robux:,}` R$", ephemeral=True)
+        else:
+            await it.response.send_message(f"❌ 로그인 실패: {status}", ephemeral=True)
