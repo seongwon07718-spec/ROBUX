@@ -1,17 +1,16 @@
 import requests
 import sqlite3
 
-# [주의] DATABASE 변수는 기존 코드의 경로에 맞게 설정하세요.
-DATABASE = "your_database_path.db" 
-
-def get_roblox_data(cookie):
+# 1. 로블록스 데이터 및 로그인 상태 확인 함수
+def get_roblox_auth_result(cookie):
     """
-    쿠키를 통해 로그인 상태와 로벅스 수량만 반환합니다.
+    쿠키의 유효성을 검사하고 결과를 반환합니다.
     반환값: (성공여부, 로벅스 수량 또는 에러메시지)
     """
     if not cookie:
-        return False, "쿠키 없음"
+        return False, "입력된 쿠키가 없습니다."
     
+    # 쿠키 포맷 정리
     auth_cookie = cookie.strip().strip('"').strip("'")
     if not auth_cookie.startswith(".ROBLOSECURITY="):
         full_cookie = f".ROBLOSECURITY={auth_cookie}"
@@ -20,75 +19,60 @@ def get_roblox_data(cookie):
     
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Cookie": full_cookie,
     }
 
     try:
-        # 1. 유저 인증 확인
-        user_info_url = "https://users.roblox.com/v1/users/authenticated"
-        response = session.get(user_info_url, headers=headers, timeout=10)
+        # 유저 인증 API 호출
+        res = session.get("https://users.roblox.com/v1/users/authenticated", headers=headers, timeout=7)
+        if res.status_code == 200:
+            user_id = res.json().get('id')
+            # 로벅스 수량 가져오기
+            eco_res = session.get(f"https://economy.roblox.com/v1/users/{user_id}/currency", headers=headers, timeout=5)
+            robux = eco_res.json().get('robux', 0) if eco_res.status_code == 200 else 0
+            return True, robux
+        return False, "만료되었거나 잘못된 쿠키입니다."
+    except:
+        return False, "로블록스 서버와 연결할 수 없습니다."
 
-        if response.status_code == 200:
-            user_id = response.json().get('id')
-            
-            # 2. 로벅스 수량 확인
-            economy_url = f"https://economy.roblox.com/v1/users/{user_id}/currency"
-            economy_res = session.get(economy_url, headers=headers, timeout=5)
-            
-            if economy_res.status_code == 200:
-                robux_amount = economy_res.json().get('robux', 0)
-                # 성공 시: True와 숫자 반환
-                return True, robux_amount
-            return False, "로벅스 확인 실패"
-        
-        return False, "인증 실패"
-
-    except Exception:
-        return False, "연결 오류"
-
-def create_container_msg(title, content, color=0x5865F2):
-    """컨테이너 생성 유틸리티"""
+# 2. UI 컨테이너 생성 유틸리티
+def create_result_container(is_success, detail):
+    """
+    성공/실패 여부에 따라 색상과 내용을 다르게 생성합니다.
+    """
     con = ui.Container()
-    con.accent_color = color
-    con.add_item(ui.TextDisplay(f"## {title}"))
-    # discord.SeparatorSpacing 등 라이브러리 사양에 맞춰 호출
-    con.add_item(ui.Separator(spacing=2)) 
-    con.add_item(ui.TextDisplay(content))
+    
+    if is_success:
+        # ✅ 등록 성공 (초록색)
+        con.accent_color = 0x57F287 
+        con.add_item(ui.TextDisplay("## ✨ 쿠키 등록 성공"))
+        con.add_item(ui.Separator(spacing=2))
+        con.add_item(ui.TextDisplay(f"정상적으로 인증되었습니다.\n현재 잔액: **{detail:,} R$**"))
+    else:
+        # ❌ 등록 실패 (빨간색)
+        con.accent_color = 0xED4245 
+        con.add_item(ui.TextDisplay("## ⚠️ 쿠키 등록 실패"))
+        con.add_item(ui.Separator(spacing=2))
+        con.add_item(ui.TextDisplay(f"이유: **{detail}**\n다시 확인 후 입력해 주세요."))
+        
     return con
 
-class RobuxVending(ui.LayoutView):
-    def __init__(self, bot):
-        super().__init__(timeout=None)
-        self.bot = bot
-
-    async def build_main_menu(self):
-        # 1. DB에서 쿠키 가져오기
+# 3. 실제 등록 처리 예시 (모달이나 버튼 이벤트 내부에 작성)
+async def process_cookie_registration(interaction, input_cookie):
+    # 검증 시도
+    success, result = get_roblox_auth_result(input_cookie)
+    
+    if success:
+        # DB에 쿠키 저장 (성공했을 때만)
         conn = sqlite3.connect(DATABASE)
         cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-        row = cur.fetchone()
+        cur.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('roblox_cookie', ?)", (input_cookie,))
+        conn.commit()
         conn.close()
-
-        cookie = row[0] if row else None
-        
-        # 2. 로블록스 데이터 가져오기
-        is_success, result = get_roblox_data(cookie)
-
-        if is_success:
-            # ✅ 로그인 성공: 초록색 컨테이너 (0x57F287)
-            title = "✅ 시스템 정상"
-            display_text = f"현재 가용한 로벅스 재고: **{result:,} R$**"
-            container_color = 0x57F287 
-        else:
-            # ❌ 로그인 실패: 빨간색 컨테이너 (0xED4245)
-            title = "⚠️ 시스템 점검 필요"
-            display_text = f"상태: **{result}**\n관리자에게 문의하거나 쿠키를 갱신하세요."
-            container_color = 0xED4245
-
-        # 3. 컨테이너 생성 및 반환
-        msg_container = create_container_msg(title, display_text, color=container_color)
-        
-        # 이후 로직 (self.add_item 등) 수행
-        self.add_item(msg_container)
-        return self
+    
+    # 결과 컨테이너 생성
+    result_ui = create_result_container(success, result)
+    
+    # 결과 전송 (에페머럴 등을 활용해 본인에게만 보이게 가능)
+    await interaction.response.send_message(embeds=[], view=ui.LayoutView().add_item(result_ui), ephemeral=True)
