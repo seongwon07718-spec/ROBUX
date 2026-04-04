@@ -1,81 +1,81 @@
-class RobuxVending(ui.LayoutView):
-    def __init__(self, bot):
-        # 타임아웃을 None으로 설정하여 상호작용 만료 방지
-        super().__init__(timeout=None)
-        self.bot = bot
-
-    async def build_main_menu(self):
-        conn = sqlite3.connect(DATABASE)
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-        row = cur.fetchone()
-        conn.close()
-
-        cookie = row[0] if row else None
-        robux, status = get_roblox_data(cookie)
-        stock_display = f"{robux:,} R$" if status == "정상" else f"{status}"
-
+    async def on_submit(self, it: discord.Interaction):
         con = ui.Container()
         con.accent_color = 0x5865F2
-        con.add_item(ui.TextDisplay("### <:emoji_18:1487422236838334484>  실시간 재고"))
-        stock_button = ui.Button(
-            label=f"현재 재고: {stock_display}", 
-            style=discord.ButtonStyle.blurple, 
-            disabled=True
-        )
-        con.add_item(ui.ActionRow(stock_button))
+        con.add_item(ui.TextDisplay("### <a:1792loading:1487444148716965949>  충전 준비 중\n-# - **충전 서버 API** 연결 시도중 (1/3)"))
+        
+        await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
+        msg = await it.original_response()
+
+        steps = [
+            "-# - **입금자명/충전금액** 설정 중 (2/3)",
+            "-# - **안전한 충전**을 위한 설정 중 (3/3)",
+            "-# - **모든 설정이 완료되었습니다**"
+        ]
+
+        for step in steps:
+            await asyncio.sleep(1.5)
+            con.clear_items()
+            con.add_item(ui.TextDisplay(f"### <a:1792loading:1487444148716965949>  충전 준비 중\n{step}"))
+            await msg.edit(view=ui.LayoutView().add_item(con))
+
+        await asyncio.sleep(1)
+        con.clear_items()
+        con.accent_color = 0x5865F2
+        con.add_item(ui.TextDisplay("### <a:1792loading:1487444148716965949>  입금 대기 중"))
         con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-        con.add_item(ui.TextDisplay("### <:emoji_18:1487422236838334484>  지급방식"))
-        con.add_item(ui.TextDisplay("-# - **게임패스 방식** / 무조건 본인 게임만\n-# - **글로벌 선물 방식** / 예시: 라이벌 - 번들"))
+        con.add_item(ui.TextDisplay(f"-# - **입금자명**은 반드시 본인 실명으로 입력해주세요\n-# - 입금 대기 시간은 **5분**입니다\n-# - 충전 처리는 입금 후 **최대 2~3분**까지 걸립니다\n-# - **5분 지나고 입금할 시 충전 안됩니다**"))
         con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        con.add_item(ui.TextDisplay(f"**입금 계좌**: `{BANK_K}`\n**입금 금액**: `{int(self.amount.value):,}원`\n**입금자명**: `{self.depositor.value}`"))
+        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        copy_btn = ui.Button(label="계좌복사", style=discord.ButtonStyle.gray, emoji="<:success:1489875582874554429>")
+        copy_btn.callback = self.copy_callback
+        copy_btn.disabled = True
+        await it.response.edit_message(view=ui.LayoutView().add_item(con))
+        await it.followup.send(content=f"`{BANK_K}`", ephemeral=True)
+        con.add_item(ui.ActionRow(copy_btn))
+
+        await msg.edit(view=ui.LayoutView().add_item(con))
+        key = f"{self.depositor.value}_{self.amount.value}"
+        success = False
+        for _ in range(60):
+            if pending_deposits.get(key):
+                success = True
+                del pending_deposits[key]
+                break
+            await asyncio.sleep(5)
+
+        con.clear_items()
         
-        charge = ui.Button(label="충전", custom_id="charge", style=discord.ButtonStyle.blurple, emoji="<:dot_white:1485105325500797069>")
-        charge.callback = self.main_callback
+        if success:
+            con.accent_color = 0x5865F2
+            con.add_item(ui.TextDisplay("### <a:1792loading:1487444148716965949>  충전 처리 중\n-# - 유저 **DB에 충전 기록** 저장 중 (1/2)"))
+            await msg.edit(view=ui.LayoutView().add_item(con))
+            
+            await asyncio.sleep(1.5)
+            
+            con.clear_items()
+            con.add_item(ui.TextDisplay("### <a:1792loading:1487444148716965949>  충전 처리 중\n-# - 입금 **금액 반영** 중 (2/2)"))
+            await msg.edit(view=ui.LayoutView().add_item(con))
+
+            conn = sqlite3.connect('robux_shop.db')
+            cur = conn.cursor()
+            cur.execute("INSERT INTO users (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?", 
+                        (str(it.user.id), int(self.amount.value), int(self.amount.value)))
+            conn.commit()
+            conn.close()
+
+            await asyncio.sleep(1.5)
+
+            con.clear_items()
+            con.accent_color = 0x5865F2
+            con.add_item(ui.TextDisplay("### <:emoji_19:1487441741484392498>  충전 완료"))
+            con.add_item(ui.TextDisplay(f"-# - 잔액이 성공적으로 충전되었습니다\n-# - **충전 금액:** `{int(self.amount.value):,}원`"))
+            con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            con.add_item(ui.TextDisplay("-# - 정보 버튼을 눌려 잔액이 확인하세요!"))
         
-        info = ui.Button(label="정보", custom_id="info", style=discord.ButtonStyle.blurple, emoji="<:dot_white:1485105325500797069>")
-        info.callback = self.info_callback
-
-        shop = ui.Button(label="구매", custom_id="buying", style=discord.ButtonStyle.blurple, emoji="<:dot_white:1485105325500797069>")
-        shop.callback = self.shop_callback
-        
-        row_btns = ui.ActionRow(charge, info, shop)
-        con.add_item(row_btns)
-        
-        # [중요] 기존 아이템을 비워주어야 상호작용 오류(중복 아이템)가 발생하지 않습니다.
-        self.clear_items()
-        self.add_item(con)
-        return con
-
-class MyBot(commands.Bot):
-    def __init__(self):
-        intents = discord.Intents.all()
-        super().__init__(command_prefix="!", intents=intents)
-        self.vending_msg_info = {}
-
-    async def setup_hook(self):
-        self.stock_updater.start()
-        await self.tree.sync()
-
-    @tasks.loop(minutes=2.0)
-    async def stock_updater(self):
-        if not self.vending_msg_info:
-            return
-
-        for channel_id, msg_id in list(self.vending_msg_info.items()):
-            try:
-                channel = self.get_channel(channel_id)
-                if not channel: continue
-                
-                msg = await channel.fetch_message(msg_id)
-                view = RobuxVending(self)
-                con = await view.build_main_menu()
-                
-                # 새로운 LayoutView에 컨테이너를 담아 전송
-                await msg.edit(view=ui.LayoutView(timeout=None).add_item(con))
-            except Exception as e:
-                print(f"Update Error: {e}")
-
-    @stock_updater.before_loop
-    async def before_stock_updater(self):
-        await self.wait_until_ready()
-
+        else:
+            con.accent_color = 0x5865F2
+            con.add_item(ui.TextDisplay("### <:emoji_19:1487441741484392498>  충전 실패"))
+            con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+            con.add_item(ui.TextDisplay("-# - 시간 내에 입금이 확인되지 않았습니다\n-# - 다시 충전 신청을 해주세요"))
+        await msg.edit(view=ui.LayoutView().add_item(con))
