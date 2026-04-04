@@ -2,12 +2,10 @@ import requests
 import re
 import json
 import sqlite3
+import html # 이름 특수문자 처리를 위해 추가
 
 DATABASE = 'robux_shop.db'
 
-# -----------------------------------
-# 1️⃣ GamePass 상세 가져오기 (DB 쿠키 + 3단 우회)
-# -----------------------------------
 def fetch_gamepass_details(pass_id):
     # DB에서 쿠키 가져오기
     conn = sqlite3.connect(DATABASE)
@@ -17,7 +15,6 @@ def fetch_gamepass_details(pass_id):
     conn.close()
     
     admin_cookie = row[0] if row else None
-    
     session = requests.Session()
     if admin_cookie:
         session.cookies.set(".ROBLOSECURITY", admin_cookie, domain=".roblox.com")
@@ -34,13 +31,16 @@ def fetch_gamepass_details(pass_id):
 
         if res.status_code == 200:
             data = res.json()
-            # [수정] 필드명 대소문자 정확히 매칭 (PriceInRobux)
+            # [수정] 이름 파싱 강화: API 응답에서도 unescape 적용
+            raw_name = data.get("Name") or data.get("name") or "이름 없음"
+            clean_name = html.unescape(raw_name).strip()
+            
             price = data.get("PriceInRobux")
             if price is None: price = data.get("price", 0)
             
             return {
                 "id": pass_id,
-                "name": data.get("Name") or data.get("name"),
+                "name": clean_name,
                 "price": int(price),
                 "sellerId": data.get("Creator", {}).get("Id") or data.get("creatorId"),
                 "productId": data.get("ProductId"),
@@ -54,18 +54,22 @@ def fetch_gamepass_details(pass_id):
         res = session.get(url, headers=headers, timeout=10)
 
         if res.status_code == 200:
-            # HTML 내부의 JSON 데이터 추출
+            # 인코딩 설정 중요 (이름 깨짐 방지)
+            res.encoding = 'utf-8'
             match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text)
             if match:
                 data = json.loads(match.group(1))
-                # 로블록스 웹 구조에 맞춘 경로 수정
                 props = data.get("props", {}).get("pageProps", {})
+                # 경로 다변화 대응
                 gamepass = props.get("gamePassInfo") or props.get("gamePass") or {}
+
+                raw_name = gamepass.get("name") or gamepass.get("Name") or "이름 없음"
+                clean_name = html.unescape(raw_name).strip()
 
                 price = gamepass.get("price") or gamepass.get("PriceInRobux") or 0
                 return {
                     "id": pass_id,
-                    "name": gamepass.get("name") or gamepass.get("Name"),
+                    "name": clean_name,
                     "price": int(price),
                     "sellerId": gamepass.get("creatorId"),
                     "productId": gamepass.get("productId"),
@@ -77,8 +81,19 @@ def fetch_gamepass_details(pass_id):
     try:
         res = session.get(f"https://www.roblox.com/game-pass/{pass_id}", headers=headers, timeout=10)
         if res.status_code == 200:
-            # [수정] 가격 텍스트 패턴 정밀화
-            # <div class="text-robux-lg">100</div> 혹은 유사 패턴 찾기
+            res.encoding = 'utf-8'
+            
+            # 이름 추출 강화: h1 태그나 title 태그에서 정밀하게 뽑기
+            name_match = re.search(r'<h1[^>]*>(.*?)</h1>', res.text, re.DOTALL)
+            if not name_match:
+                name_match = re.search(r'<title>(.*?)</title>', res.text)
+            
+            name = "Unknown"
+            if name_match:
+                # 태그 제거 및 HTML 엔티티 변환
+                name = re.sub(r'<[^>]*>', '', name_match.group(1))
+                name = html.unescape(name).replace(" - Roblox", "").strip()
+
             price_match = re.search(r'data-expected-price="(\d+)"', res.text)
             if not price_match:
                 price_match = re.search(r'(\d[\d,]*)\s*Robux', res.text)
@@ -86,9 +101,6 @@ def fetch_gamepass_details(pass_id):
             price = 0
             if price_match:
                 price = int(price_match.group(1).replace(",", ""))
-
-            name_match = re.search(r'<title>(.*?)</title>', res.text)
-            name = name_match.group(1).replace(" - Roblox", "") if name_match else "Unknown"
 
             return {
                 "id": pass_id,
@@ -101,3 +113,4 @@ def fetch_gamepass_details(pass_id):
     except: pass
 
     return None
+
