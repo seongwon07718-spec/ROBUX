@@ -1,4 +1,4 @@
-import sqlite3
+Import sqlite3
 import random
 import string
 import re
@@ -225,3 +225,5 @@ class NicknameSearchModal(ui.Modal, title="닉네임으로 구매"):
         view = PlaceSelectView(places, it.user.id)
         await it.followup.send(view=await view.build(), ephemeral=True)
 
+
+여기서 수정할 부분만 딱 골라서 보내줘 다른거는 절대 건들지말고 그리고 수정도 안해놓고 수정완료 이지랄 하지마 제발 좀
