@@ -1,90 +1,94 @@
 import requests
 import re
 import json
+import sqlite3
 
-session = requests.Session()
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+DATABASE = 'robux_shop.db'
 
 # -----------------------------------
-# 1️⃣ GamePass 상세 가져오기 (풀 우회)
+# 1️⃣ GamePass 상세 가져오기 (DB 쿠키 + 3단 우회)
 # -----------------------------------
 def fetch_gamepass_details(pass_id):
-    # -------------------------------
-    # 1차: 공식 API
-    # -------------------------------
+    # DB에서 쿠키 가져오기
+    conn = sqlite3.connect(DATABASE)
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
+    row = cur.fetchone()
+    conn.close()
+    
+    admin_cookie = row[0] if row else None
+    
+    session = requests.Session()
+    if admin_cookie:
+        session.cookies.set(".ROBLOSECURITY", admin_cookie, domain=".roblox.com")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.roblox.com/"
+    }
+
+    # --- 1차: 공식 Economy API (가장 권장) ---
     try:
         api_url = f"https://economy.roblox.com/v1/game-passes/{pass_id}/details"
-        res = session.get(api_url, headers=HEADERS, timeout=5)
+        res = session.get(api_url, headers=headers, timeout=5)
 
         if res.status_code == 200:
             data = res.json()
+            # [수정] 필드명 대소문자 정확히 매칭 (PriceInRobux)
+            price = data.get("PriceInRobux")
+            if price is None: price = data.get("price", 0)
+            
             return {
                 "id": pass_id,
-                "name": data.get("name"),
-                "price": data.get("priceInRobux") or 0,
-                "sellerId": data.get("creator", {}).get("id"),
-                "productId": data.get("productId"),
+                "name": data.get("Name") or data.get("name"),
+                "price": int(price),
+                "sellerId": data.get("Creator", {}).get("Id") or data.get("creatorId"),
+                "productId": data.get("ProductId"),
                 "source": "API"
             }
-    except:
-        pass
+    except: pass
 
-    # -------------------------------
-    # 2차: 웹 페이지 (__NEXT_DATA__)
-    # -------------------------------
+    # --- 2차: 웹 페이지 JSON 데이터 (__NEXT_DATA__) ---
     try:
         url = f"https://www.roblox.com/game-pass/{pass_id}"
-        res = session.get(url, headers=HEADERS, allow_redirects=True, timeout=10)
-
-        final_url = res.url
-
-        res = session.get(final_url, headers=HEADERS, timeout=10)
+        res = session.get(url, headers=headers, timeout=10)
 
         if res.status_code == 200:
-            match = re.search(
-                r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
-                res.text
-            )
-
+            # HTML 내부의 JSON 데이터 추출
+            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text)
             if match:
                 data = json.loads(match.group(1))
-                gamepass = (
-                    data.get("props", {})
-                    .get("pageProps", {})
-                    .get("gamePass")
-                    or {}
-                )
+                # 로블록스 웹 구조에 맞춘 경로 수정
+                props = data.get("props", {}).get("pageProps", {})
+                gamepass = props.get("gamePassInfo") or props.get("gamePass") or {}
 
+                price = gamepass.get("price") or gamepass.get("PriceInRobux") or 0
                 return {
                     "id": pass_id,
-                    "name": gamepass.get("name"),
-                    "price": gamepass.get("price") or 0,
-                    "sellerId": gamepass.get("creator", {}).get("id"),
+                    "name": gamepass.get("name") or gamepass.get("Name"),
+                    "price": int(price),
+                    "sellerId": gamepass.get("creatorId"),
                     "productId": gamepass.get("productId"),
                     "source": "WEB_JSON"
                 }
-    except:
-        pass
+    except: pass
 
-    # -------------------------------
-    # 3차: HTML 강제 파싱 (최후)
-    # -------------------------------
+    # --- 3차: HTML 텍스트 강제 파싱 (최후의 수단) ---
     try:
-        res = session.get(f"https://www.roblox.com/game-pass/{pass_id}", headers=HEADERS)
-
+        res = session.get(f"https://www.roblox.com/game-pass/{pass_id}", headers=headers, timeout=10)
         if res.status_code == 200:
-            # 가격 추출 (Robux 숫자)
-            price_match = re.search(r'(\d[\d,]*)\s*Robux', res.text)
-            name_match = re.search(r'<title>(.*?)</title>', res.text)
+            # [수정] 가격 텍스트 패턴 정밀화
+            # <div class="text-robux-lg">100</div> 혹은 유사 패턴 찾기
+            price_match = re.search(r'data-expected-price="(\d+)"', res.text)
+            if not price_match:
+                price_match = re.search(r'(\d[\d,]*)\s*Robux', res.text)
 
             price = 0
             if price_match:
                 price = int(price_match.group(1).replace(",", ""))
 
-            name = name_match.group(1) if name_match else "Unknown"
+            name_match = re.search(r'<title>(.*?)</title>', res.text)
+            name = name_match.group(1).replace(" - Roblox", "") if name_match else "Unknown"
 
             return {
                 "id": pass_id,
@@ -92,78 +96,8 @@ def fetch_gamepass_details(pass_id):
                 "price": price,
                 "sellerId": None,
                 "productId": None,
-                "source": "HTML"
+                "source": "HTML_PARSING"
             }
-    except:
-        pass
+    except: pass
 
-    print(f"❌ 완전 실패: {pass_id}")
     return None
-
-
-# -----------------------------------
-# 2️⃣ 게임의 모든 GamePass 가져오기
-# -----------------------------------
-def fetch_all_gamepasses(universe_id):
-    url = f"https://games.roblox.com/v1/games/{universe_id}/game-passes"
-
-    gamepasses = []
-    cursor = None
-
-    while True:
-        try:
-            params = {"limit": 50}
-            if cursor:
-                params["cursor"] = cursor
-
-            res = session.get(url, headers=HEADERS, params=params)
-
-            if res.status_code != 200:
-                print("❌ 목록 조회 실패")
-                break
-
-            data = res.json()
-
-            for item in data.get("data", []):
-                gamepasses.append({
-                    "id": item["id"],
-                    "name": item["name"]
-                })
-
-            cursor = data.get("nextPageCursor")
-
-            if not cursor:
-                break
-
-        except Exception as e:
-            print("🚨 에러:", e)
-            break
-
-    return gamepasses
-
-
-# -----------------------------------
-# 3️⃣ 전체 크롤링 실행
-# -----------------------------------
-def crawl_gamepasses(universe_id):
-    passes = fetch_all_gamepasses(universe_id)
-
-    results = []
-
-    for p in passes:
-        detail = fetch_gamepass_details(p["id"])
-        if detail:
-            results.append(detail)
-
-    return results
-
-
-# -----------------------------------
-# 사용 예시
-# -----------------------------------
-if __name__ == "__main__":
-    test_id = 1646011508
-    print(fetch_gamepass_details(test_id))
-
-    # universe_id 넣으면 전체 가져옴
-    # print(crawl_gamepasses(123456789))
