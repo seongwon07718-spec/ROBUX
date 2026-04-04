@@ -54,3 +54,19 @@ def create_container_msg(title, content, color=0x5865F2):
     con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
     con.add_item(ui.TextDisplay(content))
     return con
+
+class RobuxVending(ui.LayoutView):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    async def build_main_menu(self):
+        conn = sqlite3.connect(DATABASE)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
+        row = cur.fetchone()
+        conn.close()
+
+        cookie = row[0] if row else None
+        robux, status = get_roblox_data(cookie)
+        stock_display = f"{robux:,} R$" if status == "정상" else f"({status})"
