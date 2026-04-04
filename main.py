@@ -1,6 +1,3 @@
-import requests
-import json
-
 def get_roblox_data(cookie, proxy=None):
     if not cookie:
         return 0, "쿠키 없음"
