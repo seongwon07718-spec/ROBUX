@@ -1,34 +1,44 @@
     def get_gamepass_product_info(self, pass_id: int) -> dict | None:
-        # ✅ v2/assets API로 정확한 ProductId 조회
+        # 새 game-passes API로 price/creator 조회
         resp = self.session.get(
+            f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/details"
+        )
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        price_info = data.get("priceInformation") or {}
+        price = int(
+            price_info.get("price")
+            or price_info.get("defaultPriceInRobux")
+            or 0
+        )
+
+        # creator_id는 v2/assets에서 가져오기
+        resp2 = self.session.get(
             f"https://economy.roblox.com/v2/assets/{pass_id}/details"
         )
-        print(f"[v2/assets] status={resp.status_code} body={resp.text[:400]}")
-        if resp.status_code == 200:
-            data = resp.json()
-            return {
-                "ProductId": data.get("ProductId"),
-                "PriceInRobux": data.get("PriceInRobux") or 0,
-                "Creator": {
-                    "Id": (data.get("Creator") or {}).get("CreatorTargetId")
-                    or (data.get("Creator") or {}).get("Id")
-                },
-            }
-        return None
+        creator_id = None
+        if resp2.status_code == 200:
+            d2 = resp2.json()
+            creator_id = (d2.get("Creator") or {}).get("CreatorTargetId")
+            # ✅ ProductId 대신 pass_id 직접 사용
+            # economy API의 ProductId는 게임패스엔 없음
+
+        print(f"[상품정보] price={price} creator_id={creator_id}")
+        return {
+            "ProductId": pass_id,  # ✅ pass_id 그대로 사용
+            "PriceInRobux": price,
+            "Creator": {"Id": creator_id},
+        }
 
     def buy_gamepass(self, pass_id: int) -> dict:
         info = self.get_gamepass_product_info(pass_id)
         if not info:
             return {"purchased": False, "reason": "상품 정보 조회 실패"}
 
-        product_id = info.get("ProductId")
         price = int(info.get("PriceInRobux") or 0)
         seller_id = (info.get("Creator") or {}).get("Id")
-
-        print(f"[구매시도] product_id={product_id} price={price} seller_id={seller_id}")
-
-        if not product_id:
-            return {"purchased": False, "reason": "ProductId 없음"}
 
         token = self.get_csrf_token()
         if not token:
@@ -40,13 +50,14 @@
             "Referer": f"https://www.roblox.com/game-pass/{pass_id}",
             "Origin": "https://www.roblox.com",
         }
+
+        # ✅ 게임패스 전용 구매 API 사용
         resp = self.session.post(
-            f"https://economy.roblox.com/v1/purchases/products/{product_id}",
+            f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/purchase",
             json={
-                "expectedCurrency": 1,
                 "expectedPrice": price,
+                "expectedCurrency": 1,
                 "expectedSellerId": seller_id,
-                "saleLocationType": "Website",
             },
             headers=headers,
         )
