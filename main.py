@@ -1,6 +1,16 @@
-                    proceed_btn = ui.Button(
-                        label="진행하기",
-                        style=discord.ButtonStyle.gray,
-                        emoji="<:success:1489875582874554429>",
-                        custom_id=str(uuid.uuid4())[:50]
-                    )
+                        # 게임 직접 접속 URL
+                        launch_url = (
+                            f"roblox-player:1+launchmode:play"
+                            f"+gameinfo:0"
+                            f"+launchtime:0"
+                            f"+placelauncherurl:https://assetgame.roblox.com/game/PlaceLauncher.ashx"
+                            f"?request=RequestGame"
+                            f"%26placeId={selected_place_id}"
+                            f"%26isPartyLeader=false"
+                            f"+browsertrackerid:0"
+                            f"+robloxLocale:ko_kr"
+                            f"+gameLocale:ko_kr"
+                            f"+channel:"
+                        )
+
+                        subprocess.Popen(["cmd", "/c", f"start {launch_url}"])
