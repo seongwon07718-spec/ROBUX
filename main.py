@@ -3,6 +3,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.action_chains import ActionChains
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 import time
@@ -45,7 +46,6 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
         return path
 
     def close_annoying_popups():
-        """구매 완료 후 뜨는 안내 팝업 자동 X 닫기 - 구매 버튼은 절대 안 건드림"""
         try:
             driver.execute_script("""
                 const safeSkip = ['지금 구매하기', 'buy now', '구매', '취소', 'cancel'];
@@ -61,9 +61,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
                         txt === '닫기' || txt === 'close' ||
                         html.includes('×') || html.includes('✕') || html.includes('✖') ||
                         cls.includes('close') || cls.includes('dismiss')
-                    ) {
-                        btn.click();
-                    }
+                    ) { btn.click(); }
                 }
             """)
             time.sleep(1)
@@ -111,44 +109,93 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
         time.sleep(3)
         save(DONE_DIR, "modal")
 
-        # 2단계: 지금 구매하기 버튼 좌표로 직접 클릭
-        result = driver.execute_script("""
-            const btns = document.querySelectorAll('button');
-            
-            // 1순위: 텍스트 정확히 매칭
-            for (const btn of btns) {
-                if (btn.offsetParent === null) continue;
-                const txt = btn.innerText.trim();
-                if (txt === '지금 구매하기' || txt === 'Buy Now') {
-                    const rect = btn.getBoundingClientRect();
-                    btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                    btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                    btn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                    return '텍스트매칭: ' + txt;
-                }
-            }
-            
-            // 2순위: 모달 내 좌표로 찾기 (지금구매하기는 모달 하단 왼쪽)
-            for (const btn of btns) {
-                if (btn.offsetParent === null) continue;
-                const rect = btn.getBoundingClientRect();
-                const txt = btn.innerText.trim();
-                if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
-                if (rect.top > 540 && rect.top < 630 &&
-                    rect.left > 250 && rect.left < 460 &&
-                    rect.width > 80) {
-                    btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                    btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                    btn.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                    return '좌표클릭: ' + txt + ' top=' + Math.round(rect.top);
-                }
-            }
-            
-            return '실패';
-        """)
-        print(f"[{order_id}] 2단계: {result}")
+        # 2단계: 지금 구매하기 - 5가지 방법 순서대로 시도
+        clicked = False
 
-        if "실패" in result:
+        # 방법1: XPATH normalize-space
+        if not clicked:
+            try:
+                btn = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//button[normalize-space()='지금 구매하기']"
+                    ))
+                )
+                driver.execute_script("arguments[0].click();", btn)
+                clicked = True
+                print(f"[{order_id}] 방법1 성공")
+            except:
+                pass
+
+        # 방법2: XPATH contains
+        if not clicked:
+            try:
+                btn = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//button[contains(text(),'지금 구매') or contains(text(),'Buy Now')]"
+                    ))
+                )
+                driver.execute_script("arguments[0].click();", btn)
+                clicked = True
+                print(f"[{order_id}] 방법2 성공")
+            except:
+                pass
+
+        # 방법3: ActionChains로 실제 클릭
+        if not clicked:
+            try:
+                btn = driver.find_element(By.XPATH,
+                    "//*[contains(text(),'지금 구매하기') or contains(text(),'Buy Now')]"
+                )
+                ActionChains(driver).move_to_element(btn).pause(0.5).click().perform()
+                clicked = True
+                print(f"[{order_id}] 방법3 성공")
+            except:
+                pass
+
+        # 방법4: JS로 모달 안 버튼 좌표 클릭
+        if not clicked:
+            result = driver.execute_script("""
+                const btns = document.querySelectorAll('button');
+                for (const btn of btns) {
+                    if (btn.offsetParent === null) continue;
+                    const txt = btn.innerText.trim();
+                    if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
+                    const rect = btn.getBoundingClientRect();
+                    if (rect.top > 540 && rect.top < 640 && rect.left > 250 && rect.left < 460) {
+                        btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+                        btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true}));
+                        btn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+                        return '성공:' + txt;
+                    }
+                }
+                return '실패';
+            """)
+            if "성공" in result:
+                clicked = True
+                print(f"[{order_id}] 방법4 성공: {result}")
+
+        # 방법5: 모달 안 첫번째 버튼 클릭 (취소 제외)
+        if not clicked:
+            result = driver.execute_script("""
+                const modal = document.querySelector('[role="dialog"]') ||
+                             document.querySelector('[class*="modal"]') ||
+                             document.querySelector('[class*="purchase"]');
+                if (!modal) return '모달없음';
+                const btns = modal.querySelectorAll('button');
+                for (const btn of btns) {
+                    if (btn.offsetParent === null) continue;
+                    const txt = btn.innerText.trim();
+                    if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
+                    btn.click();
+                    return '성공:' + txt;
+                }
+                return '실패';
+            """)
+            if "성공" in result:
+                clicked = True
+                print(f"[{order_id}] 방법5 성공: {result}")
+
+        if not clicked:
             save(FAIL_DIR, "btn_not_found")
             return {"purchased": False, "reason": "지금 구매하기 버튼 못 찾음"}
 
@@ -169,7 +216,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
 
     except Exception as e:
         save(FAIL_DIR, "error")
-        print(f"[{order_id}] ❌ 구매 실패: {e}")
+        print(f"[{order_id}] ❌ 실패: {e}")
         return {"purchased": False, "reason": str(e)}
     finally:
         driver.quit()
@@ -190,10 +237,7 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
                 return {"success": False, "message": "잔액 부족", "order_id": None, "screenshot": None}
 
             order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
-            cur.execute(
-                "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                (money, user_id)
-            )
+            cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (money, user_id))
             cur.execute(
                 "INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'pending')",
                 (order_id, user_id, money, money)
@@ -206,10 +250,7 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
         with sqlite3.connect(DATABASE) as conn:
             cur = conn.cursor()
             if result.get("purchased"):
-                cur.execute(
-                    "UPDATE orders SET status = 'completed' WHERE order_id = ?",
-                    (order_id,)
-                )
+                cur.execute("UPDATE orders SET status = 'completed' WHERE order_id = ?", (order_id,))
                 conn.commit()
                 return {
                     "success": True,
@@ -218,14 +259,8 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
                     "screenshot": result.get("screenshot")
                 }
             else:
-                cur.execute(
-                    "UPDATE users SET balance = balance + ? WHERE user_id = ?",
-                    (money, user_id)
-                )
-                cur.execute(
-                    "UPDATE orders SET status = 'failed' WHERE order_id = ?",
-                    (order_id,)
-                )
+                cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (money, user_id))
+                cur.execute("UPDATE orders SET status = 'failed' WHERE order_id = ?", (order_id,))
                 conn.commit()
                 return {
                     "success": False,
