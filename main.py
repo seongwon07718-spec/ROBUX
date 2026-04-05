@@ -1,6 +1,4 @@
-                    proceed_btn = ui.Button(
-                        label="진행하기",
-                        style=discord.ButtonStyle.gray,
-                        emoji="<:success:1489875582874554429>",
-                        custom_id=f"proceed_{selected_place_id}_{int(time.time())}"
+                    pass_select = ui.Select(
+                        placeholder="게임패스를 선택해주세요",
+                        custom_id=f"pass_select_{selected_place_id}_{int(time.time())}"
                     )
