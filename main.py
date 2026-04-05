@@ -1,20 +1,3 @@
-    async def do_buy(self, it: discord.Interaction):
-        start_time = asyncio.get_event_loop().time()
-        await it.response.edit_message(
-            view=await get_container_view(
-                "<a:1792loading.:1487444148716965949> 처리 중",
-                "-# - 로블록스 서버 API 연결 중\n-# - 구매를 진행하는데 약간의 시간이 소요될 수 있습니다",
-                0x57F287
-            )
-        )
-        loop = asyncio.get_running_loop()
-        from buy_gamepass import process_manual_buy_selenium
-        res = await loop.run_in_executor(
-            None, process_manual_buy_selenium,
-            self.pass_info["id"], self.user_id, self.money
-        )
-        elapsed = round(asyncio.get_event_loop().time() - start_time, 1)
-
         if res["success"]:
             view = ui.LayoutView()
             con = ui.Container()
@@ -29,6 +12,20 @@
             ))
             view.add_item(con)
             await it.edit_original_response(view=view)
+
+        elif res.get("message") and "이미 소유" in res["message"]:
+            view = ui.LayoutView()
+            con = ui.Container()
+            con.accent_color = 0xFEE75C
+            con.add_item(ui.TextDisplay(
+                f"### ⚠️ 구매 불가\n"
+                f"-# - 이미 보유 중인 게임패스입니다.\n"
+                f"-# - **게임패스**: {self.pass_info.get('name', '알 수 없음')}\n"
+                f"-# - 다른 게임패스를 선택해주세요."
+            ))
+            view.add_item(con)
+            await it.edit_original_response(view=view)
+
         else:
             await it.edit_original_response(
                 view=await get_container_view(
