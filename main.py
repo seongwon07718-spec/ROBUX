@@ -11,64 +11,13 @@ import random
 import string
 import os
 import threading
+import glob
 
 DATABASE = "robux_shop.db"
 DONE_DIR = "DONE"
 FAIL_DIR = "FAIL"
 
 db_lock = threading.Lock()
-
-def close_popups(driver, order_id):
-    """X버튼, 확인버튼 등 방해되는 팝업 모두 닫기"""
-    try:
-        result = driver.execute_script("""
-            const closeKeywords = ['닫기', '확인', 'close', 'ok', '×', '✕'];
-            const skipKeywords = ['지금 구매하기', 'buy now', '구매', '취소', 'cancel'];
-            
-            const btns = document.querySelectorAll('button, [role="button"]');
-            let closed = [];
-            
-            for (const btn of btns) {
-                if (btn.offsetParent === null) continue;
-                const txt = btn.innerText.trim().toLowerCase();
-                const cls = (btn.className || '').toLowerCase();
-                
-                // 구매 관련 버튼은 건드리지 않음
-                if (skipKeywords.some(k => txt.includes(k))) continue;
-                
-                // X버튼 또는 확인버튼 닫기
-                if (closeKeywords.some(k => txt.includes(k.toLowerCase())) || 
-                    cls.includes('close') || cls.includes('dismiss') ||
-                    btn.innerHTML.includes('×') || btn.innerHTML.includes('✕')) {
-                    btn.click();
-                    closed.push(txt || cls);
-                }
-            }
-            return closed.length > 0 ? '팝업닫기: ' + closed.join(', ') : '팝업없음';
-        """)
-        print(f"[{order_id}] 팝업처리: {result}")
-        time.sleep(1)
-    except:
-        pass
-
-
-def verify_purchase_modal(driver, pass_id, order_id) -> bool:
-    """구매 모달창에서 올바른 게임패스인지 확인"""
-    try:
-        modal_text = driver.execute_script("""
-            const modal = document.querySelector('[role="dialog"]') ||
-                         document.querySelector('[class*="modal"]');
-            return modal ? modal.innerText : '';
-        """)
-        print(f"[{order_id}] 모달 텍스트: {modal_text[:200]}")
-        
-        # 모달이 열려있으면 OK
-        if modal_text and len(modal_text) > 10:
-            return True
-        return False
-    except:
-        return False
-
 
 def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
     os.makedirs(DONE_DIR, exist_ok=True)
@@ -96,6 +45,37 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
             pass
         return path
 
+    def close_annoying_popups():
+        """구매 완료 후 뜨는 안내 팝업 자동 X 닫기 - 구매 버튼은 절대 안 건드림"""
+        try:
+            result = driver.execute_script("""
+                const safeSkip = ['지금 구매하기', 'buy now', '구매', '취소', 'cancel'];
+                const btns = document.querySelectorAll('button');
+                let closed = [];
+                for (const btn of btns) {
+                    if (btn.offsetParent === null) continue;
+                    const txt = btn.innerText.trim().toLowerCase();
+                    const cls = (btn.className || '').toLowerCase();
+                    const html = btn.innerHTML;
+                    if (safeSkip.some(k => txt.includes(k))) continue;
+                    if (
+                        txt === '확인' || txt === 'ok' ||
+                        txt === '닫기' || txt === 'close' ||
+                        html.includes('×') || html.includes('✕') || html.includes('✖') ||
+                        cls.includes('close') || cls.includes('dismiss')
+                    ) {
+                        btn.click();
+                        closed.push(txt || 'X버튼');
+                    }
+                }
+                return closed.length > 0 ? '닫음: ' + closed.join(', ') : '없음';
+            """)
+            if "닫음" in result:
+                print(f"[{order_id}] 팝업 닫기: {result}")
+            time.sleep(1)
+        except:
+            pass
+
     try:
         driver.get("https://www.roblox.com")
         time.sleep(2)
@@ -112,9 +92,6 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
 
         driver.get(f"https://www.roblox.com/game-pass/{pass_id}/")
         time.sleep(4)
-
-        # 페이지 로드 후 방해 팝업 닫기
-        close_popups(driver, order_id)
 
         page = driver.page_source
         if "already own" in page.lower() or "이미 소유" in page.lower():
@@ -138,23 +115,12 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
         driver.execute_script("arguments[0].click();", buy_btn)
         print(f"[{order_id}] 1단계 구매 버튼 클릭!")
         time.sleep(3)
-
-        # 모달 뜬 후 방해 팝업 먼저 닫기
-        close_popups(driver, order_id)
-        time.sleep(1)
-
         save(DONE_DIR, "modal")
 
-        # 구매 모달 확인
-        if not verify_purchase_modal(driver, pass_id, order_id):
-            save(FAIL_DIR, "modal_not_found")
-            return {"purchased": False, "reason": "구매 모달창을 찾을 수 없음"}
-
-        # 2단계: "지금 구매하기" 텍스트 정확히 매칭해서 클릭
+        # 2단계: 지금 구매하기 클릭
         result = driver.execute_script("""
             const btns = document.querySelectorAll('button');
-            const targets = ['지금 구매하기', 'Buy Now', '지금구매하기'];
-            
+            const targets = ['지금 구매하기', 'Buy Now'];
             for (const btn of btns) {
                 if (btn.offsetParent === null) continue;
                 const txt = btn.innerText.trim();
@@ -163,40 +129,21 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
                     return '성공: ' + txt;
                 }
             }
-            
-            // 못 찾으면 모달 안에서 primary 버튼 찾기
-            const modal = document.querySelector('[role="dialog"]') ||
-                         document.querySelector('[class*="modal"]');
-            if (modal) {
-                const modalBtns = modal.querySelectorAll('button');
-                for (const btn of modalBtns) {
-                    if (btn.offsetParent === null) continue;
-                    const txt = btn.innerText.trim();
-                    const cls = btn.className || '';
-                    // 취소/X 버튼 제외
-                    if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
-                    if (cls.includes('primary') || cls.includes('confirm')) {
-                        btn.click();
-                        return '모달primary클릭: ' + txt;
-                    }
-                }
-            }
-            
-            return '실패: 버튼없음';
+            return '실패';
         """)
         print(f"[{order_id}] 2단계 결과: {result}")
 
         if "실패" in result:
             save(FAIL_DIR, "btn_not_found")
-            return {"purchased": False, "reason": f"지금 구매하기 버튼 못 찾음"}
+            return {"purchased": False, "reason": "지금 구매하기 버튼 못 찾음"}
 
-        time.sleep(5)
+        # 구매 완료 후 안내 팝업 자동 닫기 (3번 반복)
+        for i in range(3):
+            time.sleep(2)
+            close_annoying_popups()
 
-        # 구매 후 팝업 있으면 닫기
-        close_popups(driver, order_id)
-        time.sleep(2)
-
-        save(DONE_DIR, "success")
+        # 구매 성공 스크린샷 저장
+        success_path = save(DONE_DIR, "success")
 
         page_after = driver.page_source
         if "already own" in page_after.lower() or "이미 소유" in page_after.lower():
@@ -204,7 +151,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
             return {"purchased": False, "reason": "이미 소유 중"}
 
         print(f"[{order_id}] ✅ 구매 성공!")
-        return {"purchased": True}
+        return {"purchased": True, "screenshot": success_path}
 
     except Exception as e:
         save(FAIL_DIR, "error")
@@ -221,12 +168,12 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
             cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
             row = cur.fetchone()
             if not row:
-                return {"success": False, "message": "관리자 쿠키 없음", "order_id": None}
+                return {"success": False, "message": "관리자 쿠키 없음", "order_id": None, "screenshot": None}
 
             cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
             user = cur.fetchone()
             if not user or user[0] < money:
-                return {"success": False, "message": "잔액 부족", "order_id": None}
+                return {"success": False, "message": "잔액 부족", "order_id": None, "screenshot": None}
 
             order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
             cur.execute(
@@ -250,7 +197,12 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
                     (order_id,)
                 )
                 conn.commit()
-                return {"success": True, "message": "✅ 구매 완료!", "order_id": order_id}
+                return {
+                    "success": True,
+                    "message": "✅ 구매 완료!",
+                    "order_id": order_id,
+                    "screenshot": result.get("screenshot")
+                }
             else:
                 cur.execute(
                     "UPDATE users SET balance = balance + ? WHERE user_id = ?",
@@ -264,7 +216,8 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
                 return {
                     "success": False,
                     "message": f"❌ {result.get('reason', '구매 실패')}",
-                    "order_id": None
+                    "order_id": None,
+                    "screenshot": None
                 }
 
 
