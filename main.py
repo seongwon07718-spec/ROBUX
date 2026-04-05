@@ -1,36 +1,29 @@
-class FinalBuyView(ui.LayoutView):
+            async def on_pass_select(inter: discord.Interaction):
 
-    def __init__(self, pass_info: dict, money: int, user_id: int | str, discount: int = 0):
+                selected_id = int(inter.data["values"][0])
+                pass_data = next((p for p in passes if p.get("id") == selected_id), None)
 
-        super().__init__(timeout=60)
-        self.pass_info = pass_info
-        self.money = money
-        self.user_id = str(user_id)
-        self.discount = discount
-        self._build_ui()
+                if not pass_data:
+                    await inter.response.send_message("오류가 발생했습니다.", ephemeral=True)
+                    return
 
-    def _build_ui(self):
+                result_view = ui.LayoutView(timeout=60)
+                result_con = ui.Container()
+                result_con.accent_color = 0x5865F2
 
-        con = ui.Container()
-        con.accent_color = 0x5865F2
+                result_con.add_item(ui.TextDisplay(
+                    f"### <:acy2:1489883409001091142>  선물 정보 확인\n"
+                    f"-# - **선물 대상**: {target_name}\n"
+                    f"-# - **게임**: {game_name}\n"
+                    f"-# - **게임패스**: {pass_data.get('name', '이름없음')}\n"
+                    f"-# - **가격**: {pass_data.get('price', 0):,}로벅스"
+                ))
 
-        discount_text = f"\n-# - **할인율**: {self.discount}%" if self.discount > 0 else ""
+                result_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        con.add_item(ui.TextDisplay(
-            f"### <:acy2:1489883409001091142> 최종 단계\n"
-            f"-# - **게임패스 이름**: {self.pass_info.get('name', '알 수 없음')}\n"
-            f"-# - **로벅스**: {self.pass_info.get('price', 0):,}로벅스"
-            f"{discount_text}\n"
-            f"-# - **차감금액**: {self.money:,}원"
-        ))
-
-        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-
-        btn = ui.Button(
-            label="진행하기",
-            style=discord.ButtonStyle.gray,
-            emoji="<:upvote:1489930275868770305>"
-        )
-        btn.callback = self.do_buy
-        con.add_item(ui.ActionRow(btn))
-        self.add_item(con)
+                proceed_btn = ui.Button(
+                    label="진행하기",
+                    style=discord.ButtonStyle.gray,
+                    emoji="<:success:1489875582874554429>",
+                    custom_id=str(uuid.uuid4()).replace("-", "")[:40]
+                )
