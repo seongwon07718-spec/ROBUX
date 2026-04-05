@@ -7,10 +7,18 @@ if __name__ == "__main__":
     
     api = RobloxAPI(row[0])
     
-    resp = api.session.get(
-        "https://apis.roblox.com/game-passes/v1/game-passes/1784490889/details"
+    token = api.get_csrf_token()
+    headers = {
+        "x-csrf-token": token,
+        "Content-Type": "application/json",
+        "Referer": "https://www.roblox.com/",
+        "Origin": "https://www.roblox.com",
+    }
+    
+    resp = api.session.post(
+        "https://apis.roblox.com/game-passes/v1/game-passes/1784490889/purchase",
+        json={"expectedPrice": 5},
+        headers=headers,
     )
-    data = resp.json()
-    print(f"enabledFeatures: {data.get('enabledFeatures')}")
-    print(f"priceInformation: {data.get('priceInformation')}")
-    print(f"전체: {data}")
+    print(f"status: {resp.status_code}")
+    print(f"body: {resp.text}")
