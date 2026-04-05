@@ -9,10 +9,14 @@ import time
 import sqlite3
 import random
 import string
+import os
 
 DATABASE = "robux_shop.db"
+DONE_DIR = "DONE"
 
 def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
+    os.makedirs(DONE_DIR, exist_ok=True)
+
     options = Options()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -46,63 +50,63 @@ def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
         # 1단계: 구매 버튼 클릭
         buy_btn = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH,
-                "//button[contains(@class,'PurchaseButton') or contains(text(),'Buy') or contains(text(),'구매')]"
+                "//button[contains(@class,'PurchaseButton') or contains(text(),'구매')]"
             ))
         )
         buy_btn.click()
         print("[Selenium] 1단계 구매 버튼 클릭 완료")
         time.sleep(3)
 
-        # 2단계: 모달창 스크린샷 찍고 버튼 전체 출력
-        driver.save_screenshot("modal_screenshot.png")
-        buttons = driver.find_elements(By.TAG_NAME, "button")
-        print(f"[Selenium] 모달창 버튼 목록:")
-        for i, btn in enumerate(buttons):
-            if btn.is_displayed():
-                print(f"  [{i}] text='{btn.text}' class='{btn.get_attribute('class')}'")
-
-        # 2단계: JavaScript로 Buy Now 버튼 직접 클릭
+        # 2단계: 지금 구매하기 클릭
         clicked = driver.execute_script("""
             const allBtns = document.querySelectorAll('button');
             for (const btn of allBtns) {
                 if (!btn.offsetParent) continue;
-                const txt = btn.textContent.trim().toLowerCase();
-                const cls = btn.className.toLowerCase();
-                if (txt.includes('buy now') || txt.includes('지금 구매') || 
-                    txt.includes('purchase now') || cls.includes('buy-now') ||
-                    cls.includes('buynow') || cls.includes('purchase-btn')) {
+                const txt = btn.textContent.trim();
+                if (txt === '지금 구매하기' || txt.includes('지금 구매') || 
+                    txt === 'Buy Now' || txt.includes('Buy Now')) {
                     btn.click();
-                    return btn.textContent.trim();
+                    return txt;
                 }
             }
             return null;
         """)
 
         if clicked:
-            print(f"[Selenium] JS 클릭 성공: '{clicked}'")
+            print(f"[Selenium] 지금 구매하기 클릭 성공: '{clicked}'")
         else:
-            # 마지막 시도: 모달 안에서 primary 버튼 클릭
-            try:
-                modal_btn = driver.find_element(By.CSS_SELECTOR, 
-                    ".modal-window button.btn-primary-md, .purchase-dialog button.btn-primary, [class*='modal'] button[class*='primary']"
-                )
-                modal_btn.click()
-                print(f"[Selenium] CSS 선택자로 클릭: '{modal_btn.text}'")
-            except:
-                print("[Selenium] 확인 버튼을 찾지 못했어요")
-                return {"purchased": False, "reason": "확인 버튼 못 찾음 - modal_screenshot.png 확인하세요"}
+            confirm_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//button[text()='지금 구매하기' or contains(text(),'지금 구매') or text()='Buy Now']"
+                ))
+            )
+            confirm_btn.click()
+            print("[Selenium] XPATH로 클릭 성공!")
 
         time.sleep(4)
 
-        # 성공 여부 확인
+        # 구매 완료 스크린샷 저장
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        screenshot_path = os.path.join(DONE_DIR, f"pass_{pass_id}_{timestamp}.png")
+        driver.save_screenshot(screenshot_path)
+        print(f"[Selenium] 구매 완료 스크린샷 저장: {screenshot_path}")
+
         page = driver.page_source
         if "already own" in page.lower() or "이미 소유" in page.lower():
             return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
 
         print(f"[Selenium] 구매 완료! pass_id={pass_id}")
-        return {"purchased": True}
+        return {"purchased": True, "screenshot": screenshot_path}
 
     except Exception as e:
+        # 실패 스크린샷도 저장
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            fail_path = os.path.join(DONE_DIR, f"FAIL_pass_{pass_id}_{timestamp}.png")
+            driver.save_screenshot(fail_path)
+            print(f"[Selenium] 실패 스크린샷 저장: {fail_path}")
+        except:
+            pass
         print(f"[Selenium] 오류: {e}")
         return {"purchased": False, "reason": str(e)}
     finally:
@@ -138,7 +142,7 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
         )
         conn.commit()
 
-    return {"success": True, "message": f"구매 완료!", "order_id": order_id}
+    return {"success": True, "message": "구매 완료!", "order_id": order_id}
 
 
 if __name__ == "__main__":
