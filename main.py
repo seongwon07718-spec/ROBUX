@@ -7,21 +7,10 @@ if __name__ == "__main__":
     
     api = RobloxAPI(row[0])
     
-    # s_w0nx 게임패스 (RegionalPricing 있음)
-    pass_id = 1784490889
-    
-    token = api.get_csrf_token()
-    headers = {
-        "x-csrf-token": token,
-        "Content-Type": "application/json",
-        "Referer": "https://www.roblox.com/",
-        "Origin": "https://www.roblox.com",
-    }
-    
-    resp = api.session.post(
-        f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/purchase",
-        json={"expectedPrice": 0},
-        headers=headers,
+    resp = api.session.get(
+        "https://apis.roblox.com/game-passes/v1/game-passes/1784490889/details"
     )
-    print(f"status: {resp.status_code}")
-    print(f"body: {resp.text}")
+    data = resp.json()
+    print(f"enabledFeatures: {data.get('enabledFeatures')}")
+    print(f"priceInformation: {data.get('priceInformation')}")
+    print(f"전체: {data}")
