@@ -1,33 +1,36 @@
-    async def on_select(self, it: discord.Interaction):
+class FinalBuyView(ui.LayoutView):
 
-        selected_id = int(it.data["values"][0])
-        pass_data = next((p for p in self.passes if p.get("id") == selected_id), None)
+    def __init__(self, pass_info: dict, money: int, user_id: int | str, discount: int = 0):
 
-        if not pass_data:
-            await it.response.send_message("오류가 발생했습니다.", ephemeral=True)
-            return
+        super().__init__(timeout=60)
+        self.pass_info = pass_info
+        self.money = money
+        self.user_id = str(user_id)
+        self.discount = discount
+        self._build_ui()
 
-        with sqlite3.connect(DATABASE) as conn:
-            cur = conn.cursor()
+    def _build_ui(self):
 
-            # 환율
-            cur.execute("SELECT value FROM config WHERE key = 'robux_rate'")
-            r = cur.fetchone()
-            rate = int(r[0]) if r else 1000
+        con = ui.Container()
+        con.accent_color = 0x5865F2
 
-            # 할인율
-            cur.execute("SELECT value FROM config WHERE key = ?", (f"discount_{it.user.id}",))
-            d = cur.fetchone()
-            discount = int(d[0]) if d else 0
+        discount_text = f"\n-# - **할인율**: {self.discount}%" if self.discount > 0 else ""
 
-        # 기본 금액 계산
-        base_money = int((pass_data.get("price", 0) / rate) * 10000)
+        con.add_item(ui.TextDisplay(
+            f"### <:acy2:1489883409001091142> 최종 단계\n"
+            f"-# - **게임패스 이름**: {self.pass_info.get('name', '알 수 없음')}\n"
+            f"-# - **로벅스**: {self.pass_info.get('price', 0):,}로벅스"
+            f"{discount_text}\n"
+            f"-# - **차감금액**: {self.money:,}원"
+        ))
 
-        # 할인 적용
-        if discount > 0:
-            discounted = int(base_money * (1 - discount / 100))
-        else:
-            discounted = base_money
+        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-        view = FinalBuyView(pass_data, discounted, it.user.id, discount)
-        await it.response.edit_message(view=view)
+        btn = ui.Button(
+            label="진행하기",
+            style=discord.ButtonStyle.gray,
+            emoji="<:upvote:1489930275868770305>"
+        )
+        btn.callback = self.do_buy
+        con.add_item(ui.ActionRow(btn))
+        self.add_item(con)
