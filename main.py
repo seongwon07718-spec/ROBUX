@@ -7,18 +7,14 @@ if __name__ == "__main__":
     
     api = RobloxAPI(row[0])
     
-    token = api.get_csrf_token()
-    headers = {
-        "x-csrf-token": token,
-        "Content-Type": "application/json",
-        "Referer": "https://www.roblox.com/",
-        "Origin": "https://www.roblox.com",
-    }
-    
-    resp = api.session.post(
-        "https://apis.roblox.com/game-passes/v1/game-passes/1784490889/purchase",
-        json={"expectedPrice": 5},
-        headers=headers,
+    # x-bound-auth-token 먼저 가져오기
+    auth_resp = api.session.post(
+        "https://apis.roblox.com/hba-service/v1/getServerNonce"
     )
-    print(f"status: {resp.status_code}")
-    print(f"body: {resp.text}")
+    print(f"nonce: {auth_resp.status_code} {auth_resp.text}")
+    
+    bound_resp = api.session.post(
+        "https://apis.roblox.com/hba-service/v1/getBoundAuthToken",
+        json={"serverNonce": auth_resp.text.strip('"')}
+    )
+    print(f"bound: {bound_resp.status_code} {bound_resp.text}")
