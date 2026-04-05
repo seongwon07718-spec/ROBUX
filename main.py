@@ -1,3 +1,96 @@
+GIFT_GAMES = [
+    ("Rivals", "17625359962"),
+    ("Blade Ball", "13772394625"),
+    ("Blox Fruits", "2753915549"),
+    ("Adopt Me!", "920587237"),
+    ("Murder Mystery 2", "142823291"),
+    ("Jailbreak", "606849621"),
+    ("Dress to Impress", "12699763399"),
+    ("Deepwoken", "4111023553"),
+    ("Da Hood", "2788229376"),
+]
+
+class GiftModal(ui.Modal, title="글로벌 선물 방식"):
+
+    roblox_name = ui.TextInput(
+        label="로블록스 닉네임",
+        placeholder="선물받을 유저의 닉네임을 입력하세요",
+        required=True,
+        max_length=20,
+    )
+
+    async def on_submit(self, it: discord.Interaction):
+
+        await it.response.defer(ephemeral=True)
+
+        target_name = self.roblox_name.value.strip()
+        loop = asyncio.get_running_loop()
+        api = RobloxAPI()
+        target_id = await loop.run_in_executor(None, api.get_user_id, target_name)
+
+        if not target_id:
+            await it.followup.send(
+                view=await get_container_view(
+                    "<:downvote:1489930277450158080>  실패",
+                    "-# 유저를 찾을 수 없습니다.",
+                    0xED4245
+                ),
+                ephemeral=True
+            )
+            return
+
+        view = ui.LayoutView(timeout=60)
+        con = ui.Container()
+        con.accent_color = 0x5865F2
+
+        con.add_item(ui.TextDisplay(
+            f"### <:acy2:1489883409001091142>  글로벌 선물 방식\n"
+            f"-# - **선물 대상**: {target_name}\n"
+            f"-# - 선물할 게임을 선택해주세요"
+        ))
+
+        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        select = ui.Select(
+            placeholder="게임을 선택해주세요",
+            custom_id=str(uuid.uuid4()).replace("-", "")[:40]
+        )
+
+        for name, place_id in GIFT_GAMES:
+            select.add_option(label=name, value=place_id)
+
+        async def on_game_select(interaction: discord.Interaction):
+
+            selected_place_id = interaction.data["values"][0]
+            game_name = next((n for n, u in GIFT_GAMES if u == selected_place_id), "알 수 없음")
+
+            loading_view = ui.LayoutView(timeout=60)
+            loading_con = ui.Container()
+            loading_con.accent_color = 0x5865F2
+            loading_con.add_item(ui.TextDisplay(
+                f"### <a:1792loading:1487444148716965949>  불러오는 중\n"
+                f"-# - **선물 대상**: {target_name}\n"
+                f"-# - **게임**: {game_name}\n"
+                f"-# - 게임패스 목록을 불러오는 중입니다"
+            ))
+            loading_view.add_item(loading_con)
+            await interaction.response.edit_message(view=loading_view)
+
+            def get_universe_and_passes(place_id):
+                import requests as req
+                resp = req.get(
+                    f"https://apis.roproxy.com/universes/v1/places/{place_id}/universe",
+                    timeout=10
+                )
+                if resp.status_code != 200:
+                    return None
+                universe_id = resp.json().get("universeId")
+                if not universe_id:
+                    return None
+                return api.get_place_gamepasses(universe_id)
+
+            passes = await loop.run_in_executor(None, get_universe_and_passes, selected_place_id)
+
             if not passes:
 
                 fail_view = ui.LayoutView(timeout=60)
@@ -150,3 +243,121 @@
             pass_view.add_item(pass_con)
 
             await interaction.edit_original_response(view=pass_view)
+
+                    async def on_proceed(proceed_inter: discord.Interaction):
+
+                        await proceed_inter.response.edit_message(
+                            view=await get_container_view(
+                                "<a:1792loading:1487444148716965949>  게임 실행 중",
+                                "-# - 잠시만 기다려주세요...",
+                                0x5865F2
+                            )
+                        )
+
+                        settings_path = os.path.expandvars(r"%LOCALAPPDATA%\Roblox\Versions")
+                        try:
+                            for ver in os.listdir(settings_path):
+                                cfg_path = os.path.join(
+                                    settings_path, ver,
+                                    "ClientSettings", "ClientAppSettings.json"
+                                )
+                                os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+                                with open(cfg_path, "w") as f:
+                                    json.dump({
+                                        "FFlagHandleAltEnterFullscreenManually": "False",
+                                        "FFlagDebugFullscreenTitlebarRevamp": "False"
+                                    }, f)
+                        except:
+                            pass
+
+                        subprocess.Popen([
+                            "cmd", "/c",
+                            f"start roblox://experiences/start?placeId={selected_place_id}"
+                        ])
+
+                        await asyncio.sleep(8)
+
+                        await proceed_inter.edit_original_response(
+                            view=await get_container_view(
+                                "✅ 게임 실행됨",
+                                f"-# - **게임**: {game_name}\n"
+                                f"-# - **선물 대상**: {target_name}",
+                                0x57F287
+                            )
+                        )
+
+                    proceed_btn.callback = on_proceed
+
+                    result_con.add_item(ui.ActionRow(proceed_btn))
+
+                    result_view.add_item(result_con)
+
+                    await inter.response.edit_message(view=result_view)
+
+                async def on_proceed(proceed_inter: discord.Interaction):
+
+                    await proceed_inter.response.edit_message(
+                        view=await get_container_view(
+                            "<a:1792loading:1487444148716965949>  게임 실행 중",
+                            " - 잠시만 기다려주세요",
+                            0x5865F2
+                        )
+                    )
+
+                    # 창모드 설정
+                    settings_path = os.path.expandvars(r"%LOCALAPPDATA%\Roblox\Versions")
+                    try:
+                        for ver in os.listdir(settings_path):
+                            cfg_path = os.path.join(
+                                settings_path, ver,
+                                "ClientSettings", "ClientAppSettings.json"
+                            )
+                            os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+                            with open(cfg_path, "w") as f:
+                                json.dump({
+                                    "FFlagHandleAltEnterFullscreenManually": "False",
+                                    "FFlagDebugFullscreenTitlebarRevamp": "False"
+                                }, f)
+                    except:
+                        pass
+
+                    # 쿠키로 바로 게임 실행
+                    subprocess.Popen([
+                        "cmd", "/c",
+                        f"start roblox://experiences/start?placeId={selected_place_id}"
+                    ])
+
+                    await asyncio.sleep(8)
+
+                    await proceed_inter.edit_original_response(
+                        view=await get_container_view(
+                            "✅ 게임 실행됨",
+                            f" - **게임**: {game_name}\n"
+                            f"-# - **선물 대상**: {target_name}",
+                            0x57F287
+                        )
+                    )
+
+                proceed_btn.callback = on_proceed
+
+                result_con.add_item(ui.ActionRow(proceed_btn))
+
+                result_view.add_item(result_con)
+
+                await inter.response.edit_message(view=result_view)
+
+            pass_select.callback = on_pass_select
+
+            pass_con.add_item(ui.ActionRow(pass_select))
+
+            pass_view.add_item(pass_con)
+
+            await interaction.edit_original_response(view=pass_view)
+
+        select.callback = on_game_select
+
+        con.add_item(ui.ActionRow(select))
+
+        view.add_item(con)
+
+        await it.followup.send(view=view, ephemeral=True)
