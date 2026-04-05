@@ -1,36 +1,30 @@
-        if res["success"]:
-            view = ui.LayoutView()
-            con = ui.Container()
-            con.accent_color = 0x57F287
-            con.add_item(ui.TextDisplay(
-                f"### ✅ 결제 완료\n"
-                f"-# - **게임패스**: {self.pass_info.get('name', '알 수 없음')}\n"
-                f"-# - **가격**: {self.pass_info.get('price', 0):,} R$\n"
-                f"-# - **결제금액**: {self.money:,}원\n"
-                f"-# - **처리시간**: {elapsed}초\n"
-                f"-# - **거래ID**: `{res['order_id']}`"
-            ))
-            view.add_item(con)
-            await it.edit_original_response(view=view)
+    try:
+        driver.get("https://www.roblox.com")
+        time.sleep(2)
 
-        elif res.get("message") and "이미 소유" in res["message"]:
-            view = ui.LayoutView()
-            con = ui.Container()
-            con.accent_color = 0xFEE75C
-            con.add_item(ui.TextDisplay(
-                f"### ⚠️ 구매 불가\n"
-                f"-# - 이미 보유 중인 게임패스입니다.\n"
-                f"-# - **게임패스**: {self.pass_info.get('name', '알 수 없음')}\n"
-                f"-# - 다른 게임패스를 선택해주세요."
-            ))
-            view.add_item(con)
-            await it.edit_original_response(view=view)
+        clean_cookie = cookie.strip()
+        if "=" in clean_cookie:
+            clean_cookie = clean_cookie.split("=", 1)[-1]
+        driver.add_cookie({
+            "name": ".ROBLOSECURITY",
+            "value": clean_cookie,
+            "domain": ".roblox.com",
+            "path": "/",
+        })
 
-        else:
-            await it.edit_original_response(
-                view=await get_container_view(
-                    "❌ 결제 실패",
-                    f"-# {res['message']}",
-                    0xED4245
-                )
-            )
+        # ✅ Selenium 없이 API로 먼저 소유 여부 확인
+        import requests
+        session = requests.Session()
+        session.cookies.set(".ROBLOSECURITY", clean_cookie, domain=".roblox.com")
+        me = session.get("https://users.roblox.com/v1/users/authenticated").json()
+        my_id = me.get("id")
+        if my_id:
+            own_resp = session.get(
+                f"https://inventory.roblox.com/v1/users/{my_id}/items/GamePass/{pass_id}"
+            ).json()
+            if own_resp.get("data"):
+                return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
+
+        driver.get(f"https://www.roblox.com/game-pass/{pass_id}/")
+        time.sleep(4)
+        # 나머지 코드...
