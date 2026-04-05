@@ -13,9 +13,11 @@ import os
 
 DATABASE = "robux_shop.db"
 DONE_DIR = "DONE"
+FAIL_DIR = "FAIL"
 
 def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
     os.makedirs(DONE_DIR, exist_ok=True)
+    os.makedirs(FAIL_DIR, exist_ok=True)
 
     options = Options()
     options.add_argument("--no-sandbox")
@@ -28,6 +30,16 @@ def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
         service=Service(ChromeDriverManager().install()),
         options=options
     )
+
+    def save_screenshot(folder, label):
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(folder, f"{label}_pass{pass_id}_{timestamp}.png")
+        try:
+            driver.save_screenshot(path)
+            print(f"[스크린샷] 저장: {path}")
+        except:
+            pass
+        return path
 
     try:
         driver.get("https://www.roblox.com")
@@ -47,66 +59,61 @@ def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
         driver.get(f"https://www.roblox.com/game-pass/{pass_id}/")
         time.sleep(4)
 
-        # 1단계: 구매 버튼 클릭
+        # 1단계: 구매 버튼
         buy_btn = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH,
                 "//button[contains(@class,'PurchaseButton') or contains(text(),'구매')]"
             ))
         )
         buy_btn.click()
-        print("[Selenium] 1단계 구매 버튼 클릭 완료")
+        print("[Selenium] 1단계 구매 버튼 클릭!")
         time.sleep(3)
 
-        # 2단계: 지금 구매하기 클릭
-        clicked = driver.execute_script("""
-            const allBtns = document.querySelectorAll('button');
-            for (const btn of allBtns) {
-                if (!btn.offsetParent) continue;
-                const txt = btn.textContent.trim();
-                if (txt === '지금 구매하기' || txt.includes('지금 구매') || 
-                    txt === 'Buy Now' || txt.includes('Buy Now')) {
-                    btn.click();
-                    return txt;
+        save_screenshot(DONE_DIR, "modal")
+
+        # 2단계: JS로 모든 버튼 강제 클릭 시도
+        result = driver.execute_script("""
+            const btns = Array.from(document.querySelectorAll('button'));
+            const visible = btns.filter(b => b.offsetParent !== null);
+            const keywords = ['지금 구매하기', '지금 구매', 'Buy Now', 'buy now', 'Purchase'];
+            for (const kw of keywords) {
+                for (const btn of visible) {
+                    if (btn.textContent.trim().includes(kw)) {
+                        btn.click();
+                        return '클릭성공: ' + btn.textContent.trim();
+                    }
                 }
             }
-            return null;
+            // 못 찾으면 모든 버튼 텍스트 반환
+            return '못찾음: ' + visible.map(b => b.textContent.trim()).join(' | ');
         """)
+        print(f"[Selenium] JS 결과: {result}")
 
-        if clicked:
-            print(f"[Selenium] 지금 구매하기 클릭 성공: '{clicked}'")
-        else:
-            confirm_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//button[text()='지금 구매하기' or contains(text(),'지금 구매') or text()='Buy Now']"
-                ))
-            )
-            confirm_btn.click()
-            print("[Selenium] XPATH로 클릭 성공!")
+        if "못찾음" in result:
+            # 버튼 클래스로 직접 찾기 (이전 로그에서 확인된 클래스)
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, 
+                    "button.btn-primary-md, button[class*='confirm'], button[class*='purchase-btn']"
+                )
+                driver.execute_script("arguments[0].click();", btn)
+                print(f"[Selenium] CSS로 클릭: {btn.text}")
+            except Exception as e2:
+                save_screenshot(FAIL_DIR, "fail_nobtn")
+                return {"purchased": False, "reason": f"버튼 못 찾음: {result}"}
 
         time.sleep(4)
-
-        # 구매 완료 스크린샷 저장
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        screenshot_path = os.path.join(DONE_DIR, f"pass_{pass_id}_{timestamp}.png")
-        driver.save_screenshot(screenshot_path)
-        print(f"[Selenium] 구매 완료 스크린샷 저장: {screenshot_path}")
+        save_screenshot(DONE_DIR, "success")
 
         page = driver.page_source
         if "already own" in page.lower() or "이미 소유" in page.lower():
-            return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
+            save_screenshot(FAIL_DIR, "already_own")
+            return {"purchased": False, "reason": "이미 소유 중"}
 
-        print(f"[Selenium] 구매 완료! pass_id={pass_id}")
-        return {"purchased": True, "screenshot": screenshot_path}
+        print(f"[Selenium] 구매 완료!")
+        return {"purchased": True}
 
     except Exception as e:
-        # 실패 스크린샷도 저장
-        try:
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            fail_path = os.path.join(DONE_DIR, f"FAIL_pass_{pass_id}_{timestamp}.png")
-            driver.save_screenshot(fail_path)
-            print(f"[Selenium] 실패 스크린샷 저장: {fail_path}")
-        except:
-            pass
+        save_screenshot(FAIL_DIR, "error")
         print(f"[Selenium] 오류: {e}")
         return {"purchased": False, "reason": str(e)}
     finally:
@@ -120,22 +127,18 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
         row = cur.fetchone()
 
     if not row:
-        return {"success": False, "message": "관리자 쿠키가 설정되지 않았습니다.", "order_id": None}
+        return {"success": False, "message": "관리자 쿠키 없음", "order_id": None}
 
     result = buy_gamepass_selenium(pass_id, row[0])
 
     if not result.get("purchased"):
-        reason = result.get("reason", "구매 실패")
-        return {"success": False, "message": reason, "order_id": None}
+        return {"success": False, "message": result.get("reason", "구매 실패"), "order_id": None}
 
     order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
 
     with sqlite3.connect(DATABASE) as conn:
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-            (money, user_id)
-        )
+        cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (money, user_id))
         cur.execute(
             "INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'completed')",
             (order_id, user_id, money, money)
