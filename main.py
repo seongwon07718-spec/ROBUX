@@ -10,12 +10,21 @@ import sqlite3
 import random
 import string
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 DATABASE = "robux_shop.db"
 DONE_DIR = "DONE"
 FAIL_DIR = "FAIL"
 
-def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
+# DB 업데이트만 락 (구매는 동시 가능)
+db_lock = threading.Lock()
+
+# 최대 동시 구매 수
+MAX_CONCURRENT = 5
+executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT)
+
+def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str) -> dict:
     os.makedirs(DONE_DIR, exist_ok=True)
     os.makedirs(FAIL_DIR, exist_ok=True)
 
@@ -31,12 +40,12 @@ def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
         options=options
     )
 
-    def save_screenshot(folder, label):
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(folder, f"{label}_pass{pass_id}_{timestamp}.png")
+    def save(folder, label):
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(folder, f"{label}_order{order_id}_pass{pass_id}_{ts}.png")
         try:
             driver.save_screenshot(path)
-            print(f"[스크린샷] 저장: {path}")
+            print(f"[스크린샷] {path}")
         except:
             pass
         return path
@@ -48,7 +57,6 @@ def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
         clean_cookie = cookie.strip()
         if "=" in clean_cookie:
             clean_cookie = clean_cookie.split("=", 1)[-1]
-
         driver.add_cookie({
             "name": ".ROBLOSECURITY",
             "value": clean_cookie,
@@ -59,93 +67,188 @@ def buy_gamepass_selenium(pass_id: int, cookie: str) -> dict:
         driver.get(f"https://www.roblox.com/game-pass/{pass_id}/")
         time.sleep(4)
 
-        # 1단계: 구매 버튼
-        buy_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH,
-                "//button[contains(@class,'PurchaseButton') or contains(text(),'구매')]"
-            ))
-        )
-        buy_btn.click()
-        print("[Selenium] 1단계 구매 버튼 클릭!")
-        time.sleep(3)
-
-        save_screenshot(DONE_DIR, "modal")
-
-        # 2단계: JS로 모든 버튼 강제 클릭 시도
-        result = driver.execute_script("""
-            const btns = Array.from(document.querySelectorAll('button'));
-            const visible = btns.filter(b => b.offsetParent !== null);
-            const keywords = ['지금 구매하기', '지금 구매', 'Buy Now', 'buy now', 'Purchase'];
-            for (const kw of keywords) {
-                for (const btn of visible) {
-                    if (btn.textContent.trim().includes(kw)) {
-                        btn.click();
-                        return '클릭성공: ' + btn.textContent.trim();
-                    }
-                }
-            }
-            // 못 찾으면 모든 버튼 텍스트 반환
-            return '못찾음: ' + visible.map(b => b.textContent.trim()).join(' | ');
-        """)
-        print(f"[Selenium] JS 결과: {result}")
-
-        if "못찾음" in result:
-            # 버튼 클래스로 직접 찾기 (이전 로그에서 확인된 클래스)
-            try:
-                btn = driver.find_element(By.CSS_SELECTOR, 
-                    "button.btn-primary-md, button[class*='confirm'], button[class*='purchase-btn']"
-                )
-                driver.execute_script("arguments[0].click();", btn)
-                print(f"[Selenium] CSS로 클릭: {btn.text}")
-            except Exception as e2:
-                save_screenshot(FAIL_DIR, "fail_nobtn")
-                return {"purchased": False, "reason": f"버튼 못 찾음: {result}"}
-
-        time.sleep(4)
-        save_screenshot(DONE_DIR, "success")
-
         page = driver.page_source
         if "already own" in page.lower() or "이미 소유" in page.lower():
-            save_screenshot(FAIL_DIR, "already_own")
-            return {"purchased": False, "reason": "이미 소유 중"}
+            save(FAIL_DIR, "already_own")
+            return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
 
-        print(f"[Selenium] 구매 완료!")
-        return {"purchased": True}
+        # 1단계: 구매 버튼
+        try:
+            buy_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                    "button.btn-fixed-width-lg.btn-primary-lg.PurchaseButton"
+                ))
+            )
+        except:
+            buy_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//button[contains(@class,'PurchaseButton') or contains(text(),'구매')]"
+                ))
+            )
+
+        driver.execute_script("arguments[0].click();", buy_btn)
+        print(f"[{order_id}] 1단계 구매 버튼 클릭!")
+        time.sleep(4)
+
+        save(DONE_DIR, "modal")
+
+        # 2단계: 지금 구매하기 버튼
+        confirmed = False
+
+        # 방법 1: CSS
+        selectors = [
+            "[role='dialog'] button.btn-primary-md",
+            "[class*='modal'] button.btn-primary-md",
+            "[class*='purchase'] button.btn-primary-md",
+            "button.btn-primary-md",
+        ]
+        for sel in selectors:
+            try:
+                btn = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
+                )
+                driver.execute_script("arguments[0].click();", btn)
+                print(f"[{order_id}] CSS 클릭: '{btn.text}'")
+                confirmed = True
+                break
+            except:
+                continue
+
+        # 방법 2: XPATH
+        if not confirmed:
+            for xp in [
+                "//button[text()='지금 구매하기']",
+                "//button[contains(text(),'지금 구매')]",
+                "//button[text()='Buy Now']",
+                "//button[contains(text(),'Buy Now')]",
+            ]:
+                try:
+                    btn = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, xp))
+                    )
+                    driver.execute_script("arguments[0].click();", btn)
+                    print(f"[{order_id}] XPATH 클릭: '{btn.text}'")
+                    confirmed = True
+                    break
+                except:
+                    continue
+
+        # 방법 3: React fiber
+        if not confirmed:
+            result_js = driver.execute_script("""
+                function clickReact(el) {
+                    const keys = Object.keys(el);
+                    const fiberKey = keys.find(k => 
+                        k.startsWith('__reactFiber') || 
+                        k.startsWith('__reactInternalInstance')
+                    );
+                    if (!fiberKey) return false;
+                    let node = el[fiberKey];
+                    while (node) {
+                        if (node.memoizedProps && node.memoizedProps.onClick) {
+                            node.memoizedProps.onClick({bubbles: true, cancelable: true});
+                            return true;
+                        }
+                        node = node.return;
+                    }
+                    return false;
+                }
+                const btns = document.querySelectorAll('button');
+                for (const btn of btns) {
+                    if (!btn.offsetParent) continue;
+                    const cls = btn.className || '';
+                    if (cls.includes('primary') || cls.includes('confirm') || cls.includes('buy')) {
+                        if (clickReact(btn)) return 'React: ' + btn.textContent.trim();
+                        btn.click();
+                        return 'DOM: ' + btn.textContent.trim();
+                    }
+                }
+                return '실패';
+            """)
+            print(f"[{order_id}] React: {result_js}")
+            if "실패" not in result_js:
+                confirmed = True
+
+        if not confirmed:
+            save(FAIL_DIR, "btn_not_found")
+            return {"purchased": False, "reason": "지금 구매하기 버튼 못 찾음"}
+
+        time.sleep(5)
+
+        # 성공 확인
+        page_after = driver.page_source
+        if "error" not in page_after.lower() and "실패" not in page_after.lower():
+            save(DONE_DIR, "success")
+            print(f"[{order_id}] ✅ 구매 성공!")
+            return {"purchased": True}
+
+        save(FAIL_DIR, "unknown")
+        return {"purchased": False, "reason": "구매 결과 확인 불가"}
 
     except Exception as e:
-        save_screenshot(FAIL_DIR, "error")
-        print(f"[Selenium] 오류: {e}")
+        save(FAIL_DIR, "error")
+        print(f"[{order_id}] ❌ 오류: {e}")
         return {"purchased": False, "reason": str(e)}
     finally:
         driver.quit()
 
 
 def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-        row = cur.fetchone()
+    with db_lock:
+        with sqlite3.connect(DATABASE) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "message": "관리자 쿠키 없음", "order_id": None}
 
-    if not row:
-        return {"success": False, "message": "관리자 쿠키 없음", "order_id": None}
+            cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+            user = cur.fetchone()
+            if not user or user[0] < money:
+                return {"success": False, "message": "잔액 부족", "order_id": None}
 
-    result = buy_gamepass_selenium(pass_id, row[0])
+            # 잔액 선차감 (동시 구매 중복 방지)
+            order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
+            cur.execute(
+                "UPDATE users SET balance = balance - ? WHERE user_id = ?",
+                (money, user_id)
+            )
+            cur.execute(
+                "INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'pending')",
+                (order_id, user_id, money, money)
+            )
+            conn.commit()
 
-    if not result.get("purchased"):
-        return {"success": False, "message": result.get("reason", "구매 실패"), "order_id": None}
+    # 구매 실행 (락 없이 동시 실행 가능)
+    result = buy_gamepass_selenium(pass_id, row[0], order_id)
 
-    order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
-
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (money, user_id))
-        cur.execute(
-            "INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'completed')",
-            (order_id, user_id, money, money)
-        )
-        conn.commit()
-
-    return {"success": True, "message": "구매 완료!", "order_id": order_id}
+    with db_lock:
+        with sqlite3.connect(DATABASE) as conn:
+            cur = conn.cursor()
+            if result.get("purchased"):
+                # 성공 → 상태 업데이트
+                cur.execute(
+                    "UPDATE orders SET status = 'completed' WHERE order_id = ?",
+                    (order_id,)
+                )
+                conn.commit()
+                return {"success": True, "message": "✅ 구매 완료!", "order_id": order_id}
+            else:
+                # 실패 → 잔액 복구 + 주문 실패 처리
+                cur.execute(
+                    "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                    (money, user_id)
+                )
+                cur.execute(
+                    "UPDATE orders SET status = 'failed' WHERE order_id = ?",
+                    (order_id,)
+                )
+                conn.commit()
+                return {
+                    "success": False,
+                    "message": f"❌ 구매 실패: {result.get('reason', '오류')}",
+                    "order_id": None
+                }
 
 
 if __name__ == "__main__":
@@ -154,5 +257,5 @@ if __name__ == "__main__":
         cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
         row = cur.fetchone()
 
-    result = buy_gamepass_selenium(1784490889, row[0])
+    result = buy_gamepass_selenium(1784490889, row[0], "TEST001")
     print(f"결과: {result}")
