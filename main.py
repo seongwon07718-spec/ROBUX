@@ -36,7 +36,11 @@ class GiftModal(ui.Modal, title="글로벌 선물 방식"):
 
         if not target_id:
             await it.followup.send(
-                view=await get_container_view("<:downvote:1489930277450158080>  실패", "-# 유저를 찾을 수 없습니다.", 0xED4245),
+                view=await get_container_view(
+                    "<:downvote:1489930277450158080>  실패",
+                    "-# 유저를 찾을 수 없습니다.",
+                    0xED4245
+                ),
                 ephemeral=True
             )
             return
@@ -164,12 +168,13 @@ class GiftModal(ui.Modal, title="글로벌 선물 방식"):
 
                     await proceed_inter.response.edit_message(
                         view=await get_container_view(
-                            "<a:1792loading:1487444148716965949>  선물 진행 중",
-                            "-# - 봇이 로블록스에 접속 중입니다",
+                            "<a:1792loading:1487444148716965949>  게임 실행 중",
+                            "-# - 잠시만 기다려주세요...",
                             0x5865F2
                         )
                     )
 
+                    # 창모드 설정
                     settings_path = os.path.expandvars(r"%LOCALAPPDATA%\Roblox\Versions")
                     try:
                         for ver in os.listdir(settings_path):
@@ -179,32 +184,26 @@ class GiftModal(ui.Modal, title="글로벌 선물 방식"):
                             )
                             os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
                             with open(cfg_path, "w") as f:
-                                json.dump({"FFlagHandleAltEnterFullscreenManually": "False"}, f)
+                                json.dump({
+                                    "FFlagHandleAltEnterFullscreenManually": "False",
+                                    "FFlagDebugFullscreenTitlebarRevamp": "False"
+                                }, f)
                     except:
                         pass
 
-                    launch_url = (
-                        f"roblox-player:1+launchmode:play"
-                        f"+gameinfo:0"
-                        f"+launchtime:0"
-                        f"+placelauncherurl:https://assetgame.roblox.com/game/PlaceLauncher.ashx"
-                        f"?request=RequestGame"
-                        f"%26placeId={selected_place_id}"
-                        f"%26isPartyLeader=false"
-                        f"+browsertrackerid:0"
-                        f"+robloxLocale:ko_kr"
-                        f"+gameLocale:ko_kr"
-                        f"+channel:"
-                    )
+                    # 쿠키로 바로 게임 실행
+                    subprocess.Popen([
+                        "cmd", "/c",
+                        f"start roblox://experiences/start?placeId={selected_place_id}"
+                    ])
 
-                    subprocess.Popen(["cmd", "/c", f"start {launch_url}"])
+                    await asyncio.sleep(8)
 
                     await proceed_inter.edit_original_response(
                         view=await get_container_view(
-                            "<:upvote:1489930275868770305>  로블록스 실행됨",
+                            "✅ 게임 실행됨",
                             f"-# - **게임**: {game_name}\n"
-                            f"-# - **선물 대상**: {target_name}\n"
-                            f"-# - 잠시 후 게임에 접속됩니다",
+                            f"-# - **선물 대상**: {target_name}",
                             0x57F287
                         )
                     )
