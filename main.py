@@ -11,6 +11,6 @@
     const keys = e.target.result;
     const exported = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
     const b64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
-    console.log("PRIVATE_KEY:" + b64);
+    console.log("PRIVATE_KEY=" + b64);
   };
 })();
