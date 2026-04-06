@@ -1,24 +1,53 @@
-    def save(folder, label):
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(folder, f"{label}_{user_id}_{order_id}_{ts}.png")
-        try:
-            # 전체 스크린샷 찍고 게임패스 영역만 크롭
-            from PIL import Image
-            import io
+async def send_log(log_type: str, view):
+    try:
+        with sqlite3.connect(DATABASE) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM config WHERE key = ?", (log_type,))
+            row = cur.fetchone()
+        if row:
+            channel = bot.get_channel(int(row[0]))
+            if channel:
+                await channel.send(view=view)
+    except Exception as e:
+        print(f"[로그 실패] {e}")
 
-            png = driver.get_screenshot_as_png()
-            img = Image.open(io.BytesIO(png))
 
-            # 브라우저 창 크기
-            w = driver.execute_script("return window.innerWidth")
-            h = driver.execute_script("return window.innerHeight")
+@bot.tree.command(name="로그설정", description="로그 채널을 설정합니다")
+@app_commands.describe(종류="로그 종류", 채널="로그를 전송할 채널")
+@app_commands.choices(종류=[
+    app_commands.Choice(name="구매 로그", value="purchase_log"),
+    app_commands.Choice(name="충전 로그", value="charge_log"),
+    app_commands.Choice(name="수동충전 로그", value="manual_charge_log"),
+    app_commands.Choice(name="주문취소 로그", value="cancel_log"),
+    app_commands.Choice(name="할인 설정 로그", value="discount_log"),
+])
+async def 로그설정(it: discord.Interaction, 종류: app_commands.Choice[str], 채널: discord.TextChannel):
 
-            # 게임패스 정보 영역만 크롭 (상단 네비 제외, 하단 푸터 제외)
-            # 대략 y: 80~500, x: 0~전체
-            crop_box = (0, 80, img.width, min(500, img.height))
-            cropped = img.crop(crop_box)
-            cropped.save(path)
+    with sqlite3.connect(DATABASE) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM config WHERE key = 'admin_id'")
+        row = cur.fetchone()
 
-        except Exception:
-            driver.save_screenshot(path)
-        return path
+    if not row or str(it.user.id) != row[0]:
+        await it.response.send_message(
+            view=await get_container_view("<:downvote:1489930277450158080>  권한 없음", "-# - 관리자만 사용할 수 있는 명령어입니다", 0xED4245),
+            ephemeral=True
+        )
+        return
+
+    with sqlite3.connect(DATABASE) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+            (종류.value, str(채널.id))
+        )
+        conn.commit()
+
+    await it.response.send_message(
+        view=await get_container_view(
+            "<:upvote:1489930275868770305>  설정 완료",
+            f"-# - **{종류.name}** 채널: {채널.mention}",
+            0x57F287
+        ),
+        ephemeral=True
+    )
