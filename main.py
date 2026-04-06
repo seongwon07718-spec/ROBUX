@@ -1,17 +1,17 @@
-    async def setup_hook(self):
-        self.stock_updater.start()
-        await self.tree.sync()
-
-        # DB에서 자판기 메시지 불러오기
-        try:
-            with sqlite3.connect(DATABASE) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT channel_id, msg_id FROM vending_messages")
-                rows = cur.fetchall()
-
-            for channel_id, msg_id in rows:
-                self.vending_msg_info[int(channel_id)] = int(msg_id)
-
-            print(f"[자판기] {len(rows)}개 복구됨")
-        except Exception as e:
-            print(f"[자판기 복구 실패] {e}")
+def init_db():
+    with sqlite3.connect(DATABASE) as conn:
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, balance INTEGER DEFAULT 0)")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                amount INTEGER,
+                robux INTEGER,
+                status TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE TABLE IF NOT EXISTS vending_messages (channel_id TEXT PRIMARY KEY, msg_id TEXT)")  # ✅ 여기
+        conn.commit()
