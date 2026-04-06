@@ -21,8 +21,14 @@
                 if log_row:
                     log_channel = it.client.get_channel(int(log_row[0]))
                     if log_channel:
-                        await log_channel.send(
-                            f"<:acy2:1489883409001091142> **{it.user.mention} / {self.pass_info.get('price', 0):,}로벅스 구매 감사합니다**"
-                        )
+                        if screenshot and os.path.exists(screenshot):
+                            await log_channel.send(
+                                content=f"<:acy2:1489883409001091142> **{it.user.mention} / {self.pass_info.get('price', 0):,}로벅스 구매 감사합니다**",
+                                file=discord.File(screenshot, filename="success.png")
+                            )
+                        else:
+                            await log_channel.send(
+                                f"<:acy2:1489883409001091142> **{it.user.mention} / {self.pass_info.get('price', 0):,}로벅스 구매 감사합니다**"
+                            )
             except Exception:
                 pass
