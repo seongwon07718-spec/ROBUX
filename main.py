@@ -1,17 +1,1 @@
-def init_db():
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)")
-        cur.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, balance INTEGER DEFAULT 0)")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                order_id TEXT PRIMARY KEY,
-                user_id TEXT,
-                amount INTEGER,
-                robux INTEGER,
-                status TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cur.execute("CREATE TABLE IF NOT EXISTS vending_messages (channel_id TEXT PRIMARY KEY, msg_id TEXT)")  # ✅ 여기
-        conn.commit()
+python -c "import sqlite3; conn = sqlite3.connect('robux_shop.db'); conn.execute('CREATE TABLE IF NOT EXISTS vending_messages (channel_id TEXT PRIMARY KEY, msg_id TEXT)'); conn.commit(); print('완료')"
