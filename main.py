@@ -1,32 +1,28 @@
-@bot.tree.command(name="로그채널설정", description="구매 로그 채널을 설정합니다")
-@app_commands.describe(채널="로그를 전송할 채널")
-async def 로그채널설정(it: discord.Interaction, 채널: discord.TextChannel):
+            screenshot = res.get("screenshot")
 
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'admin_id'")
-        row = cur.fetchone()
+            try:
+                user = it.user
+                if screenshot and os.path.exists(screenshot):
+                    await user.send(
+                        content=f"<:acy2:1489883409001091142> **@{user.name} 구매 완료 - 거래ID: `{res['order_id']}`**",
+                        file=discord.File(screenshot, filename="success.png")
+                    )
+                else:
+                    await user.send(content=f"<:acy2:1489883409001091142> **@{user.name} 구매 완료 - 거래ID: `{res['order_id']}`**\n- 게임패스: {self.pass_info.get('name', '알 수 없음')}\n- 가격: {self.pass_info.get('price', 0):,}로벅스\n- 결제금액: {self.money:,}원\n- 처리시간: {elapsed}초")
+            except Exception:
+                pass
 
-    if not row or str(it.user.id) != row[0]:
-        await it.response.send_message(
-            view=await get_container_view("<:downvote:1489930277450158080>  권한 없음", "-# - 관리자만 사용할 수 있는 명령어입니다", 0xED4245),
-            ephemeral=True
-        )
-        return
+            try:
+                with sqlite3.connect(DATABASE) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT value FROM config WHERE key = 'log_channel_id'")
+                    log_row = cur.fetchone()
 
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES ('log_channel_id', ?)",
-            (str(채널.id),)
-        )
-        conn.commit()
-
-    await it.response.send_message(
-        view=await get_container_view(
-            "<:upvote:1489930275868770305>  로그 채널 설정 완료",
-            f"-# - 로그 채널: {채널.mention}",
-            0x57F287
-        ),
-        ephemeral=True
-    )
+                if log_row:
+                    log_channel = it.client.get_channel(int(log_row[0]))
+                    if log_channel:
+                        await log_channel.send(
+                            f"<:acy2:1489883409001091142> **{it.user.mention} / {self.pass_info.get('price', 0):,}로벅스 구매 감사합니다**"
+                        )
+            except Exception:
+                pass
