@@ -22,6 +22,25 @@ FAIL_DIR = "FAIL"
 
 db_lock = threading.Lock()
 
+
+def get_current_robux(cookie: str) -> int:
+    """현재 로벅스 재고 조회"""
+    try:
+        clean = cookie.strip()
+        if "=" in clean:
+            clean = clean.split("=", 1)[-1]
+        session = requests.Session()
+        session.cookies.set(".ROBLOSECURITY", clean, domain=".roblox.com")
+        me = session.get("https://users.roblox.com/v1/users/authenticated", timeout=5).json()
+        my_id = me.get("id")
+        if not my_id:
+            return 0
+        eco = session.get(f"https://economy.roblox.com/v1/users/{my_id}/currency", timeout=5).json()
+        return eco.get("robux", 0)
+    except Exception:
+        return 0
+
+
 def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str = "") -> dict:
     os.makedirs(DONE_DIR, exist_ok=True)
     os.makedirs(FAIL_DIR, exist_ok=True)
@@ -42,17 +61,11 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(folder, f"{label}_{user_id}_{order_id}_{ts}.png")
         try:
-
             png = driver.get_screenshot_as_png()
             img = Image.open(io.BytesIO(png))
-
-            w = driver.execute_script("return window.innerWidth")
-            h = driver.execute_script("return window.innerHeight")
-
             crop_box = (0, 80, img.width, min(500, img.height))
             cropped = img.crop(crop_box)
             cropped.save(path)
-
         except Exception:
             driver.save_screenshot(path)
         return path
@@ -77,7 +90,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
                 }
             """)
             time.sleep(1)
-        except:
+        except Exception:
             pass
 
     try:
@@ -94,16 +107,21 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
             "path": "/",
         })
 
+        # 소유 여부 사전 확인
         session = requests.Session()
         session.cookies.set(".ROBLOSECURITY", clean_cookie, domain=".roblox.com")
-        me = session.get("https://users.roblox.com/v1/users/authenticated").json()
+        me = session.get("https://users.roblox.com/v1/users/authenticated", timeout=5).json()
         my_id = me.get("id")
-        if my_id:
-            own_resp = session.get(
-                f"https://inventory.roblox.com/v1/users/{my_id}/items/GamePass/{pass_id}"
-            ).json()
-            if own_resp.get("data"):
-                return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
+
+        if not my_id:
+            return {"purchased": False, "reason": "쿠키 인증 실패"}
+
+        own_resp = session.get(
+            f"https://inventory.roblox.com/v1/users/{my_id}/items/GamePass/{pass_id}",
+            timeout=5
+        ).json()
+        if own_resp.get("data"):
+            return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
 
         driver.get(f"https://www.roblox.com/game-pass/{pass_id}/")
         time.sleep(4)
@@ -120,7 +138,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
                     "button.btn-fixed-width-lg.btn-primary-lg.PurchaseButton"
                 ))
             )
-        except:
+        except Exception:
             buy_btn = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH,
                     "//button[contains(@class,'PurchaseButton') or contains(text(),'구매')]"
@@ -131,19 +149,18 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
         print(f"[{order_id}] 1단계 구매 버튼 클릭")
         time.sleep(3)
 
+        # 2단계: 지금 구매하기 버튼
         clicked = False
 
         if not clicked:
             try:
                 btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH,
-                        "//button[normalize-space()='지금 구매하기']"
-                    ))
+                    EC.element_to_be_clickable((By.XPATH, "//button[normalize-space()='지금 구매하기']"))
                 )
                 driver.execute_script("arguments[0].click();", btn)
                 clicked = True
                 print(f"[{order_id}] 방법1 성공")
-            except:
+            except Exception:
                 pass
 
         if not clicked:
@@ -156,7 +173,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
                 driver.execute_script("arguments[0].click();", btn)
                 clicked = True
                 print(f"[{order_id}] 방법2 성공")
-            except:
+            except Exception:
                 pass
 
         if not clicked:
@@ -167,7 +184,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
                 ActionChains(driver).move_to_element(btn).pause(0.5).click().perform()
                 clicked = True
                 print(f"[{order_id}] 방법3 성공")
-            except:
+            except Exception:
                 pass
 
         if not clicked:
@@ -238,28 +255,76 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
 
 
 def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
+
     with db_lock:
         with sqlite3.connect(DATABASE) as conn:
             cur = conn.cursor()
+
+            # 쿠키 확인
             cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
             row = cur.fetchone()
             if not row:
                 return {"success": False, "message": "관리자 쿠키 없음", "order_id": None, "screenshot": None}
 
+            # 점검 모드 확인
+            cur.execute("SELECT value FROM config WHERE key = 'maintenance'")
+            m = cur.fetchone()
+            if m and m[0] == "1":
+                return {"success": False, "message": "점검 중입니다", "order_id": None, "screenshot": None}
+
+            # 블랙리스트 확인
+            cur.execute("SELECT value FROM config WHERE key = ?", (f"blacklist_{user_id}",))
+            bl = cur.fetchone()
+            if bl and bl[0] == "1":
+                return {"success": False, "message": "구매가 제한된 유저입니다", "order_id": None, "screenshot": None}
+
+            # 유저 잔액 확인
             cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
             user = cur.fetchone()
             if not user or user[0] < money:
                 return {"success": False, "message": "잔액 부족", "order_id": None, "screenshot": None}
 
+            # ✅ 실시간 로벅스 재고 확인
+            current_robux = get_current_robux(row[0])
+            if current_robux < pass_id:
+                return {"success": False, "message": f"로벅스 재고 부족 (현재 {current_robux:,} R$)", "order_id": None, "screenshot": None}
+
+            # ✅ 게임패스 가격 확인해서 재고 비교
+            try:
+                clean = row[0].strip()
+                if "=" in clean:
+                    clean = clean.split("=", 1)[-1]
+                session = requests.Session()
+                session.cookies.set(".ROBLOSECURITY", clean, domain=".roblox.com")
+                pass_info = session.get(
+                    f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/details",
+                    timeout=5
+                ).json()
+                price_info = pass_info.get("priceInformation") or {}
+                pass_price = int(price_info.get("price") or price_info.get("defaultPriceInRobux") or 0)
+
+                if current_robux < pass_price:
+                    return {
+                        "success": False,
+                        "message": f"로벅스 재고 부족 (필요: {pass_price:,} R$ / 현재: {current_robux:,} R$)",
+                        "order_id": None,
+                        "screenshot": None
+                    }
+            except Exception:
+                pass
+
+            # ✅ 주문 생성 및 잔액 선차감 (동시 구매 방지)
             order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
             cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (money, user_id))
             cur.execute(
                 "INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'pending')",
-                (order_id, user_id, money, money)
+                (order_id, user_id, money, pass_price if 'pass_price' in locals() else money)
             )
             conn.commit()
 
-    result = buy_gamepass_selenium(pass_id, row[0], order_id)
+    # ✅ lock 밖에서 실제 구매 진행
+    result = buy_gamepass_selenium(pass_id, row[0], order_id, user_id)
+
     with db_lock:
         with sqlite3.connect(DATABASE) as conn:
             cur = conn.cursor()
@@ -273,6 +338,7 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
                     "screenshot": result.get("screenshot")
                 }
             else:
+                # 실패 시 잔액 복구
                 cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (money, user_id))
                 cur.execute("UPDATE orders SET status = 'failed' WHERE order_id = ?", (order_id,))
                 conn.commit()
