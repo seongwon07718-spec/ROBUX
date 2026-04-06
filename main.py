@@ -1,36 +1,51 @@
-# main.py 상단에 추가
-import aiohttp
+    async def main_callback(self, it: discord.Interaction):
+        con = ui.Container()
+        con.accent_color = 0x5865F2
+        con.add_item(ui.TextDisplay(
+            "### <:acy2:1489883409001091142>  충전 수단\n"
+            "-# - 원하시는 **충전 방식**을 선택해주세요"
+        ))
+        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-COIN_LIST = {
-    "ltc": ("라이트코인", "LTC"),
-    "trx": ("트론", "TRX"),
-    "btc": ("비트코인", "BTC"),
-    "sol": ("솔라나", "SOL"),
-}
+        btn_bank = ui.Button(label="계좌이체", style=discord.ButtonStyle.gray, emoji="<:opt_online:1489872305138962452>")
+        btn_coin = ui.Button(label="코인결제", style=discord.ButtonStyle.gray, emoji="<:opt_online:1489872305138962452>")
 
+        async def bank_cb(i: discord.Interaction):
+            await i.response.send_modal(ChargeModal())
 
-@bot.tree.command(name="코인설정", description="NOWPayments API 키를 설정합니다")
-@app_commands.describe(api_key="NOWPayments API 키")
-async def 코인설정(it: discord.Interaction, api_key: str):
+        async def coin_cb(i: discord.Interaction):
+            view = ui.LayoutView(timeout=60)
+            con = ui.Container()
+            con.accent_color = 0x5865F2
+            con.add_item(ui.TextDisplay(
+                "### <:acy2:1489883409001091142>  코인 결제\n"
+                "-# - 결제할 코인을 선택해주세요"
+            ))
+            con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'admin_id'")
-        row = cur.fetchone()
+            select = ui.Select(
+                placeholder="코인을 선택해주세요",
+                custom_id=str(uuid.uuid4()).replace("-", "")[:40]
+            )
+            select.add_option(label="라이트코인 (LTC)", value="ltc", emoji="🪙")
+            select.add_option(label="트론 (TRX)", value="trx", emoji="🪙")
+            select.add_option(label="비트코인 (BTC)", value="btc", emoji="🪙")
+            select.add_option(label="솔라나 (SOL)", value="sol", emoji="🪙")
 
-    if not row or str(it.user.id) != row[0]:
-        await it.response.send_message(
-            view=await get_container_view("<:downvote:1489930277450158080>  권한 없음", "-# - 관리자만 사용할 수 있는 명령어입니다", 0xED4245),
-            ephemeral=True
-        )
-        return
+            async def on_coin_select(inter: discord.Interaction):
+                coin = inter.data["values"][0]
+                coin_name = COIN_LIST[coin][0]
+                coin_symbol = COIN_LIST[coin][1]
 
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('nowpayments_key', ?)", (api_key,))
-        conn.commit()
+                # 금액 입력 모달
+                await inter.response.send_modal(CoinChargeModal(coin, coin_name, coin_symbol))
 
-    await it.response.send_message(
-        view=await get_container_view("<:upvote:1489930275868770305>  설정 완료", "-# - NOWPayments API 키가 등록되었습니다", 0x57F287),
-        ephemeral=True
-    )
+            select.callback = on_coin_select
+            con.add_item(ui.ActionRow(select))
+            view.add_item(con)
+            await i.response.send_message(view=view, ephemeral=True)
+
+        btn_bank.callback = bank_cb
+        btn_coin.callback = coin_cb
+        con.add_item(ui.ActionRow(btn_bank, btn_coin))
+        await it.response.send_message(view=ui.LayoutView().add_item(con), ephemeral=True)
