@@ -1,9 +1,7 @@
 local player = game:GetService("Players").LocalPlayer
-local gui = player:WaitForChild("PlayerGui")
-local MainGui = gui:WaitForChild("MainGui")
-local MainFrame = MainGui:WaitForChild("MainFrame")
+local MainFrame = player.PlayerGui.MainGui.MainFrame
+local Pages = MainFrame:WaitForChild("Pages")
 
--- MainFrame 자식들 전부 출력
-for _, v in pairs(MainFrame:GetChildren()) do
+for _, v in pairs(Pages:GetChildren()) do
     print(v.Name, v.ClassName)
 end
