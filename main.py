@@ -1,6 +1,56 @@
-# 상단에 추가
-from fastapi.responses import HTMLResponse
+# app = FastAPI() 아래에 추가
 
-# run_fastapi 수정
-def run_fastapi():
-    uvicorn.run(app, host="0.0.0.0", port=8080)  # ✅ 88 → 8080
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+@app.get("/purchase-log")
+async def purchase_log_page():
+    try:
+        with open("purchase_log.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except Exception:
+        return HTMLResponse("<h1>purchase_log.html 파일이 없습니다</h1>")
+
+@app.get("/api/purchase-logs")
+async def get_purchase_logs(limit: int = 20, offset: int = 0):
+    with sqlite3.connect(DATABASE) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT order_id, user_id, amount, robux, created_at, roblox_name, roblox_id, gamepass_name
+            FROM orders
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+        rows = cur.fetchall()
+
+        cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed'")
+        total = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed' AND DATE(created_at) = DATE('now')")
+        today = cur.fetchone()[0]
+        cur.execute("SELECT COALESCE(SUM(amount), 0) FROM orders WHERE status = 'completed'")
+        total_amount = cur.fetchone()[0]
+
+    logs = []
+    for row in rows:
+        order_id, user_id, amount, robux, created_at, roblox_name, roblox_id, gamepass_name = row
+        logs.append({
+            "order_id": order_id,
+            "roblox_name": roblox_name or "유저",
+            "roblox_id": roblox_id or "",
+            "amount": amount,
+            "robux": robux,
+            "gamepass_name": gamepass_name or "게임패스",
+            "created_at": created_at,
+            "avatar_url": f"https://www.roblox.com/headshot-thumbnail/image?userId={roblox_id}&width=150&height=150&format=png" if roblox_id else ""
+        })
+
+    return {
+        "logs": logs,
+        "stats": {
+            "total": total,
+            "today": today,
+            "total_amount": total_amount
+        }
+    }
