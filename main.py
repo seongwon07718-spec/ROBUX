@@ -1,30 +1,10 @@
-def init_db():
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)")
-        cur.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, balance INTEGER DEFAULT 0)")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                order_id TEXT PRIMARY KEY,
-                user_id TEXT,
-                amount INTEGER,
-                robux INTEGER,
-                status TEXT,
-                roblox_name TEXT DEFAULT '',
-                roblox_id TEXT DEFAULT '',
-                gamepass_name TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cur.execute("CREATE TABLE IF NOT EXISTS vending_messages (channel_id TEXT PRIMARY KEY, msg_id TEXT)")
-
-        # 기존 DB 컬럼 추가 (없으면 추가)
-        for col in ["roblox_name", "roblox_id", "gamepass_name"]:
-            try:
-                cur.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT DEFAULT ''")
-            except Exception:
-                pass
-
-        conn.commit()
-
-init_db()
+@web_app.get("/purchase-log")
+async def purchase_log_page():
+    try:
+        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "purchase_log.html")
+        print(f"[웹] HTML 경로: {html_path}")
+        print(f"[웹] 파일 존재: {os.path.exists(html_path)}")
+        with open(html_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except Exception as e:
+        return HTMLResponse(f"<h1>오류: {e}</h1>")
