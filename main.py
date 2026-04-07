@@ -24,6 +24,43 @@ FAIL_DIR = "FAIL"
 db_lock = threading.Lock()
 
 # ─────────────────────────────────────────
+# 브라우저 싱글톤 (재사용)
+# ─────────────────────────────────────────
+
+_driver = None
+_driver_lock = threading.Lock()
+
+
+def get_driver():
+    global _driver
+    with _driver_lock:
+        if _driver is None:
+            _driver = _create_driver()
+        else:
+            try:
+                _ = _driver.current_url
+            except Exception:
+                _driver = _create_driver()
+        return _driver
+
+
+def _create_driver():
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--window-size=1920,1080")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=options
+    )
+    return driver
+
+
+# ─────────────────────────────────────────
 # 대기열
 # ─────────────────────────────────────────
 
@@ -85,6 +122,13 @@ def get_current_robux(cookie: str) -> int:
         return 0
 
 
+def generate_order_id():
+    p1 = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    p2 = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    p3 = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    return f"{p1}-{p2}-{p3}"
+
+
 # ─────────────────────────────────────────
 # 구매 함수
 # ─────────────────────────────────────────
@@ -93,17 +137,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
     os.makedirs(DONE_DIR, exist_ok=True)
     os.makedirs(FAIL_DIR, exist_ok=True)
 
-    options = Options()
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+    driver = get_driver()
 
     def save(folder, label):
         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -137,14 +171,16 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
                     ) { btn.click(); }
                 }
             """)
-            time.sleep(1)
+            time.sleep(0.5)
         except Exception:
             pass
 
     try:
+        # 쿠키 설정
         driver.get("https://www.roblox.com")
-        time.sleep(2)
+        time.sleep(1.5)
 
+        driver.delete_all_cookies()
         clean_cookie = cookie.strip()
         if "=" in clean_cookie:
             clean_cookie = clean_cookie.split("=", 1)[-1]
@@ -172,7 +208,7 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
             return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
 
         driver.get(f"https://www.roblox.com/game-pass/{pass_id}/")
-        time.sleep(4)
+        time.sleep(3)
 
         page = driver.page_source
         if "already own" in page.lower() or "이미 소유" in page.lower():
@@ -195,86 +231,19 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
 
         driver.execute_script("arguments[0].click();", buy_btn)
         print(f"[{order_id}] 1단계 구매 버튼 클릭")
-        time.sleep(3)
+        time.sleep(2)
 
-        # 2단계: 지금 구매하기
+        # 2단계: 지금 구매하기 - 방법3만 사용
         clicked = False
-
-        if not clicked:
-            try:
-                btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[normalize-space()='지금 구매하기']"))
-                )
-                driver.execute_script("arguments[0].click();", btn)
-                clicked = True
-                print(f"[{order_id}] 방법1 성공")
-            except Exception:
-                pass
-
-        if not clicked:
-            try:
-                btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH,
-                        "//button[contains(text(),'지금 구매') or contains(text(),'Buy Now')]"
-                    ))
-                )
-                driver.execute_script("arguments[0].click();", btn)
-                clicked = True
-                print(f"[{order_id}] 방법2 성공")
-            except Exception:
-                pass
-
-        if not clicked:
-            try:
-                btn = driver.find_element(By.XPATH,
-                    "//*[contains(text(),'지금 구매하기') or contains(text(),'Buy Now')]"
-                )
-                ActionChains(driver).move_to_element(btn).pause(0.5).click().perform()
-                clicked = True
-                print(f"[{order_id}] 방법3 성공")
-            except Exception:
-                pass
-
-        if not clicked:
-            result = driver.execute_script("""
-                const btns = document.querySelectorAll('button');
-                for (const btn of btns) {
-                    if (btn.offsetParent === null) continue;
-                    const txt = btn.innerText.trim();
-                    if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
-                    const rect = btn.getBoundingClientRect();
-                    if (rect.top > 540 && rect.top < 640 && rect.left > 250 && rect.left < 460) {
-                        btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
-                        btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true}));
-                        btn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-                        return '성공:' + txt;
-                    }
-                }
-                return '실패';
-            """)
-            if "성공" in result:
-                clicked = True
-                print(f"[{order_id}] 방법4 성공: {result}")
-
-        if not clicked:
-            result = driver.execute_script("""
-                const modal = document.querySelector('[role="dialog"]') ||
-                             document.querySelector('[class*="modal"]') ||
-                             document.querySelector('[class*="purchase"]');
-                if (!modal) return '모달없음';
-                const btns = modal.querySelectorAll('button');
-                for (const btn of btns) {
-                    if (btn.offsetParent === null) continue;
-                    const txt = btn.innerText.trim();
-                    if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
-                    btn.click();
-                    return '성공:' + txt;
-                }
-                return '실패';
-            """)
-            if "성공" in result:
-                clicked = True
-                print(f"[{order_id}] 방법5 성공: {result}")
+        try:
+            btn = driver.find_element(By.XPATH,
+                "//*[contains(text(),'지금 구매하기') or contains(text(),'Buy Now')]"
+            )
+            ActionChains(driver).move_to_element(btn).pause(0.3).click().perform()
+            clicked = True
+            print(f"[{order_id}] 2단계 클릭 성공")
+        except Exception as e:
+            print(f"[{order_id}] 2단계 실패: {e}")
 
         if not clicked:
             save(FAIL_DIR, "btn_not_found")
@@ -297,9 +266,9 @@ def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str
     except Exception as e:
         save(FAIL_DIR, "error")
         print(f"[{order_id}] ❌ 실패: {e}")
+        global _driver
+        _driver = None
         return {"purchased": False, "reason": str(e)}
-    finally:
-        driver.quit()
 
 
 # ─────────────────────────────────────────
@@ -334,7 +303,6 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
             if cur.rowcount == 0:
                 return {"success": False, "message": "잔액 부족", "order_id": None, "screenshot": None}
 
-            # 로벅스 재고 확인
             current_robux = get_current_robux(row[0])
             pass_price = money
 
@@ -352,6 +320,11 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
                 pass_price = int(price_info.get("price") or price_info.get("defaultPriceInRobux") or money)
 
                 if current_robux < pass_price:
+                    cur.execute(
+                        "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                        (money, user_id)
+                    )
+                    conn.commit()
                     return {
                         "success": False,
                         "message": f"로벅스 재고 부족 (필요: {pass_price:,} R$ / 현재: {current_robux:,} R$)",
@@ -361,16 +334,13 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
             except Exception:
                 pass
 
-            # 잔액 선차감 + 주문 생성
-            order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
-            cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (money, user_id))
+            order_id = generate_order_id()
             cur.execute(
                 "INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'pending')",
                 (order_id, user_id, money, pass_price)
             )
             conn.commit()
 
-    # 대기열 등록
     position = purchase_queue.qsize() + 1
     queue_status[order_id] = {
         "position": position,
@@ -386,7 +356,6 @@ def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
 
     print(f"[{order_id}] 대기열 {position}번째 등록")
 
-    # 완료될 때까지 대기
     while True:
         time.sleep(1)
         status = queue_status.get(order_id, {})
