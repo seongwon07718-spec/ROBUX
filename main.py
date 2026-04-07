@@ -1,205 +1,45 @@
-class GiftModal(ui.Modal, title="글로벌 선물 방식"):
+from flask import Flask, request, jsonify
+import sqlite3
 
-    roblox_name = ui.TextInput(
-        label="로블록스 닉네임",
-        placeholder="선물받을 유저의 닉네임을 입력하세요",
-        required=True,
-        max_length=20,
-    )
+app = Flask(__name__)
+DATABASE = "robux_shop.db"
 
-    async def on_submit(self, it: discord.Interaction):
-        await it.response.defer(ephemeral=True)
-
-        target_name = self.roblox_name.value.strip()
-        loop = asyncio.get_running_loop()
-        api = RobloxAPI()
-        target_id = await loop.run_in_executor(None, api.get_user_id, target_name)
-
-        if not target_id:
-            await it.followup.send(
-                view=await get_container_view("<:downvote:1489930277450158080>  실패", "-# - 유저를 찾을 수 없습니다", 0xED4245),
-                ephemeral=True
+def init_db():
+    with sqlite3.connect(DATABASE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS gift_queue (
+                order_id TEXT PRIMARY KEY,
+                target_id INTEGER,
+                pass_id INTEGER,
+                status TEXT DEFAULT 'processing'
             )
-            return
+        """)
+init_db()
 
-        view = ui.LayoutView(timeout=60)
-        con = ui.Container()
-        con.accent_color = 0x5865F2
-        con.add_item(ui.TextDisplay(
-            f"### <:acy2:1489883409001091142>  글로벌 선물 방식\n"
-            f"-# - **선물 대상**: {target_name}\n"
-            f"-# - 선물할 게임을 선택해주세요"
-        ))
-        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+@app.route('/get_latest_order', methods=['GET'])
+def get_order():
+    with sqlite3.connect(DATABASE) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT order_id, target_id, pass_id FROM gift_queue WHERE status = 'processing' ORDER BY rowid DESC LIMIT 1")
+        row = cur.fetchone()
+        if row:
+            return jsonify({"order_id": row[0], "target_id": row[1], "pass_id": row[2]})
+    return jsonify({"error": "no orders"}), 404
 
-        select = ui.Select(
-            placeholder="게임을 선택해주세요",
-            custom_id=str(uuid.uuid4()).replace("-", "")[:40]
-        )
-        for name, place_id in GIFT_GAMES:
-            select.add_option(label=name, value=place_id)
+@app.route('/complete_order', methods=['GET', 'POST'])
+def complete_order():
+    # 실행기 호환을 위해 GET/POST 모두 지원
+    order_id = request.args.get('order_id') or (request.json.get('order_id') if request.is_json else None)
+    status = request.args.get('status') or (request.json.get('status') if request.is_json else None)
+    
+    if not order_id or not status:
+        return jsonify({"error": "missing data"}), 400
 
-        async def on_game_select(interaction: discord.Interaction):
-            selected_place_id = interaction.data["values"][0]
-            game_name = next((n for n, u in GIFT_GAMES if u == selected_place_id), "알 수 없음")
+    with sqlite3.connect(DATABASE) as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE gift_queue SET status = ? WHERE order_id = ?", (status, order_id))
+        conn.commit()
+    return jsonify({"success": True})
 
-            loading_view = ui.LayoutView(timeout=60)
-            loading_con = ui.Container()
-            loading_con.accent_color = 0x5865F2
-            loading_con.add_item(ui.TextDisplay(
-                f"### <a:1792loading:1487444148716965949>  불러오는 중\n"
-                f"-# - **선물 대상**: {target_name}\n"
-                f"-# - **게임**: {game_name}\n"
-                f"-# - 게임패스 목록을 불러오는 중입니다"
-            ))
-            loading_view.add_item(loading_con)
-            await interaction.response.edit_message(view=loading_view)
-
-            def get_universe_and_passes(place_id):
-                import requests as req
-                resp = req.get(
-                    f"https://apis.roproxy.com/universes/v1/places/{place_id}/universe",
-                    timeout=10
-                )
-                if resp.status_code != 200:
-                    return None
-                universe_id = resp.json().get("universeId")
-                if not universe_id:
-                    return None
-                return api.get_place_gamepasses(universe_id)
-
-            passes = await loop.run_in_executor(None, get_universe_and_passes, selected_place_id)
-
-            if not passes:
-                fail_view = ui.LayoutView(timeout=60)
-                fail_con = ui.Container()
-                fail_con.accent_color = 0xED4245
-                fail_con.add_item(ui.TextDisplay(
-                    f"### <:downvote:1489930277450158080>  게임패스 없음\n"
-                    f"-# - **게임**: {game_name}\n"
-                    f"-# - 판매 중인 게임패스가 없습니다"
-                ))
-                fail_view.add_item(fail_con)
-                await interaction.edit_original_response(view=fail_view)
-                return
-
-            pass_view = ui.LayoutView(timeout=60)
-            pass_con = ui.Container()
-            pass_con.accent_color = 0x5865F2
-            pass_con.add_item(ui.TextDisplay(
-                f"### <:acy2:1489883409001091142>  게임패스 선택\n"
-                f"-# - **선물 대상**: {target_name}\n"
-                f"-# - **게임**: {game_name}\n"
-                f"-# - 선물할 게임패스를 선택해주세요"
-            ))
-            pass_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-
-            pass_select = ui.Select(
-                placeholder="게임패스를 선택해주세요",
-                custom_id=str(uuid.uuid4()).replace("-", "")[:40]
-            )
-            for p in passes[:25]:
-                pass_select.add_option(
-                    label=f"{p.get('name', '이름없음')[:80]} ({p.get('price', 0):,} R$)",
-                    value=str(p.get("id")),
-                )
-
-            async def on_pass_select(inter: discord.Interaction):
-                selected_id = int(inter.data["values"][0])
-                pass_data = next((p for p in passes if p.get("id") == selected_id), None)
-
-                if not pass_data:
-                    await inter.response.send_message(
-                        view=await get_container_view("<:downvote:1489930277450158080>  오류", "-# - 오류가 발생했습니다", 0xED4245),
-                        ephemeral=True
-                    )
-                    return
-
-                with sqlite3.connect(DATABASE) as conn:
-                    cur = conn.cursor()
-                    cur.execute("SELECT value FROM config WHERE key = 'robux_rate'")
-                    r = cur.fetchone()
-                    rate = int(r[0]) if r else 1000
-
-                    cur.execute("SELECT value FROM config WHERE key = ?", (f"discount_{inter.user.id}",))
-                    d = cur.fetchone()
-                    discount = int(d[0]) if d else 0
-
-                base_money = int((pass_data.get("price", 0) / rate) * 10000)
-                final_money = int(base_money * (1 - discount / 100)) if discount > 0 else base_money
-
-                discount_text = (
-                    f"-# - **할인율**: {discount}%\n"
-                    f"-# - **원래 가격**: ~~{base_money:,}원~~\n"
-                    f"-# - **최종 가격**: {final_money:,}원"
-                ) if discount > 0 else f"-# - **결제 금액**: {final_money:,}원"
-
-                result_view = ui.LayoutView(timeout=60)
-                result_con = ui.Container()
-                result_con.accent_color = 0x5865F2
-                result_con.add_item(ui.TextDisplay(
-                    f"### <:acy2:1489883409001091142>  선물 정보 확인\n"
-                    f"-# - **선물 대상**: {target_name}\n"
-                    f"-# - **게임**: {game_name}\n"
-                    f"-# - **게임패스**: {pass_data.get('name', '이름없음')}\n"
-                    f"-# - **가격**: {pass_data.get('price', 0):,}로벅스\n"
-                    f"{discount_text}"
-                ))
-                result_con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-
-                proceed_btn = ui.Button(
-                    label="진행하기",
-                    style=discord.ButtonStyle.gray,
-                    emoji="<:success:1489875582874554429>",
-                    custom_id=str(uuid.uuid4()).replace("-", "")[:40]
-                )
-
-                async def on_proceed(proceed_inter: discord.Interaction):
-                    await proceed_inter.response.edit_message(
-                        view=await get_container_view(
-                            "<a:1792loading:1487444148716965949>  게임 실행 중",
-                            "-# - 봇이 게임에 접속중이니 기다려주세요",
-                            0x5865F2
-                        )
-                    )
-
-                    settings_path = os.path.expandvars(r"%LOCALAPPDATA%\Roblox\Versions")
-                    try:
-                        for ver in os.listdir(settings_path):
-                            cfg_path = os.path.join(settings_path, ver, "ClientSettings", "ClientAppSettings.json")
-                            os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-                            with open(cfg_path, "w") as f:
-                                json.dump({
-                                    "FFlagHandleAltEnterFullscreenManually": "False",
-                                    "FFlagDebugFullscreenTitlebarRevamp": "False"
-                                }, f)
-                    except Exception:
-                        pass
-
-                    subprocess.Popen(["cmd", "/c", f"start roblox://experiences/start?placeId={selected_place_id}"])
-
-                    await asyncio.sleep(8)
-
-                    await proceed_inter.edit_original_response(
-                        view=await get_container_view(
-                            "게임 실행됨",
-                            f"-# - **게임**: {game_name}\n"
-                            f"-# - **선물 대상**: {target_name}",
-                            0x57F287
-                        )
-                    )
-
-                proceed_btn.callback = on_proceed
-                result_con.add_item(ui.ActionRow(proceed_btn))
-                result_view.add_item(result_con)
-                await inter.response.edit_message(view=result_view)
-
-            pass_select.callback = on_pass_select
-            pass_con.add_item(ui.ActionRow(pass_select))
-            pass_view.add_item(pass_con)
-            await interaction.edit_original_response(view=pass_view)
-
-        select.callback = on_game_select
-        con.add_item(ui.ActionRow(select))
-        view.add_item(con)
-        await it.followup.send(view=view, ephemeral=True)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000) # 외부 접속 허용
