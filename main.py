@@ -1,13 +1,6 @@
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS orders (
-        order_id TEXT PRIMARY KEY,
-        user_id TEXT,
-        amount INTEGER,
-        robux INTEGER,
-        status TEXT,
-        roblox_name TEXT DEFAULT '',
-        roblox_id TEXT DEFAULT '',
-        gamepass_name TEXT DEFAULT '',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-""")
+        res = await loop.run_in_executor(
+            None, process_manual_buy_selenium,
+            self.pass_info["id"], self.user_id, self.money,
+            self.pass_info.get("roblox_name", ""),   # ✅ 추가
+            self.pass_info.get("name", "")            # ✅ 추가
+        )
