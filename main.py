@@ -1,8 +1,9 @@
 local player = game:GetService("Players").LocalPlayer
-for _, v in pairs(player.PlayerGui:GetDescendants()) do
-    if v:IsA("TextButton") or v:IsA("ImageButton") or v:IsA("Frame") then
-        if v.Name:lower():find("gift") or v.Name:lower():find("offline") then
-            print(v:GetFullName(), "|", v.ClassName, "|", v.Visible)
-        end
-    end
+local gui = player:WaitForChild("PlayerGui")
+local MainGui = gui:WaitForChild("MainGui")
+local MainFrame = MainGui:WaitForChild("MainFrame")
+
+-- MainFrame 자식들 전부 출력
+for _, v in pairs(MainFrame:GetChildren()) do
+    print(v.Name, v.ClassName)
 end
