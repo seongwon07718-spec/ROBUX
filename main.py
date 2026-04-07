@@ -1,16 +1,19 @@
--- 선물 UI 버튼 찾아서 직접 클릭
-local player = game:GetService("Players").LocalPlayer
-local gui = player.PlayerGui
+-- Gift Ticket 보유 여부 확인
+local Remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes")
+local RequestGifting = Remotes:WaitForChild("Misc"):WaitForChild("RequestGiftingDetails")
 
--- Gifting 페이지 찾기
-local function findGiftButton()
-    for _, v in pairs(gui:GetDescendants()) do
-        if v:IsA("TextButton") or v:IsA("ImageButton") then
-            if v.Name:lower():find("gift") or v.Name:lower():find("buy") then
-                print(v:GetFullName(), v.Name)
-            end
-        end
+-- 반환값 자세히 출력
+local ok, result = pcall(function()
+    return RequestGiftingDetails:InvokeServer("8514281248")  
+end)
+print("ok:", ok)
+print("result type:", type(result))
+print("result:", result)
+
+-- Gift Ticket 관련 UI 확인
+local player = game:GetService("Players").LocalPlayer
+for _, v in pairs(player.PlayerGui:GetDescendants()) do
+    if v.Name:lower():find("ticket") or v.Name:lower():find("gift") then
+        print(v:GetFullName())
     end
 end
-
-findGiftButton()
