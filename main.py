@@ -1,44 +1,54 @@
-from flask import Flask, request, jsonify
-import sqlite3
+-- [[ Rivals Auto-Gift Script for Executor ]] --
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 
-app = Flask(__name__)
-DATABASE = "robux_shop.db"
+local API_URL = "http://192.168.219.104:5000" -- 본인의 Flask 서버 IP로 수정 필수
 
-def init_db():
-    with sqlite3.connect(DATABASE) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS gift_queue (
-                order_id TEXT PRIMARY KEY,
-                target_id INTEGER,
-                pass_id INTEGER,
-                status TEXT DEFAULT 'processing'
-            )
-        """)
-init_db()
-
-@app.route('/get_latest_order', methods=['GET'])
-def get_order():
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT order_id, target_id, pass_id FROM gift_queue WHERE status = 'processing' ORDER BY rowid DESC LIMIT 1")
-        row = cur.fetchone()
-        if row:
-            return jsonify({"order_id": row[0], "target_id": row[1], "pass_id": row[2]})
-    return jsonify({"error": "no orders"}), 404
-
-@app.route('/complete_order', methods=['GET', 'POST'])
-def complete_order():
-    order_id = request.args.get('order_id') or (request.json.get('order_id') if request.is_json else None)
-    status = request.args.get('status') or (request.json.get('status') if request.is_json else None)
+local function giftProcess()
+    print("[BOT] 주문 데이터를 불러오는 중...")
     
-    if not order_id or not status:
-        return jsonify({"error": "missing data"}), 400
+    -- 주문 데이터 가져오기
+    local orderData
+    local success, res = pcall(function()
+        return game:HttpGet(API_URL .. "/get_latest_order")
+    end)
+    
+    if success and res then
+        orderData = HttpService:JSONDecode(res)
+    end
 
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE gift_queue SET status = ? WHERE order_id = ?", (status, order_id))
-        conn.commit()
-    return jsonify({"success": True})
+    if not orderData or not orderData.order_id then
+        print("[BOT] 처리할 주문이 없습니다.")
+        return
+    end
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000) 
+    -- Rivals 선물 RemoteFunction 경로 (재귀적 검색)
+    local giftRemote = ReplicatedStorage:FindFirstChild("GiftGamepass", true)
+    
+    if giftRemote then
+        print("[BOT] 선물 시도: " .. orderData.target_id)
+        local giftSuccess, result = pcall(function()
+            -- Rivals 인자: (대상 UserId, 게임패스 ID)
+            return giftRemote:InvokeServer(orderData.target_id, orderData.pass_id)
+        end)
+
+        if giftSuccess then
+            print("[BOT] 성공! 결과 보고 중...")
+            game:HttpGet(API_URL .. "/complete_order?order_id=" .. orderData.order_id .. "&status=completed")
+        else
+            print("[BOT] 실패: " .. tostring(result))
+            game:HttpGet(API_URL .. "/complete_order?order_id=" .. orderData.order_id .. "&status=failed")
+        end
+    else
+        warn("[BOT] 선물 리모트를 찾지 못했습니다!")
+    end
+
+    task.wait(2)
+    Players.LocalPlayer:Kick("작업 완료")
+end
+
+-- 로딩 대기 후 실행
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(5)
+giftProcess()
