@@ -1,9 +1,4 @@
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS gift_queue (
-                order_id TEXT PRIMARY KEY,
-                target_id INTEGER,
-                pass_id INTEGER,
-                status TEXT DEFAULT 'processing',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+local Remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes")
+local MiscRemotes = Remotes:WaitForChild("Misc")
+local PromptGift = MiscRemotes:WaitForChild("PromptGiftProductPurchase")
+print(PromptGift.ClassName)
