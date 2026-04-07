@@ -1,98 +1,64 @@
-app = FastAPI()
-pending_deposits = {}
-
-class ChargeData(BaseModel):
-    message: str
-    server_id: str = ""
-    pw: str = ""
-
-@app.post("/charge")
-async def receive_charge(request: Request, data: ChargeData):
-
-    server_id = request.headers.get("server-id") or data.server_id if hasattr(data, 'server_id') else None
-    pw = request.headers.get("pw") or data.pw if hasattr(data, 'pw') else None
-
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'charge_server_id'")
-        saved_id = cur.fetchone()
-        cur.execute("SELECT value FROM config WHERE key = 'charge_pw'")
-        saved_pw = cur.fetchone()
-
-    if not saved_id or not saved_pw:
-        raise HTTPException(status_code=500, detail="Server not configured")
-
-    if server_id != saved_id[0] or pw != saved_pw[0]:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-
-    msg = data.message.strip()
-    amount_match = re.search(r'입금\s*([\d,]+)원', msg)
-    name_match = re.search(r'원\n([가-힣]+)\n잔액', msg)
-
-    name = None
-    amount = None
-
-    if amount_match and name_match:
-        amount = amount_match.group(1).replace(",", "")
-        name = name_match.group(1)
-        pending_deposits[f"{name}_{amount}"] = True
-    else:
-        fallback = re.search(r'([가-힣]+)\s*(\d+)', msg)
-        if fallback:
-            name = fallback.group(1)
-            amount = fallback.group(2)
-            pending_deposits[f"{name}_{amount}"] = True
-
-    return {
-        "ok": True,
-        "message": f"{name} / {int(amount):,}원 충전 신청 완료" if name and amount else "처리 완료"
-    }
-
-web_app = FastAPI()
-
-@web_app.get("/")
-async def root():
-    return {"status": "ok"}
-
-@web_app.get("/purchase-log")
-async def purchase_log_page():
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        html_path = os.path.join(base_dir, "purchase_log.html")
-        with open(html_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(f.read())
-    except Exception as e:
-        return HTMLResponse(f"<h1>오류: {e}</h1>")
-
-@web_app.get("/api/purchase-logs")
-async def get_purchase_logs(limit: int = 20, offset: int = 0):
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT order_id, user_id, amount, robux, created_at, roblox_name, roblox_id, gamepass_name
-            FROM orders WHERE status = 'completed'
-            ORDER BY created_at DESC LIMIT ? OFFSET ?
-        """, (limit, offset))
-        rows = cur.fetchall()
-        cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed'")
-        total = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed' AND DATE(created_at) = DATE('now')")
-        today = cur.fetchone()[0]
-        cur.execute("SELECT COALESCE(SUM(amount), 0) FROM orders WHERE status = 'completed'")
-        total_amount = cur.fetchone()[0]
-
-    logs = []
-    for row in rows:
-        order_id, user_id, amount, robux, created_at, roblox_name, roblox_id, gamepass_name = row
-        logs.append({
-            "order_id": order_id,
-            "roblox_name": roblox_name or "유저",
-            "roblox_id": roblox_id or "",
-            "amount": amount,
-            "robux": robux,
-            "gamepass_name": gamepass_name or "게임패스",
-            "created_at": created_at,
-            "avatar_url": f"https://www.roblox.com/headshot-thumbnail/image?userId={roblox_id}&width=150&height=150&format=png" if roblox_id else ""
-        })
-
-    return {"logs": logs, "stats": {"total": total, "today": today, "total_amount": total_amount}}
+Exception in ASGI application
+Traceback (most recent call last):
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\uvicorn\protocols\http\h11_impl.py", line 410, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self.scope, self.receive, self.send
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\fastapi\applications.py", line 1160, in __call__
+    await super().__call__(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\applications.py", line 107, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    raise exc
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\fastapi\routing.py", line 130, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\fastapi\routing.py", line 116, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\fastapi\routing.py", line 670, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\fastapi\routing.py", line 324, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\user\Desktop\auto 로벅스 자판기\main.py", line 164, in get_purchase_logs
+    cur.execute("""
+    ~~~~~~~~~~~^^^^
+        SELECT order_id, user_id, amount, robux, created_at, roblox_name, roblox_id, gamepass_name
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        FROM orders WHERE status = 'completed'
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        ORDER BY created_at DESC LIMIT ? OFFSET ?
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    """, (limit, offset))
+    ^^^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: no such column: roblox_name
