@@ -1,61 +1,54 @@
-                async def on_proceed(proceed_inter: discord.Interaction):
-                    order_id = str(uuid.uuid4())[:8]
-                    
-                    # 1. 진행 중 상태로 변경
-                    await proceed_inter.response.edit_message(
-                        view=await get_container_view(
-                            "<a:1792loading:1487444148716965949>  선물 진행 중",
-                            f"### <:acy2:1489883409001091142>  Rivals 선물 프로세스\n"
-                            f"-# - **대상**: {target_name} ({target_id})\n"
-                            f"-# - 봇이 게임에 접속하여 선물을 전송 중입니다.\n"
-                            f"-# - 잠시만 기다려주세요... (약 1분 소요)",
-                            0xFEE75C
-                        )
-                    )
+-- [[ Rivals Auto-Gift Script for Executor ]] --
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 
-                    # DB에 주문 데이터 삽입
-                    with sqlite3.connect(DATABASE) as conn:
-                        conn.execute(
-                            "INSERT INTO gift_queue (order_id, target_id, pass_id, status) VALUES (?, ?, ?, ?)",
-                            (order_id, target_id, selected_id, 'processing')
-                        )
-                        conn.commit()
+local API_URL = "http://YOUR_SERVER_IP:5000" -- 본인의 Flask 서버 IP로 수정 필수
 
-                    # 2. 로블록스 실행
-                    subprocess.Popen(["cmd", "/c", f"start roblox://experiences/start?placeId={selected_place_id}"])
+local function giftProcess()
+    print("[BOT] 주문 데이터를 불러오는 중...")
+    
+    -- 주문 데이터 가져오기
+    local orderData
+    local success, res = pcall(function()
+        return game:HttpGet(API_URL .. "/get_latest_order")
+    end)
+    
+    if success and res then
+        orderData = HttpService:JSONDecode(res)
+    end
 
-                    # 3. 완료 감시 (Polling)
-                    success = False
-                    for _ in range(30): # 60초 대기
-                        await asyncio.sleep(2)
-                        with sqlite3.connect(DATABASE) as conn:
-                            cur = conn.cursor()
-                            cur.execute("SELECT status FROM gift_queue WHERE order_id = ?", (order_id,))
-                            row = cur.fetchone()
-                            if row and row[0] == 'completed':
-                                success = True
-                                break
-                            elif row and row[0] == 'failed':
-                                break
+    if not orderData or not orderData.order_id then
+        print("[BOT] 처리할 주문이 없습니다.")
+        return
+    end
 
-                    # 4. 결과 업데이트
-                    if success:
-                        await proceed_inter.edit_original_response(
-                            view=await get_container_view(
-                                "<:success:1489875582874554429>  선물 완료",
-                                f"### <:acy2:1489883409001091142>  선물 성공!\n"
-                                f"-# - **대상**: {target_name}\n"
-                                f"-# - 모든 절차가 정상적으로 완료되었습니다.",
-                                0x57F287
-                            )
-                        )
-                    else:
-                        await proceed_inter.edit_original_response(
-                            view=await get_container_view(
-                                "<:downvote:1489930277450158080>  선물 실패",
-                                f"### <:acy2:1489883409001091142>  선물 전송 실패\n"
-                                f"-# - **사유**: 시간 초과 또는 인게임 오류\n"
-                                f"-# - 봇의 로벅스 잔액이나 게임 상태를 확인하세요.",
-                                0xED4245
-                            )
-                        )
+    -- Rivals 선물 RemoteFunction 경로 (재귀적 검색)
+    local giftRemote = ReplicatedStorage:FindFirstChild("GiftGamepass", true)
+    
+    if giftRemote then
+        print("[BOT] 선물 시도: " .. orderData.target_id)
+        local giftSuccess, result = pcall(function()
+            -- Rivals 인자: (대상 UserId, 게임패스 ID)
+            return giftRemote:InvokeServer(orderData.target_id, orderData.pass_id)
+        end)
+
+        if giftSuccess then
+            print("[BOT] 성공! 결과 보고 중...")
+            game:HttpGet(API_URL .. "/complete_order?order_id=" .. orderData.order_id .. "&status=completed")
+        else
+            print("[BOT] 실패: " .. tostring(result))
+            game:HttpGet(API_URL .. "/complete_order?order_id=" .. orderData.order_id .. "&status=failed")
+        end
+    else
+        warn("[BOT] 선물 리모트를 찾지 못했습니다!")
+    end
+
+    task.wait(2)
+    Players.LocalPlayer:Kick("작업 완료")
+end
+
+-- 로딩 대기 후 실행
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(5)
+giftProcess()
