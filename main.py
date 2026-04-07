@@ -1,428 +1,503 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.action_chains import ActionChains
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
-import time
-import sqlite3
-import random
-import string
-import os
-from PIL import Image
-import io
-import requests
-import threading
-import queue
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>구매로그</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
-DATABASE = "robux_shop.db"
-DONE_DIR = "DONE"
-FAIL_DIR = "FAIL"
+        body {
+            background: #080910;
+            color: #e2e4f0;
+            font-family: 'Noto Sans KR', sans-serif;
+            min-height: 100vh;
+        }
 
-db_lock = threading.Lock()
+        body::before {
+            content: '';
+            position: fixed;
+            width: 700px;
+            height: 500px;
+            background: radial-gradient(ellipse, rgba(88,101,242,0.1) 0%, transparent 65%);
+            top: -80px;
+            left: 50%;
+            transform: translateX(-50%);
+            pointer-events: none;
+            z-index: 0;
+        }
 
-# ─────────────────────────────────────────
-# 대기열
-# ─────────────────────────────────────────
+        .wrap {
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 48px 16px 80px;
+            position: relative;
+            z-index: 1;
+        }
 
-purchase_queue = queue.Queue()
-queue_status = {}
+        /* 헤더 */
+        .top {
+            margin-bottom: 36px;
+            animation: up 0.5s ease both;
+        }
 
+        .live-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            background: rgba(88,101,242,0.1);
+            border: 1px solid rgba(88,101,242,0.22);
+            border-radius: 99px;
+            padding: 5px 14px 5px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #8891f5;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            margin-bottom: 16px;
+        }
 
-def queue_worker():
-    while True:
-        try:
-            task = purchase_queue.get(timeout=1)
-            if task is None:
-                break
+        .live-dot {
+            width: 7px;
+            height: 7px;
+            background: #3ecf8e;
+            border-radius: 50%;
+            box-shadow: 0 0 6px #3ecf8e;
+            animation: blink 2s infinite;
+        }
 
-            order_id = task["order_id"]
-            queue_status[order_id]["status"] = "processing"
+        .top h1 {
+            font-size: 30px;
+            font-weight: 900;
+            color: #fff;
+            letter-spacing: -0.03em;
+        }
 
-            for oid, info in list(queue_status.items()):
-                if info["status"] == "waiting":
-                    info["position"] = max(1, info["position"] - 1)
+        .top h1 span { color: #7983f5; }
 
-            result = buy_gamepass_selenium(
-                task["pass_id"],
-                task["cookie"],
-                order_id,
-                task["user_id"]
-            )
-            queue_status[order_id]["result"] = result
-            queue_status[order_id]["status"] = "done"
-            purchase_queue.task_done()
+        .top p {
+            font-size: 13px;
+            color: #4a4d65;
+            margin-top: 7px;
+            font-weight: 500;
+        }
 
-        except queue.Empty:
-            continue
-        except Exception as e:
-            print(f"[워커 오류] {e}")
+        /* 통계 */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 28px;
+            animation: up 0.5s ease 0.08s both;
+        }
 
+        .stat {
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 20px;
+            padding: 16px 12px;
+            text-align: center;
+        }
 
-worker_thread = threading.Thread(target=queue_worker, daemon=True)
-worker_thread.start()
+        .stat-num {
+            font-size: 20px;
+            font-weight: 900;
+            color: #7983f5;
+            letter-spacing: -0.02em;
+        }
 
-# ─────────────────────────────────────────
-# 유틸
-# ─────────────────────────────────────────
+        .stat-lbl {
+            font-size: 10px;
+            color: #3e4258;
+            font-weight: 600;
+            margin-top: 5px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
 
-def get_current_robux(cookie: str) -> int:
-    try:
-        clean = cookie.strip()
-        if "=" in clean:
-            clean = clean.split("=", 1)[-1]
-        session = requests.Session()
-        session.cookies.set(".ROBLOSECURITY", clean, domain=".roblox.com")
-        me = session.get("https://users.roblox.com/v1/users/authenticated", timeout=5).json()
-        my_id = me.get("id")
-        if not my_id:
-            return 0
-        eco = session.get(f"https://economy.roblox.com/v1/users/{my_id}/currency", timeout=5).json()
-        return eco.get("robux", 0)
-    except Exception:
-        return 0
+        /* 카드 리스트 */
+        .list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
 
+        /* 카드 - 참고 이미지 스타일 */
+        .card {
+            background: linear-gradient(135deg, rgba(20,22,38,0.95) 0%, rgba(14,16,28,0.98) 100%);
+            border: 1px solid rgba(88,101,242,0.18);
+            border-left: 3px solid rgba(88,101,242,0.5);
+            border-radius: 18px;
+            padding: 16px 20px;
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+            animation: up 0.4s ease both;
+        }
 
-# ─────────────────────────────────────────
-# 구매 함수
-# ─────────────────────────────────────────
+        .card::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(135deg, rgba(88,101,242,0.04) 0%, transparent 50%);
+            pointer-events: none;
+            border-radius: inherit;
+        }
 
-def buy_gamepass_selenium(pass_id: int, cookie: str, order_id: str, user_id: str = "") -> dict:
-    os.makedirs(DONE_DIR, exist_ok=True)
-    os.makedirs(FAIL_DIR, exist_ok=True)
+        .card:hover {
+            border-color: rgba(88,101,242,0.4);
+            border-left-color: rgba(88,101,242,0.8);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(88,101,242,0.12), 0 0 0 1px rgba(88,101,242,0.1);
+        }
 
-    options = Options()
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
+        .card.new {
+            animation: newIn 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
+        }
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+        /* 카드 상단 - 아바타 + 이름 + 가격 */
+        .card-top {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
 
-    def save(folder, label):
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(folder, f"{label}_{user_id}_{order_id}_{ts}.png")
-        try:
-            png = driver.get_screenshot_as_png()
-            img = Image.open(io.BytesIO(png))
-            crop_box = (0, 80, img.width, min(500, img.height))
-            cropped = img.crop(crop_box)
-            cropped.save(path)
-        except Exception:
-            driver.save_screenshot(path)
-        return path
+        .avatar {
+            width: 46px;
+            height: 46px;
+            border-radius: 12px;
+            object-fit: cover;
+            background: rgba(88,101,242,0.1);
+            border: 1px solid rgba(88,101,242,0.2);
+            flex-shrink: 0;
+        }
 
-    def close_annoying_popups():
-        try:
-            driver.execute_script("""
-                const safeSkip = ['지금 구매하기', 'buy now', '구매', '취소', 'cancel'];
-                const btns = document.querySelectorAll('button');
-                for (const btn of btns) {
-                    if (btn.offsetParent === null) continue;
-                    const txt = btn.innerText.trim().toLowerCase();
-                    const cls = (btn.className || '').toLowerCase();
-                    const html = btn.innerHTML;
-                    if (safeSkip.some(k => txt.includes(k))) continue;
-                    if (
-                        txt === '확인' || txt === 'ok' ||
-                        txt === '닫기' || txt === 'close' ||
-                        html.includes('×') || html.includes('✕') || html.includes('✖') ||
-                        cls.includes('close') || cls.includes('dismiss')
-                    ) { btn.click(); }
-                }
-            """)
-            time.sleep(1)
-        except Exception:
-            pass
+        .name-wrap { flex: 1; min-width: 0; }
 
-    try:
-        driver.get("https://www.roblox.com")
-        time.sleep(2)
+        .uname {
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: -0.01em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
 
-        clean_cookie = cookie.strip()
-        if "=" in clean_cookie:
-            clean_cookie = clean_cookie.split("=", 1)[-1]
-        driver.add_cookie({
-            "name": ".ROBLOSECURITY",
-            "value": clean_cookie,
-            "domain": ".roblox.com",
-            "path": "/",
-        })
+        .uid {
+            font-size: 11px;
+            color: #3e4258;
+            font-weight: 500;
+            margin-top: 2px;
+        }
 
-        # 소유 여부 사전 확인
-        session = requests.Session()
-        session.cookies.set(".ROBLOSECURITY", clean_cookie, domain=".roblox.com")
-        me = session.get("https://users.roblox.com/v1/users/authenticated", timeout=5).json()
-        my_id = me.get("id")
+        .price {
+            font-size: 20px;
+            font-weight: 900;
+            color: #5cf5c0;
+            letter-spacing: -0.02em;
+            flex-shrink: 0;
+        }
 
-        if not my_id:
-            return {"purchased": False, "reason": "쿠키 인증 실패"}
+        /* 카드 하단 - 게임패스 이름 + 시간 */
+        .card-bottom { padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05); }
 
-        own_resp = session.get(
-            f"https://inventory.roblox.com/v1/users/{my_id}/items/GamePass/{pass_id}",
-            timeout=5
-        ).json()
-        if own_resp.get("data"):
-            return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
+        .gprow {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
 
-        driver.get(f"https://www.roblox.com/game-pass/{pass_id}/")
-        time.sleep(4)
+        .gpname {
+            font-size: 14px;
+            font-weight: 700;
+            color: #c8ccee;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 70%;
+        }
 
-        page = driver.page_source
-        if "already own" in page.lower() or "이미 소유" in page.lower():
-            save(FAIL_DIR, "already_own")
-            return {"purchased": False, "reason": "이미 소유 중인 게임패스"}
+        .gpname span {
+            color: #7983f5;
+        }
 
-        # 1단계: 구매 버튼
-        try:
-            buy_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR,
-                    "button.btn-fixed-width-lg.btn-primary-lg.PurchaseButton"
-                ))
-            )
-        except Exception:
-            buy_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//button[contains(@class,'PurchaseButton') or contains(text(),'구매')]"
-                ))
-            )
+        .rbadge {
+            background: rgba(88,101,242,0.12);
+            border: 1px solid rgba(88,101,242,0.2);
+            border-radius: 8px;
+            padding: 2px 9px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #7983f5;
+            white-space: nowrap;
+        }
 
-        driver.execute_script("arguments[0].click();", buy_btn)
-        print(f"[{order_id}] 1단계 구매 버튼 클릭")
-        time.sleep(3)
+        .meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
 
-        # 2단계: 지금 구매하기
-        clicked = False
+        .ok-dot {
+            width: 5px;
+            height: 5px;
+            background: #3ecf8e;
+            border-radius: 50%;
+            box-shadow: 0 0 4px #3ecf8e;
+            flex-shrink: 0;
+        }
 
-        if not clicked:
-            try:
-                btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[normalize-space()='지금 구매하기']"))
-                )
-                driver.execute_script("arguments[0].click();", btn)
-                clicked = True
-                print(f"[{order_id}] 방법1 성공")
-            except Exception:
-                pass
+        .ok-txt { font-size: 11px; color: #3ecf8e; font-weight: 700; }
+        .sep { font-size: 11px; color: #2a2d3e; }
+        .time-txt { font-size: 11px; color: #3e4258; font-weight: 500; }
 
-        if not clicked:
-            try:
-                btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH,
-                        "//button[contains(text(),'지금 구매') or contains(text(),'Buy Now')]"
-                    ))
-                )
-                driver.execute_script("arguments[0].click();", btn)
-                clicked = True
-                print(f"[{order_id}] 방법2 성공")
-            except Exception:
-                pass
+        /* 빈/로딩 */
+        .center {
+            text-align: center;
+            padding: 72px 20px;
+            color: #3e4258;
+        }
 
-        if not clicked:
-            try:
-                btn = driver.find_element(By.XPATH,
-                    "//*[contains(text(),'지금 구매하기') or contains(text(),'Buy Now')]"
-                )
-                ActionChains(driver).move_to_element(btn).pause(0.5).click().perform()
-                clicked = True
-                print(f"[{order_id}] 방법3 성공")
-            except Exception:
-                pass
+        .center h3 {
+            font-size: 16px;
+            font-weight: 700;
+            color: #555871;
+            margin-bottom: 6px;
+        }
 
-        if not clicked:
-            result = driver.execute_script("""
-                const btns = document.querySelectorAll('button');
-                for (const btn of btns) {
-                    if (btn.offsetParent === null) continue;
-                    const txt = btn.innerText.trim();
-                    if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
-                    const rect = btn.getBoundingClientRect();
-                    if (rect.top > 540 && rect.top < 640 && rect.left > 250 && rect.left < 460) {
-                        btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
-                        btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true}));
-                        btn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-                        return '성공:' + txt;
-                    }
-                }
-                return '실패';
-            """)
-            if "성공" in result:
-                clicked = True
-                print(f"[{order_id}] 방법4 성공: {result}")
+        .center p { font-size: 13px; }
 
-        if not clicked:
-            result = driver.execute_script("""
-                const modal = document.querySelector('[role="dialog"]') ||
-                             document.querySelector('[class*="modal"]') ||
-                             document.querySelector('[class*="purchase"]');
-                if (!modal) return '모달없음';
-                const btns = modal.querySelectorAll('button');
-                for (const btn of btns) {
-                    if (btn.offsetParent === null) continue;
-                    const txt = btn.innerText.trim();
-                    if (txt === '취소' || txt === 'Cancel' || txt === '×') continue;
-                    btn.click();
-                    return '성공:' + txt;
-                }
-                return '실패';
-            """)
-            if "성공" in result:
-                clicked = True
-                print(f"[{order_id}] 방법5 성공: {result}")
+        .spinner {
+            width: 28px;
+            height: 28px;
+            border: 2px solid rgba(88,101,242,0.15);
+            border-top-color: #5865f2;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            margin: 0 auto 14px;
+        }
 
-        if not clicked:
-            save(FAIL_DIR, "btn_not_found")
-            return {"purchased": False, "reason": "지금 구매하기 버튼 못 찾음"}
+        /* 더보기 */
+        .more-btn {
+            display: block;
+            width: 100%;
+            margin-top: 10px;
+            padding: 14px;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 18px;
+            color: #7983f5;
+            font-size: 13px;
+            font-weight: 700;
+            font-family: 'Noto Sans KR', sans-serif;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
 
-        for _ in range(3):
-            time.sleep(2)
-            close_annoying_popups()
+        .more-btn:hover {
+            background: rgba(88,101,242,0.08);
+            border-color: rgba(88,101,242,0.25);
+        }
 
-        success_path = save(DONE_DIR, "success")
+        @keyframes up {
+            from { opacity: 0; transform: translateY(14px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
 
-        page_after = driver.page_source
-        if "already own" in page_after.lower() or "이미 소유" in page_after.lower():
-            save(FAIL_DIR, "already_own")
-            return {"purchased": False, "reason": "이미 소유 중"}
+        @keyframes newIn {
+            from { opacity: 0; transform: scale(0.95) translateY(-12px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
 
-        print(f"[{order_id}] ✅ 구매 성공!")
-        return {"purchased": True, "screenshot": success_path}
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
 
-    except Exception as e:
-        save(FAIL_DIR, "error")
-        print(f"[{order_id}] ❌ 실패: {e}")
-        return {"purchased": False, "reason": str(e)}
-    finally:
-        driver.quit()
+        @keyframes spin { to { transform: rotate(360deg); } }
 
+        @media (max-width: 480px) {
+            .top h1 { font-size: 24px; }
+            .stat-num { font-size: 17px; }
+            .price { font-size: 17px; }
+            .uname { font-size: 14px; }
+            .gpname { font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
 
-# ─────────────────────────────────────────
-# 프로세스
-# ─────────────────────────────────────────
+    <div class="top">
+        <div class="live-pill">
+            <div class="live-dot"></div>
+            LIVE
+        </div>
+        <h1>실시간 <span>구매로그</span></h1>
+        <p>최근 구매 내역을 실시간으로 확인하세요</p>
+    </div>
 
-def process_manual_buy_selenium(pass_id: int, user_id: str, money: int) -> dict:
+    <div class="stats">
+        <div class="stat">
+            <div class="stat-num" id="sTot">—</div>
+            <div class="stat-lbl">총 구매</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num" id="sToday">—</div>
+            <div class="stat-lbl">오늘</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num" id="sAmt">—</div>
+            <div class="stat-lbl">총 매출</div>
+        </div>
+    </div>
 
-    with db_lock:
-        with sqlite3.connect(DATABASE) as conn:
-            cur = conn.cursor()
+    <div class="list" id="list">
+        <div class="center">
+            <div class="spinner"></div>
+            <p>불러오는 중...</p>
+        </div>
+    </div>
 
-            cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-            row = cur.fetchone()
-            if not row:
-                return {"success": False, "message": "관리자 쿠키 없음", "order_id": None, "screenshot": None}
+    <button class="more-btn" id="moreBtn" style="display:none" onclick="loadMore()">더보기</button>
 
-            cur.execute("SELECT value FROM config WHERE key = 'maintenance'")
-            m = cur.fetchone()
-            if m and m[0] == "1":
-                return {"success": False, "message": "점검 중입니다", "order_id": None, "screenshot": None}
+</div>
+<script>
+    let page = 0, loading = false, hasMore = true;
+    const LIMIT = 20;
+    const seen = new Set();
 
-            cur.execute("SELECT value FROM config WHERE key = ?", (f"blacklist_{user_id}",))
-            bl = cur.fetchone()
-            if bl and bl[0] == "1":
-                return {"success": False, "message": "구매가 제한된 유저입니다", "order_id": None, "screenshot": None}
-
-            cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-            user = cur.fetchone()
-            if not user or user[0] < money:
-                return {"success": False, "message": "잔액 부족", "order_id": None, "screenshot": None}
-
-            # 로벅스 재고 확인
-            current_robux = get_current_robux(row[0])
-            pass_price = money
-
-            try:
-                clean = row[0].strip()
-                if "=" in clean:
-                    clean = clean.split("=", 1)[-1]
-                session = requests.Session()
-                session.cookies.set(".ROBLOSECURITY", clean, domain=".roblox.com")
-                pass_info = session.get(
-                    f"https://apis.roblox.com/game-passes/v1/game-passes/{pass_id}/details",
-                    timeout=5
-                ).json()
-                price_info = pass_info.get("priceInformation") or {}
-                pass_price = int(price_info.get("price") or price_info.get("defaultPriceInRobux") or money)
-
-                if current_robux < pass_price:
-                    return {
-                        "success": False,
-                        "message": f"로벅스 재고 부족 (필요: {pass_price:,} R$ / 현재: {current_robux:,} R$)",
-                        "order_id": None,
-                        "screenshot": None
-                    }
-            except Exception:
-                pass
-
-            # 잔액 선차감 + 주문 생성
-            order_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
-            cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (money, user_id))
-            cur.execute(
-                "INSERT INTO orders (order_id, user_id, amount, robux, status) VALUES (?, ?, ?, ?, 'pending')",
-                (order_id, user_id, money, pass_price)
-            )
-            conn.commit()
-
-    # 대기열 등록
-    position = purchase_queue.qsize() + 1
-    queue_status[order_id] = {
-        "position": position,
-        "status": "waiting",
-        "result": None
+    function timeAgo(str) {
+        const d = new Date(str), now = new Date();
+        const m = Math.floor((now - d) / 60000);
+        if (m < 1) return '방금 전';
+        if (m < 60) return m + '분 전';
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + '시간 전';
+        const days = Math.floor(h / 24);
+        if (days < 7) return days + '일 전';
+        return d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
-    purchase_queue.put({
-        "pass_id": pass_id,
-        "cookie": row[0],
-        "order_id": order_id,
-        "user_id": user_id
-    })
 
-    print(f"[{order_id}] 대기열 {position}번째 등록")
+    function fmtAmt(n) {
+        if (n >= 10000) return (n / 10000).toFixed(1) + '만';
+        return n.toLocaleString();
+    }
 
-    # 완료될 때까지 대기
-    while True:
-        time.sleep(1)
-        status = queue_status.get(order_id, {})
-        if status.get("status") == "done":
-            break
+    function makeCard(log, isNew) {
+        const card = document.createElement('div');
+        card.className = 'card' + (isNew ? ' new' : '');
+        card.dataset.id = log.order_id;
 
-    result = queue_status[order_id]["result"]
-    del queue_status[order_id]
+        const av = log.avatar_url
+            || `https://www.roblox.com/headshot-thumbnail/image?userId=${log.roblox_id||1}&width=150&height=150&format=png`;
 
-    with db_lock:
-        with sqlite3.connect(DATABASE) as conn:
-            cur = conn.cursor()
-            if result.get("purchased"):
-                cur.execute("UPDATE orders SET status = 'completed' WHERE order_id = ?", (order_id,))
-                conn.commit()
-                return {
-                    "success": True,
-                    "message": "✅ 구매 완료!",
-                    "order_id": order_id,
-                    "screenshot": result.get("screenshot")
-                }
-            else:
-                cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (money, user_id))
-                cur.execute("UPDATE orders SET status = 'failed' WHERE order_id = ?", (order_id,))
-                conn.commit()
-                return {
-                    "success": False,
-                    "message": f"❌ {result.get('reason', '구매 실패')}",
-                    "order_id": None,
-                    "screenshot": None
-                }
+        const robuxStr = log.robux
+            ? `<span class="rbadge">R$ ${Number(log.robux).toLocaleString()}</span>`
+            : '';
 
+        card.innerHTML = `
+            <div class="card-top">
+                <img class="avatar" src="${av}"
+                    onerror="this.src='https://tr.rbxcdn.com/53eb9b17fe1432a809c73a13889b5006/150/150/Image/Png'"
+                    alt="">
+                <div class="name-wrap">
+                    <div class="uname">${log.roblox_name || '유저'}</div>
+                    <div class="uid">#${(log.order_id || '').substring(0, 8)}</div>
+                </div>
+                <div class="price">${log.amount ? log.amount.toLocaleString() + '원' : ''}</div>
+            </div>
+            <div class="card-bottom">
+                <div class="gprow">
+                    <span class="gpname">${log.gamepass_name || '게임패스'}</span>
+                    ${robuxStr}
+                </div>
+                <div class="meta">
+                    <div class="ok-dot"></div>
+                    <span class="ok-txt">구매 완료</span>
+                    <span class="sep">·</span>
+                    <span class="time-txt">${timeAgo(log.created_at)}</span>
+                </div>
+            </div>
+        `;
+        return card;
+    }
 
-if __name__ == "__main__":
-    with sqlite3.connect(DATABASE) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM config WHERE key = 'roblox_cookie'")
-        row = cur.fetchone()
+    function updateStats(s) {
+        if (!s) return;
+        document.getElementById('sTot').textContent = (s.total || 0).toLocaleString();
+        document.getElementById('sToday').textContent = (s.today || 0).toLocaleString();
+        document.getElementById('sAmt').textContent = fmtAmt(s.total_amount || 0) + '원';
+    }
 
-    result = buy_gamepass_selenium(1784490889, row[0], "TEST001")
-    print(f"결과: {result}")
+    async function load() {
+        if (loading) return;
+        loading = true;
+        try {
+            const r = await fetch(`/api/purchase-logs?limit=${LIMIT}&offset=0`);
+            const data = await r.json();
+            updateStats(data.stats);
+            const list = document.getElementById('list');
+            if (!data.logs?.length) {
+                list.innerHTML = `<div class="center"><h3>구매 내역이 없습니다</h3><p>첫 번째 구매를 기다리고 있어요</p></div>`;
+                return;
+            }
+            list.innerHTML = '';
+            data.logs.forEach((log, i) => {
+                const c = makeCard(log, false);
+                c.style.animationDelay = i * 40 + 'ms';
+                list.appendChild(c);
+                seen.add(log.order_id);
+            });
+            page = 1;
+            hasMore = data.logs.length >= LIMIT;
+            document.getElementById('moreBtn').style.display = hasMore ? 'block' : 'none';
+        } catch {
+            document.getElementById('list').innerHTML = `<div class="center"><h3>불러오기 실패</h3><p>잠시 후 다시 시도해주세요</p></div>`;
+        } finally { loading = false; }
+    }
+
+    async function loadMore() {
+        if (loading || !hasMore) return;
+        loading = true;
+        const btn = document.getElementById('moreBtn');
+        btn.textContent = '불러오는 중...';
+        try {
+            const r = await fetch(`/api/purchase-logs?limit=${LIMIT}&offset=${page * LIMIT}`);
+            const data = await r.json();
+            const list = document.getElementById('list');
+            data.logs.forEach(log => {
+                list.appendChild(makeCard(log, false));
+                seen.add(log.order_id);
+            });
+            page++;
+            hasMore = data.logs.length >= LIMIT;
+            btn.style.display = hasMore ? 'block' : 'none';
+            btn.textContent = '더보기';
+        } catch { btn.textContent = '더보기'; }
+        finally { loading = false; }
+    }
+
+    async function poll() {
+        try {
+            const r = await fetch(`/api/purchase-logs?limit=${LIMIT}&offset=0`);
+            const data = await r.json();
+            updateStats(data.stats);
+            const list = document.getElementById('list');
+            (data.logs || []).filter(l => !seen.has(l.order_id)).reverse().forEach(log => {
+                const c = makeCard(log, true);
+                list.insertBefore(c, list.firstChild);
+                seen.add(log.order_id);
+            });
+        } catch {}
+    }
+
+    load();
+    setInterval(poll, 20000);
+</script>
+</body>
+</html>
