@@ -52,7 +52,9 @@
             border: 1px solid #333;
             border-radius: 12px;
             transition: all 0.2s ease;
+            color: white;
         }
+        body.light-mode .input-field { color: black; }
         .input-field:focus { border-color: #555; outline: none; background-color: #222; }
 
         .btn-discord { background-color: #5865F2; transition: background-color 0.2s; }
@@ -107,7 +109,7 @@
             </div>
 
             <div class="space-y-3">
-                <button class="w-full btn-discord text-white font-bold py-3.5 rounded-xl flex items-center justify-center space-x-3 active:scale-[0.98]">
+                <button onclick="location.href='/login/discord'" class="w-full btn-discord text-white font-bold py-3.5 rounded-xl flex items-center justify-center space-x-3 active:scale-[0.98]">
                     <i class="fa-brands fa-discord text-xl"></i>
                     <span>디스코드로 로그인</span>
                 </button>
@@ -117,16 +119,13 @@
             <form class="space-y-5" onsubmit="return false;">
                 <div>
                     <label class="block text-sm font-medium mb-2 ml-1">아이디</label>
-                    <input type="text" placeholder="아이디를 입력하세요" class="input-field w-full px-4 py-3.5 text-sm">
+                    <input type="text" id="login-id" placeholder="아이디를 입력하세요" class="input-field w-full px-4 py-3.5 text-sm">
                 </div>
                 <div class="relative">
                     <label class="block text-sm font-medium mb-2 ml-1">비밀번호</label>
-                    <input type="password" placeholder="비밀번호를 입력하세요" class="input-field w-full px-4 py-3.5 text-sm pr-12">
-                    <button type="button" class="absolute right-4 top-[40px] text-gray-500 hover:text-white">
-                        <i class="fa-regular fa-eye"></i>
-                    </button>
+                    <input type="password" id="login-pw" placeholder="비밀번호를 입력하세요" class="input-field w-full px-4 py-3.5 text-sm pr-12">
                 </div>
-                <button class="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:opacity-90 transition-all mt-3">
+                <button onclick="handleLogin()" class="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:opacity-90 transition-all mt-3">
                     로그인 하기
                 </button>
             </form>
@@ -148,17 +147,13 @@
             <form class="space-y-5" onsubmit="return false;">
                 <div>
                     <label class="block text-sm font-medium mb-2 ml-1">아이디 <span class="text-red-500">*</span></label>
-                    <input type="text" placeholder="사용할 아이디 입력" class="input-field w-full px-4 py-3.5 text-sm">
+                    <input type="text" id="signup-id" placeholder="사용할 아이디 입력" class="input-field w-full px-4 py-3.5 text-sm">
                 </div>
                 <div class="relative">
                     <label class="block text-sm font-medium mb-2 ml-1">비밀번호 <span class="text-red-500">*</span></label>
-                    <input type="password" placeholder="비밀번호 설정" class="input-field w-full px-4 py-3.5 text-sm">
+                    <input type="password" id="signup-pw" placeholder="비밀번호 설정" class="input-field w-full px-4 py-3.5 text-sm">
                 </div>
-                <div class="relative">
-                    <label class="block text-sm font-medium mb-2 ml-1">비밀번호 확인 <span class="text-red-500">*</span></label>
-                    <input type="password" placeholder="비밀번호 재입력" class="input-field w-full px-4 py-3.5 text-sm">
-                </div>
-                <button class="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:opacity-90 transition-all mt-3">
+                <button onclick="handleSignup()" class="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:opacity-90 transition-all mt-3">
                     계정 만들기
                 </button>
             </form>
@@ -196,14 +191,41 @@
         function toggleTheme() {
             const body = document.body;
             const icon = document.getElementById('theme-icon');
-            
             body.classList.toggle('light-mode');
-
             if (body.classList.contains('light-mode')) {
                 icon.classList.replace('fa-moon', 'fa-sun');
             } else {
                 icon.classList.replace('fa-sun', 'fa-moon');
             }
+        }
+
+        // [실제 통신 기능]
+        async function handleSignup() {
+            const username = document.getElementById('signup-id').value;
+            const password = document.getElementById('signup-pw').value;
+            if(!username || !password) return alert("정보를 모두 입력해주세요.");
+
+            const res = await fetch('/api/signup', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const result = await res.json();
+            alert(result.message);
+            if(result.success) toggleAuth();
+        }
+
+        async function handleLogin() {
+            const username = document.getElementById('login-id').value;
+            const password = document.getElementById('login-pw').value;
+
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const result = await res.json();
+            alert(result.message);
         }
     </script>
 </body>
