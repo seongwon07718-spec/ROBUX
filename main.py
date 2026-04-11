@@ -1,13 +1,15 @@
-/* "또는" 텍스트 가림 해결 최종본 */
+body.light-mode {
+    background-color: #ffffff;
+    color: #000;
+}
+
+/* 추가할 코드 */
 .separator-text {
-    background-color: #0d0d0d; /* 다크모드 유리박스 느낌의 불투명한 배경색 */
+    background-color: #080808; /* 유리박스 뒤 선을 가릴 불투명한 배경색 */
     padding: 0 12px;
     position: relative;
     z-index: 1;
-    transition: background-color 0.3s;
 }
-
-/* 라이트 모드일 때는 배경을 흰색으로 변경 */
 body.light-mode .separator-text {
-    background-color: #ffffff;
+    background-color: #ffffff; /* 라이트모드일 땐 흰색으로 선을 가림 */
 }
