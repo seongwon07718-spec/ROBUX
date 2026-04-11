@@ -42,6 +42,10 @@
         body.light-mode .text-gray-400 { color: #666; }
         body.light-mode .input-field { background-color: #f5f5f5; border-color: #ddd; color: #000; }
         body.light-mode button.bg-white { background-color: #000; color: #fff; }
+        
+        /* 라이트 모드 하단 구분선 및 회원가입 텍스트 색상 수정 */
+        body.light-mode .border-t { border-color: #ddd; }
+        body.light-mode .auth-link { color: #000 !important; }
 
         .input-field {
             background-color: #1a1a1a;
@@ -54,7 +58,7 @@
         .btn-discord { background-color: #5865F2; transition: background-color 0.2s; }
         .btn-discord:hover { background-color: #4752C4; }
 
-        /* [수정된 부분] "또는" 구분선 스타일 - 박스 현상 원천 차단 */
+        /* "또는" 구분선 스타일 */
         .separator-container {
             display: flex;
             align-items: center;
@@ -67,14 +71,14 @@
         .separator-container::after {
             content: '';
             flex: 1;
-            border-bottom: 1px solid #333; /* 다크모드 선 */
+            border-bottom: 1px solid #333; 
         }
         .separator-container::before { margin-right: 15px; }
         .separator-container::after { margin-left: 15px; }
 
         body.light-mode .separator-container::before,
         body.light-mode .separator-container::after {
-            border-bottom: 1px solid #ddd; /* 라이트모드 선 */
+            border-bottom: 1px solid #ddd; 
         }
 
         .fade-in { animation: fadeIn 0.3s ease-in-out; }
@@ -107,7 +111,6 @@
                     <i class="fa-brands fa-discord text-xl"></i>
                     <span>디스코드로 로그인</span>
                 </button>
-                
                 <div class="separator-container">또는</div>
             </div>
 
@@ -131,7 +134,7 @@
             <div class="pt-6 border-t border-gray-800 text-center">
                 <p class="text-sm text-gray-400">
                     아직 계정이 없으신가요? 
-                    <button onclick="toggleAuth()" class="font-bold hover:underline ml-1 text-white">회원가입</button>
+                    <button onclick="toggleAuth()" class="auth-link font-bold hover:underline ml-1 text-white">회원가입</button>
                 </p>
             </div>
         </div>
@@ -163,7 +166,7 @@
             <div class="pt-6 border-t border-gray-800 text-center">
                 <p class="text-sm text-gray-400">
                     이미 계정이 있으신가요? 
-                    <button onclick="toggleAuth()" class="font-bold hover:underline ml-1 text-white">로그인</button>
+                    <button onclick="toggleAuth()" class="auth-link font-bold hover:underline ml-1 text-white">로그인</button>
                 </p>
             </div>
         </div>
