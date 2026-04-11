@@ -1,15 +1,6 @@
-body.light-mode {
-    background-color: #ffffff;
-    color: #000;
-}
-
-/* 추가할 코드 */
-.separator-text {
-    background-color: #080808; /* 유리박스 뒤 선을 가릴 불투명한 배경색 */
-    padding: 0 12px;
-    position: relative;
-    z-index: 1;
-}
-body.light-mode .separator-text {
-    background-color: #ffffff; /* 라이트모드일 땐 흰색으로 선을 가림 */
-}
+<div class="relative flex items-center justify-center">
+    <div class="absolute inset-0 flex items-center">
+        <div class="w-full border-t border-gray-800"></div>
+    </div>
+    <span class="relative px-3 text-xs text-gray-600 bg-transparent">또는</span>
+</div>
