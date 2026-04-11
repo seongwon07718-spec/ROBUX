@@ -28,29 +28,18 @@
       overflow-x: hidden;
     }
 
-    /* ── 흰색 유리 카드 (더 불투명하게) ── */
+    /* ── 완전 흰색 카드 ── */
     .card {
       position: relative;
       width: 100%;
       max-width: 440px;
-      background: rgba(255, 255, 255, 0.72);
-      backdrop-filter: blur(40px) saturate(180%);
-      -webkit-backdrop-filter: blur(40px) saturate(180%);
-      border: 1px solid rgba(255, 255, 255, 0.85);
+      background: #ffffff;
       border-radius: 24px;
       box-shadow:
-        0 0 0 1px rgba(255,255,255,0.5) inset,
-        0 32px 80px rgba(0,0,0,0.55),
-        0 8px 32px rgba(0,0,0,0.35);
+        0 32px 80px rgba(0,0,0,0.5),
+        0 8px 32px rgba(0,0,0,0.3);
       padding: 44px 40px 40px;
       animation: cardIn 0.55s cubic-bezier(0.22,1,0.36,1) both;
-    }
-    .card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 24px; right: 24px;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,1), transparent);
     }
     @keyframes cardIn {
       from { opacity: 0; transform: translateY(28px) scale(0.97); }
@@ -62,8 +51,8 @@
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      background: rgba(88,101,242,0.12);
-      border: 1px solid rgba(88,101,242,0.28);
+      background: #eef0fe;
+      border: 1px solid #c7cbfb;
       border-radius: 100px;
       padding: 5px 14px 5px 10px;
       font-size: 12px;
@@ -103,7 +92,7 @@
     }
     .heading p {
       font-size: 14px;
-      color: #555;
+      color: #666;
       margin-top: 7px;
       line-height: 1.55;
     }
@@ -152,8 +141,8 @@
       margin: 22px 0;
       animation: fadeUp 0.5s 0.28s both;
     }
-    .divider-line { flex: 1; height: 1px; background: rgba(0,0,0,0.1); }
-    .divider-text { font-size: 12px; color: #999; letter-spacing: 0.3px; }
+    .divider-line { flex: 1; height: 1px; background: #e5e7eb; }
+    .divider-text { font-size: 12px; color: #aaa; letter-spacing: 0.3px; }
 
     /* ── Form ── */
     .form-group {
@@ -174,8 +163,8 @@
     .field input {
       width: 100%;
       height: 48px;
-      background: rgba(255,255,255,0.6);
-      border: 1px solid rgba(0,0,0,0.12);
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
       border-radius: 11px;
       padding: 0 44px 0 14px;
       font-size: 15px;
@@ -187,9 +176,9 @@
     }
     .field input::placeholder { color: #bbb; font-size: 14px; }
     .field input:focus {
-      border-color: rgba(88,101,242,0.55);
-      background: rgba(255,255,255,0.9);
-      box-shadow: 0 0 0 3px rgba(88,101,242,0.12);
+      border-color: var(--discord);
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(88,101,242,0.1);
     }
 
     .pw-toggle {
@@ -236,7 +225,7 @@
     }
     .btn-login:hover {
       background: #222;
-      box-shadow: 0 6px 24px rgba(0,0,0,0.25);
+      box-shadow: 0 6px 24px rgba(0,0,0,0.2);
       transform: translateY(-1px);
     }
     .btn-login:active { transform: scale(0.988); }
@@ -264,7 +253,7 @@
       gap: 7px;
       animation: fadeUp 0.5s 0.42s both;
     }
-    .footer-links p { font-size: 13px; color: #777; text-align: center; }
+    .footer-links p { font-size: 13px; color: #888; text-align: center; }
     .footer-links a {
       color: var(--discord);
       text-decoration: none;
@@ -277,13 +266,13 @@
       margin-top: 20px;
       text-align: center;
       font-size: 11.5px;
-      color: #aaa;
+      color: #bbb;
       line-height: 1.7;
       animation: fadeUp 0.5s 0.48s both;
       padding-top: 18px;
-      border-top: 1px solid rgba(0,0,0,0.08);
+      border-top: 1px solid #f0f0f0;
     }
-    .terms a { color: #888; text-decoration: none; }
+    .terms a { color: #999; text-decoration: none; }
     .terms a:hover { color: #333; }
 
     /* ── Toast ── */
@@ -292,7 +281,6 @@
       top: 20px; left: 50%;
       transform: translateX(-50%) translateY(-80px);
       background: rgba(17,17,17,0.95);
-      border: 1px solid rgba(255,255,255,0.1);
       color: #fff;
       font-size: 13.5px;
       font-weight: 500;
