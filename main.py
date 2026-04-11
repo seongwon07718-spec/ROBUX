@@ -1,137 +1,186 @@
 import os
-import aiohttp
-import discord
-from discord import app_commands
-from discord.ext import commands
-from dotenv import load_dotenv
+import sqlite3
+import hashlib
+import secrets
+from datetime import timedelta
+from functools import wraps
 
-load_dotenv()
-
-DISCORD_TOKEN         = os.environ["DISCORD_TOKEN"]
-DISCORD_CLIENT_ID     = os.environ["DISCORD_CLIENT_ID"]
-DISCORD_CLIENT_SECRET = os.environ["DISCORD_CLIENT_SECRET"]
-SERVER_URL            = os.environ.get("SERVER_URL", "http://localhost:5000")
-GUILD_ID              = os.environ.get("ADMIN_GUILD_ID")
-
-# ── 봇 설정 ──────────────────────────────────────────────
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree
-
-
-# ── 모달: 이메일 & 비밀번호 입력 ─────────────────────────
-class AdminAccountModal(discord.ui.Modal, title="🔐 관리자 계정 생성"):
-    email = discord.ui.TextInput(
-        label="이메일",
-        placeholder="admin@example.com",
-        required=True,
-        max_length=100,
-    )
-    password = discord.ui.TextInput(
-        label="비밀번호",
-        placeholder="8자 이상 입력하세요",
-        required=True,
-        min_length=8,
-        max_length=100,
-        style=discord.TextStyle.short,
-    )
-    password_confirm = discord.ui.TextInput(
-        label="비밀번호 확인",
-        placeholder="비밀번호를 다시 입력하세요",
-        required=True,
-        min_length=8,
-        max_length=100,
-        style=discord.TextStyle.short,
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if self.password.value != self.password_confirm.value:
-            await interaction.response.send_message(
-                "❌ 비밀번호가 일치하지 않습니다. 다시 시도해주세요.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                resp = await session.post(
-                    f"{SERVER_URL}/internal/create_admin",
-                    json={
-                        "email":    self.email.value.strip(),
-                        "password": self.password.value,
-                    },
-                    # Discord Client Secret을 인증 헤더로 사용
-                    headers={"X-Discord-Client-Secret": DISCORD_CLIENT_SECRET},
-                    timeout=aiohttp.ClientTimeout(total=10),
-                )
-                data = await resp.json()
-
-            if resp.status == 200:
-                await interaction.followup.send(
-                    f"✅ **관리자 계정이 생성되었습니다!**\n"
-                    f"```\n이메일: {self.email.value.strip()}\n```\n"
-                    f"웹사이트에서 관리자 대시보드에 접근할 수 있습니다.",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.followup.send(
-                    f"❌ 오류: {data.get('message', '알 수 없는 오류')}",
-                    ephemeral=True,
-                )
-
-        except aiohttp.ClientConnectorError:
-            await interaction.followup.send(
-                "❌ 서버에 연결할 수 없습니다. `server.py`가 실행 중인지 확인하세요.",
-                ephemeral=True,
-            )
-        except Exception as e:
-            await interaction.followup.send(f"❌ 오류: `{e}`", ephemeral=True)
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception):
-        await interaction.response.send_message(f"❌ 오류: {error}", ephemeral=True)
-
-
-# ── 슬래시 명령어: /관리자_아이디 ────────────────────────
-@tree.command(
-    name="관리자_아이디",
-    description="관리자 계정을 생성합니다 (서버 관리자 전용)",
+from flask import (
+    Flask, request, jsonify, session,
+    send_from_directory, redirect
 )
-@app_commands.checks.has_permissions(administrator=True)
-async def cmd_admin_create(interaction: discord.Interaction):
-    await interaction.response.send_modal(AdminAccountModal())
+from flask_cors import CORS
 
+# ── 설정 ─────────────────────────────────────────────────
+app = Flask(__name__, static_folder="static")
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+app.permanent_session_lifetime = timedelta(days=7)
 
-@cmd_admin_create.error
-async def cmd_admin_create_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message(
-            "❌ 이 명령어는 **서버 관리자**만 사용할 수 있습니다.",
-            ephemeral=True,
-        )
-    else:
-        await interaction.response.send_message(f"❌ 오류: {error}", ephemeral=True)
+CORS(app, supports_credentials=True, origins=["http://localhost:5000"])
 
+DB_PATH = "sailormarket.db"
 
-# ── 봇 준비 ──────────────────────────────────────────────
-@bot.event
-async def on_ready():
-    print(f"[봇] {bot.user} 로그인 완료")
+# 봇 ↔ 서버 내부 통신용 — Discord Client Secret 사용
+DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
 
-    if GUILD_ID:
-        guild = discord.Object(id=int(GUILD_ID))
-        tree.copy_global_to(guild=guild)
-        synced = await tree.sync(guild=guild)
-        print(f"[봇] 길드({GUILD_ID}) 명령어 동기화: {len(synced)}개")
-    else:
-        synced = await tree.sync()
-        print(f"[봇] 글로벌 명령어 동기화: {len(synced)}개")
+# ── DB 초기화 ─────────────────────────────────────────────
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    print(f"[봇] SERVER_URL: {SERVER_URL}")
-    print(f"[봇] 준비 완료! /관리자_아이디 명령어를 사용하세요.")
+def init_db():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                email      TEXT    UNIQUE NOT NULL,
+                password   TEXT    NOT NULL,
+                is_admin   INTEGER DEFAULT 0,
+                created_at TEXT    DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
+    print("[DB] 초기화 완료 →", DB_PATH)
 
+# ── 비밀번호 해싱 ─────────────────────────────────────────
+def hash_password(pw: str) -> str:
+    salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((salt + pw).encode()).hexdigest()
+    return f"{salt}:{hashed}"
+
+def check_password(pw: str, stored: str) -> bool:
+    try:
+        salt, hashed = stored.split(":")
+        return hashlib.sha256((salt + pw).encode()).hexdigest() == hashed
+    except Exception:
+        return False
+
+# ── 데코레이터 ────────────────────────────────────────────
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if "user_id" not in session:
+            return jsonify({"message": "로그인이 필요합니다."}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if "user_id" not in session:
+            return jsonify({"message": "로그인이 필요합니다."}), 401
+        if not session.get("is_admin"):
+            return jsonify({"message": "관리자 권한이 필요합니다."}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+# ── 페이지 서빙 ───────────────────────────────────────────
+@app.route("/")
+def index():
+    return send_from_directory(".", "login.html")
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    return f"<h1>안녕하세요, {session.get('email')}님!</h1><a href='/api/logout'>로그아웃</a>"
+
+@app.route("/admin/dashboard")
+@admin_required
+def admin_dashboard():
+    return f"<h1>🔐 관리자 대시보드</h1><p>{session.get('email')}</p><a href='/api/logout'>로그아웃</a>"
+
+# ── API: 로그인 ───────────────────────────────────────────
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    data     = request.get_json()
+    email    = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify({"message": "이메일과 비밀번호를 입력하세요."}), 400
+
+    with get_db() as conn:
+        user = conn.execute(
+            "SELECT * FROM users WHERE email = ?", (email,)
+        ).fetchone()
+
+    if not user or not check_password(password, user["password"]):
+        return jsonify({"message": "이메일 또는 비밀번호가 올바르지 않습니다."}), 401
+
+    session.permanent = True
+    session["user_id"]  = user["id"]
+    session["email"]    = user["email"]
+    session["is_admin"] = bool(user["is_admin"])
+
+    return jsonify({
+        "message":  "로그인 성공",
+        "email":    user["email"],
+        "is_admin": bool(user["is_admin"]),
+    })
+
+# ── API: 로그아웃 ─────────────────────────────────────────
+@app.route("/api/logout")
+def api_logout():
+    session.clear()
+    return redirect("/")
+
+# ── API: 세션 확인 ────────────────────────────────────────
+@app.route("/api/me")
+@login_required
+def api_me():
+    return jsonify({
+        "email":    session.get("email"),
+        "is_admin": session.get("is_admin"),
+    })
+
+# ── API: 관리자 유저 목록 ─────────────────────────────────
+@app.route("/api/admin/users")
+@admin_required
+def admin_users():
+    with get_db() as conn:
+        users = conn.execute(
+            "SELECT id, email, is_admin, created_at FROM users ORDER BY id"
+        ).fetchall()
+    return jsonify([dict(u) for u in users])
+
+# ── 내부 API: 봇 → 관리자 계정 생성 ─────────────────────
+# Discord Client Secret으로 인증
+@app.route("/internal/create_admin", methods=["POST"])
+def create_admin():
+    auth = request.headers.get("X-Discord-Client-Secret", "")
+    if not DISCORD_CLIENT_SECRET or auth != DISCORD_CLIENT_SECRET:
+        return jsonify({"message": "인증 실패"}), 403
+
+    data     = request.get_json()
+    email    = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify({"message": "이메일과 비밀번호를 입력하세요."}), 400
+
+    hashed = hash_password(password)
+
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO users (email, password, is_admin) VALUES (?, ?, 1)",
+                (email, hashed)
+            )
+            conn.commit()
+        return jsonify({"message": f"관리자 계정 생성 완료: {email}"})
+    except sqlite3.IntegrityError:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE users SET password = ?, is_admin = 1 WHERE email = ?",
+                (hashed, email)
+            )
+            conn.commit()
+        return jsonify({"message": f"기존 계정을 관리자로 업데이트: {email}"})
 
 # ── 실행 ─────────────────────────────────────────────────
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    init_db()
+    port = int(os.environ.get("PORT", 5000))
+    print(f"[서버] http://localhost:{port} 에서 실행 중")
+    app.run(host="0.0.0.0", port=port, debug=True)
