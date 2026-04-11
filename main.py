@@ -9,7 +9,6 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         
-        /* 기본 상태 (다크 모드) */
         body { 
             font-family: 'Inter', sans-serif; 
             background-color: #000; 
@@ -18,7 +17,6 @@
             overflow: hidden; 
         }
 
-        /* 라이트 모드 스타일 */
         body.light-mode {
             background-color: #ffffff;
             color: #000;
@@ -33,7 +31,6 @@
             transition: all 0.3s;
         }
 
-        /* 라이트 모드에서의 유리 박스 및 텍스트 설정 */
         body.light-mode .glass-card {
             background: rgba(0, 0, 0, 0.03);
             border: 1px solid rgba(0, 0, 0, 0.1);
@@ -42,8 +39,6 @@
         body.light-mode .text-gray-400 { color: #666; }
         body.light-mode .input-field { background-color: #f5f5f5; border-color: #ddd; color: #000; }
         body.light-mode button.bg-white { background-color: #000; color: #fff; }
-        
-        /* 라이트 모드 하단 구분선 및 회원가입 텍스트 색상 수정 */
         body.light-mode .border-t { border-color: #ddd; }
         body.light-mode .auth-link { color: #000 !important; }
 
@@ -60,7 +55,6 @@
         .btn-discord { background-color: #5865F2; transition: background-color 0.2s; }
         .btn-discord:hover { background-color: #4752C4; }
 
-        /* "또는" 구분선 스타일 */
         .separator-container {
             display: flex;
             align-items: center;
@@ -116,19 +110,19 @@
                 <div class="separator-container">또는</div>
             </div>
 
-            <form class="space-y-5" onsubmit="return false;">
+            <div class="space-y-5">
                 <div>
                     <label class="block text-sm font-medium mb-2 ml-1">아이디</label>
                     <input type="text" id="login-id" placeholder="아이디를 입력하세요" class="input-field w-full px-4 py-3.5 text-sm">
                 </div>
-                <div class="relative">
+                <div>
                     <label class="block text-sm font-medium mb-2 ml-1">비밀번호</label>
-                    <input type="password" id="login-pw" placeholder="비밀번호를 입력하세요" class="input-field w-full px-4 py-3.5 text-sm pr-12">
+                    <input type="password" id="login-pw" placeholder="비밀번호를 입력하세요" class="input-field w-full px-4 py-3.5 text-sm">
                 </div>
                 <button onclick="handleLogin()" class="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:opacity-90 transition-all mt-3">
                     로그인 하기
                 </button>
-            </form>
+            </div>
 
             <div class="pt-6 border-t border-gray-800 text-center">
                 <p class="text-sm text-gray-400">
@@ -144,19 +138,23 @@
                 <p class="text-gray-400 text-sm">정보를 입력하여 새 계정을 생성하세요.</p>
             </div>
 
-            <form class="space-y-5" onsubmit="return false;">
+            <div class="space-y-5">
                 <div>
                     <label class="block text-sm font-medium mb-2 ml-1">아이디 <span class="text-red-500">*</span></label>
                     <input type="text" id="signup-id" placeholder="사용할 아이디 입력" class="input-field w-full px-4 py-3.5 text-sm">
                 </div>
-                <div class="relative">
+                <div>
                     <label class="block text-sm font-medium mb-2 ml-1">비밀번호 <span class="text-red-500">*</span></label>
                     <input type="password" id="signup-pw" placeholder="비밀번호 설정" class="input-field w-full px-4 py-3.5 text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-2 ml-1">비밀번호 확인 <span class="text-red-500">*</span></label>
+                    <input type="password" id="signup-pw-confirm" placeholder="비밀번호를 다시 입력하세요" class="input-field w-full px-4 py-3.5 text-sm">
                 </div>
                 <button onclick="handleSignup()" class="w-full bg-white text-black font-bold py-3.5 rounded-xl hover:opacity-90 transition-all mt-3">
                     계정 만들기
                 </button>
-            </form>
+            </div>
 
             <div class="pt-6 border-t border-gray-800 text-center">
                 <p class="text-sm text-gray-400">
@@ -199,11 +197,17 @@
             }
         }
 
-        // [실제 통신 기능]
         async function handleSignup() {
             const username = document.getElementById('signup-id').value;
             const password = document.getElementById('signup-pw').value;
-            if(!username || !password) return alert("정보를 모두 입력해주세요.");
+            const passwordConfirm = document.getElementById('signup-pw-confirm').value;
+
+            if(!username || !password || !passwordConfirm) return alert("정보를 모두 입력해주세요.");
+            
+            // 비밀번호 일치 확인 로직
+            if(password !== passwordConfirm) {
+                return alert("비밀번호가 일치하지 않습니다. 다시 확인해주세요.");
+            }
 
             const res = await fetch('/api/signup', {
                 method: 'POST',
@@ -218,6 +222,7 @@
         async function handleLogin() {
             const username = document.getElementById('login-id').value;
             const password = document.getElementById('login-pw').value;
+            if(!username || !password) return alert("아이디와 비밀번호를 입력해주세요.");
 
             const res = await fetch('/api/login', {
                 method: 'POST',
