@@ -1,6 +1,25 @@
-<div class="relative flex items-center justify-center">
-    <div class="absolute inset-0 flex items-center">
-        <div class="w-full border-t border-gray-800"></div>
-    </div>
-    <span class="relative px-3 text-xs text-gray-600 bg-transparent">또는</span>
-</div>
+/* 이 코드를 복사해서 넣으세요 */
+.separator-container {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    color: #666; 
+    font-size: 0.75rem;
+    margin: 20px 0; /* 위아래 간격 추가 */
+}
+
+.separator-container::before,
+.separator-container::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid #333; /* 선 색상 */
+}
+
+.separator-container::before { margin-right: 15px; }
+.separator-container::after { margin-left: 15px; }
+
+/* 라이트 모드일 때 선 색상 변경 */
+body.light-mode .separator-container::before,
+body.light-mode .separator-container::after {
+    border-bottom: 1px solid #ddd;
+}
