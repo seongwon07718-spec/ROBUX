@@ -3,72 +3,61 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>입금 대기 - 세일러 피스</title>
+    <title>포인트 충전 - 세일러 피스</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: #000; color: #fff; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
         .glass-card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.06); }
-        .loading-dots::after { content: ' .'; animation: dots 1.5s steps(5, end) infinite; }
-        @keyframes dots { 0%, 20% { content: ' .'; } 40% { content: ' ..'; } 60% { content: ' ...'; } 80%, 100% { content: ''; } }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        
+        /* 라이트 모드 대응 (필요시) */
+        body.light-mode { background-color: #fff !important; color: #000 !important; }
+        body.light-mode .glass-card { background: rgba(0, 0, 0, 0.03); border: 1px solid rgba(0, 0, 0, 0.1); }
+        body.light-mode input { background: rgba(0, 0, 0, 0.05); border: 1px solid rgba(0, 0, 0, 0.1); color: #000; }
+        body.light-mode .buy-btn { background: #000 !important; color: #fff !important; }
     </style>
 </head>
 <body>
-    <div class="max-w-md w-full p-6" id="content-area">
+    <div class="max-w-md w-full p-6">
         <div class="glass-card p-8 rounded-[32px]">
             <div class="text-center mb-8">
-                <div class="w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-white/5">
-                    <i class="fa-solid fa-spinner fa-spin text-xl text-blue-400"></i>
+                <h2 class="text-2xl font-bold mb-2">포인트 충전</h2>
+                <p class="text-gray-500 text-sm">입금 정보를 정확하게 입력해 주세요.</p>
+            </div>
+
+            <form action="/change/api" method="POST" class="space-y-5">
+                <div>
+                    <label class="text-[11px] text-gray-400 ml-2 mb-1.5 block font-bold tracking-tight">입금자 성함</label>
+                    <input type="text" name="depositor" placeholder="실제 입금하실 성함" required
+                        class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3.5 text-sm focus:outline-none focus:border-white/30 transition">
                 </div>
-                <h2 class="text-2xl font-bold mb-1">입금 대기 중</h2>
-                <p class="text-gray-500 text-xs loading-dots">시스템이 입금을 자동으로 확인하고 있습니다</p>
-            </div>
 
-            <div class="space-y-4 bg-white/[0.02] p-6 rounded-2xl border border-white/5 mb-6">
-                <div class="flex justify-between items-center"><span class="text-[11px] text-gray-500 font-bold">은행명</span><span class="text-sm font-semibold">{{ bank.bank }}</span></div>
-                <div class="flex justify-between items-center"><span class="text-[11px] text-gray-500 font-bold">계좌번호</span><span class="text-sm font-semibold text-blue-400">{{ bank.account }}</span></div>
-                <div class="flex justify-between items-center"><span class="text-[11px] text-gray-500 font-bold">예금주</span><span class="text-sm font-semibold">{{ bank.owner }}</span></div>
-                <div class="pt-4 border-t border-white/5 flex justify-between items-center"><span class="text-[11px] text-gray-500 font-bold">입금액</span><span class="text-lg font-bold text-white">{{ amount }}₩</span></div>
-            </div>
+                <div>
+                    <label class="text-[11px] text-gray-400 ml-2 mb-1.5 block font-bold tracking-tight">충전 신청 금액</label>
+                    <input type="number" name="amount" placeholder="금액을 숫자로만 입력 (예: 10000)" required
+                        class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3.5 text-sm focus:outline-none focus:border-white/30 transition">
+                </div>
 
-            <div class="text-[10px] text-gray-500 leading-relaxed space-y-1 bg-white/5 p-4 rounded-xl">
-                <p>• 반드시 입력하신 <span class="text-white font-bold">{{ name }}</span> 성함으로 입금해주세요.</p>
-                <p>• 5분 이내에 입금이 확인되지 않으면 신청이 자동 취소됩니다.</p>
-                <p>• 타인 명의 입금 시 확인이 늦어질 수 있습니다.</p>
+                <button type="submit" class="w-full bg-white text-black font-bold py-4 rounded-xl mt-4 hover:opacity-90 transition shadow-lg text-sm">
+                    충전 진행하기
+                </button>
+            </form>
+
+            <div class="mt-8 pt-6 border-t border-white/5">
+                <div class="bg-white/5 p-4 rounded-2xl">
+                    <h4 class="text-[11px] font-bold text-gray-400 mb-2">충전 전 주의사항</h4>
+                    <ul class="text-[10px] text-gray-500 space-y-1.5 leading-relaxed">
+                        <li>• 신청하신 금액과 실제 입금액이 일치해야 자동 승인됩니다.</li>
+                        <li>• 입금 확인은 평균 1~3분 정도 소요됩니다.</li>
+                        <li>• 5분이 지나도 충전이 안 될 경우 고객센터로 문의하세요.</li>
+                    </ul>
+                </div>
             </div>
+            
+            <button onclick="location.href='/'" class="w-full text-gray-500 text-xs mt-6 hover:text-white transition">취소하고 상점으로 돌아가기</button>
         </div>
     </div>
-
-    <script>
-        const name = "{{ name }}";
-        const amount = "{{ amount }}";
-        
-        async function checkStatus() {
-            try {
-                const response = await fetch(`/check_status/${name}/${amount}`);
-                const data = await response.json();
-                
-                if (data.status === "success") {
-                    document.getElementById('content-area').innerHTML = `
-                        <div class="glass-card p-8 rounded-[32px] text-center">
-                            <div class="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <i class="fa-solid fa-check text-2xl text-green-500"></i>
-                            </div>
-                            <h2 class="text-2xl font-bold mb-2">충전 완료</h2>
-                            <p class="text-gray-400 text-sm mb-6">포인트가 성공적으로 지급되었습니다.</p>
-                            <button onclick="location.href='/'" class="w-full bg-white text-black font-bold py-3.5 rounded-xl">상점으로 돌아가기</button>
-                        </div>
-                    `;
-                } else if (data.status === "expired") {
-                    alert("시간이 만료되어 취소되었습니다. 다시 신청해주세요.");
-                    location.href = "/change";
-                }
-            } catch (e) { console.error("확인 중 오류 발생"); }
-        }
-
-        // 3초마다 상태 체크
-        setInterval(checkStatus, 3000);
-    </script>
 </body>
 </html>
