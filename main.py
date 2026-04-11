@@ -1,434 +1,151 @@
-import os, json, sqlite3, hashlib, secrets, requests
-from datetime import datetime, timezone, timedelta
-from functools import wraps
-from flask import Flask, request, jsonify, session, send_from_directory, redirect
-from flask_cors import CORS
+import os
+import aiohttp
+import discord
+from discord import app_commands
+from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = Flask(__name__)
-app.secret_key                 = os.environ["SECRET_KEY"]
-app.permanent_session_lifetime = timedelta(days=7)
-CORS(app, supports_credentials=True)
-
-DISCORD_CLIENT_ID     = os.environ["DISCORD_CLIENT_ID"]
+DISCORD_TOKEN         = os.environ["DISCORD_TOKEN"]
 DISCORD_CLIENT_SECRET = os.environ["DISCORD_CLIENT_SECRET"]
-DISCORD_REDIRECT_URI  = os.environ.get("DISCORD_REDIRECT_URI", "http://localhost:5000/auth/discord/callback")
-DISCORD_WEBHOOK_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
+SERVER_URL            = os.environ.get("SERVER_URL", "http://localhost:5000")
+GUILD_ID              = os.environ.get("ADMIN_GUILD_ID")
 
-DB_PATH   = "sailormarket.db"
-JSON_PATH = "user_id_pw.json"
+intents = discord.Intents.default()
+bot     = commands.Bot(command_prefix="!", intents=intents)
+tree    = bot.tree
 
-# ─────────────────────────────────────────────
-# DB
-# ─────────────────────────────────────────────
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                email          TEXT,
-                password       TEXT,
-                discord_id     TEXT,
-                discord_name   TEXT,
-                discord_avatar TEXT,
-                ip             TEXT,
-                is_admin       INTEGER DEFAULT 0,
-                created_at     TEXT DEFAULT (datetime('now'))
-            )
-        """)
-        conn.commit()
-        # 마이그레이션
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
-        for col, sql in {
-            "discord_id":     "ALTER TABLE users ADD COLUMN discord_id TEXT",
-            "discord_name":   "ALTER TABLE users ADD COLUMN discord_name TEXT",
-            "discord_avatar": "ALTER TABLE users ADD COLUMN discord_avatar TEXT",
-            "ip":             "ALTER TABLE users ADD COLUMN ip TEXT",
-            "is_admin":       "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
-        }.items():
-            if col not in cols:
-                conn.execute(sql)
-        conn.commit()
-    print("[DB] 초기화 완료")
 
 # ─────────────────────────────────────────────
-# 비밀번호
+# 관리자 계정 생성 모달
 # ─────────────────────────────────────────────
-def hash_pw(pw):
-    salt = secrets.token_hex(16)
-    return salt + ":" + hashlib.sha256((salt + pw).encode()).hexdigest()
+class AdminAccountModal(discord.ui.Modal, title="🔐 관리자 계정 생성"):
+    email = discord.ui.TextInput(
+        label="이메일",
+        placeholder="admin@example.com",
+        required=True,
+        max_length=100
+    )
+    password = discord.ui.TextInput(
+        label="비밀번호",
+        placeholder="8자 이상",
+        required=True,
+        min_length=8,
+        max_length=100
+    )
+    password_confirm = discord.ui.TextInput(
+        label="비밀번호 확인",
+        placeholder="비밀번호 재입력",
+        required=True,
+        min_length=8,
+        max_length=100
+    )
 
-def check_pw(pw, stored):
-    try:
-        salt, h = stored.split(":")
-        return hashlib.sha256((salt + pw).encode()).hexdigest() == h
-    except:
-        return False
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.password.value != self.password_confirm.value:
+            con = discord.ui.Container(accent_colour=discord.Colour(0xED4245))
+            con.add_item(discord.ui.TextDisplay(
+                "### ❌ 비밀번호 불일치\n"
+                "-# 비밀번호가 일치하지 않습니다. 다시 시도해주세요."
+            ))
+            await interaction.response.send_message(components=[con], ephemeral=True)
+            return
 
-# ─────────────────────────────────────────────
-# 세션
-# ─────────────────────────────────────────────
-def set_session(user):
-    session.permanent  = True
-    session["user_id"] = user["id"]
-    session["email"]   = user["email"] or user["discord_name"] or "유저"
-    session["is_admin"]= bool(user["is_admin"])
+        await interaction.response.defer(ephemeral=True)
 
-def login_required(f):
-    @wraps(f)
-    def d(*a, **k):
-        if "user_id" not in session:
-            return jsonify({"message": "로그인이 필요합니다."}), 401
-        return f(*a, **k)
-    return d
-
-def admin_required(f):
-    @wraps(f)
-    def d(*a, **k):
-        if "user_id" not in session:
-            return jsonify({"message": "로그인이 필요합니다."}), 401
-        if not session.get("is_admin"):
-            return jsonify({"message": "관리자 권한이 필요합니다."}), 403
-        return f(*a, **k)
-    return d
-
-# ─────────────────────────────────────────────
-# IP 가져오기
-# ─────────────────────────────────────────────
-def get_ip():
-    return request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
-
-# ─────────────────────────────────────────────
-# 중복/다계정 체크
-# ─────────────────────────────────────────────
-def check_duplicate(email: str, ip: str):
-    """
-    중복 가입 방지:
-    1. 이메일 중복
-    2. 같은 IP로 이미 계정 있음 (다계정 방지)
-    """
-    with get_db() as conn:
-        # 이메일 중복
-        if email:
-            row = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
-            if row:
-                return "이미 가입된 이메일입니다."
-        # IP 다계정
-        if ip:
-            row = conn.execute("SELECT id FROM users WHERE ip = ?", (ip,)).fetchone()
-            if row:
-                return "이미 해당 네트워크에서 가입된 계정이 있습니다."
-    return None  # 통과
-
-# ─────────────────────────────────────────────
-# JSON 저장
-# ─────────────────────────────────────────────
-def save_to_json(email: str, pw_raw: str, method: str, discord_name: str = ""):
-    data = []
-    if os.path.exists(JSON_PATH):
         try:
-            with open(JSON_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except:
-            data = []
-
-    # 중복 스킵
-    if any(u.get("email") == email for u in data):
-        return
-
-    data.append({
-        "email":        email,
-        "password":     hash_pw(pw_raw) if pw_raw else "(Discord)",
-        "method":       method,
-        "discord_name": discord_name,
-        "created_at":   datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-    })
-    with open(JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-# ─────────────────────────────────────────────
-# 웹훅 알림 (Components V2 — flags:32)
-# ─────────────────────────────────────────────
-def send_webhook(email: str, method: str, discord_name: str = ""):
-    if not DISCORD_WEBHOOK_URL:
-        print("[웹훅] URL 미설정 — 알림 스킵")
-        return
-
-    now     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    account = discord_name if discord_name else email
-
-    payload = {
-        "flags": 32,
-        "components": [{
-            "type": 17,
-            "accent_color": 0x5865F2,
-            "components": [
-                {"type": 10, "content": "### 🎉 새 회원 가입\n-# SailorMarket"},
-                {"type": 14, "divider": True, "spacing": 1},
-                {"type": 10, "content": (
-                    f"-# **계정** : {account}\n"
-                    f"-# **이메일** : {email or '*(Discord 전용)*'}\n"
-                    f"-# **가입 방식** : {method}\n"
-                    f"-# **가입 시각** : {now}"
-                )},
-                {"type": 14, "divider": True, "spacing": 1},
-                {"type": 9, "components": [{
-                    "type": 2, "style": 5,
-                    "label": "관리자 대시보드",
-                    "url": "https://sailor-piece.shop/admin/dashboard"
-                }]}
-            ]
-        }]
-    }
-
-    try:
-        r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5, params={"wait": "true"})
-        print(f"[웹훅] {r.status_code}")
-        if not r.ok:
-            print(f"[웹훅] 오류: {r.text[:300]}")
-    except Exception as e:
-        print(f"[웹훅] 전송 실패: {e}")
-
-# ─────────────────────────────────────────────
-# 페이지
-# ─────────────────────────────────────────────
-@app.route("/")
-def index():
-    return send_from_directory(".", "login.html")
-
-@app.route("/dashboard")
-@login_required
-def dashboard():
-    return f"<h2>👋 {session['email']} 님!</h2><a href='/api/auth/logout'>로그아웃</a>"
-
-@app.route("/admin/dashboard")
-@admin_required
-def admin_dashboard():
-    return f"<h2>🔐 관리자 대시보드</h2><p>{session['email']}</p><a href='/api/auth/logout'>로그아웃</a>"
-
-# ─────────────────────────────────────────────
-# 이메일 회원가입
-# ─────────────────────────────────────────────
-@app.route("/api/auth/register", methods=["POST"])
-def api_register():
-    data     = request.get_json() or {}
-    email    = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-    ip       = get_ip()
-
-    if not email or not password:
-        return jsonify({"message": "이메일과 비밀번호를 입력하세요."}), 400
-    if len(password) < 8:
-        return jsonify({"message": "비밀번호는 8자 이상이어야 합니다."}), 400
-
-    # 중복 / 다계정 체크
-    err = check_duplicate(email, ip)
-    if err:
-        print(f"[가입 거절] {email} / IP:{ip} → {err}")
-        return jsonify({"message": err}), 409
-
-    try:
-        with get_db() as conn:
-            conn.execute(
-                "INSERT INTO users (email, password, ip) VALUES (?,?,?)",
-                (email, hash_pw(password), ip)
-            )
-            conn.commit()
-    except sqlite3.IntegrityError:
-        return jsonify({"message": "이미 가입된 이메일입니다."}), 409
-
-    save_to_json(email, password, "이메일")
-    send_webhook(email, "이메일 가입")
-    print(f"[가입 완료] {email} / IP:{ip}")
-    return jsonify({"message": "회원가입 완료"})
-
-# ─────────────────────────────────────────────
-# 이메일 로그인
-# ─────────────────────────────────────────────
-@app.route("/api/auth/login", methods=["POST"])
-def api_login():
-    data     = request.get_json() or {}
-    email    = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-
-    if not email or not password:
-        return jsonify({"message": "이메일과 비밀번호를 입력하세요."}), 400
-
-    with get_db() as conn:
-        user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-
-    if not user or not user["password"] or not check_pw(password, user["password"]):
-        print(f"[로그인 실패] {email}")
-        return jsonify({"message": "이메일 또는 비밀번호가 올바르지 않습니다."}), 401
-
-    set_session(user)
-    print(f"[로그인 성공] {email}")
-    return jsonify({"message": "로그인 성공", "is_admin": bool(user["is_admin"])})
-
-# ─────────────────────────────────────────────
-# 로그아웃 / 세션
-# ─────────────────────────────────────────────
-@app.route("/api/auth/logout")
-def api_logout():
-    session.clear()
-    return redirect("/")
-
-@app.route("/api/auth/me")
-@login_required
-def api_me():
-    return jsonify({"email": session["email"], "is_admin": session["is_admin"]})
-
-# ─────────────────────────────────────────────
-# Discord OAuth 콜백
-# ─────────────────────────────────────────────
-@app.route("/auth/discord/callback")
-def discord_callback():
-    code  = request.args.get("code")
-    error = request.args.get("error")
-    ip    = get_ip()
-
-    if error or not code:
-        return redirect("/?error=discord_cancelled")
-
-    # code → token
-    tr = requests.post(
-        "https://discord.com/api/oauth2/token",
-        data={
-            "client_id":     DISCORD_CLIENT_ID,
-            "client_secret": DISCORD_CLIENT_SECRET,
-            "grant_type":    "authorization_code",
-            "code":          code,
-            "redirect_uri":  DISCORD_REDIRECT_URI,
-        },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        timeout=10,
-    )
-    if not tr.ok:
-        print("[Discord] 토큰 실패:", tr.text)
-        return redirect("/?discord_error=토큰+교환+실패")
-
-    token = tr.json().get("access_token")
-
-    # token → 유저 정보
-    ur = requests.get(
-        "https://discord.com/api/users/@me",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=10,
-    )
-    if not ur.ok:
-        return redirect("/?discord_error=유저+정보+실패")
-
-    d          = ur.json()
-    discord_id = d["id"]
-    email      = d.get("email", "")
-    username   = d.get("global_name") or d.get("username", "")
-    avatar     = d.get("avatar", "")
-    is_new     = False
-
-    with get_db() as conn:
-        existing = conn.execute(
-            "SELECT * FROM users WHERE discord_id=?", (discord_id,)
-        ).fetchone()
-
-        if existing:
-            # 기존 유저 — 정보만 업데이트
-            conn.execute(
-                "UPDATE users SET discord_name=?, discord_avatar=? WHERE discord_id=?",
-                (username, avatar, discord_id)
-            )
-            conn.commit()
-            user = conn.execute(
-                "SELECT * FROM users WHERE discord_id=?", (discord_id,)
-            ).fetchone()
-            print(f"[Discord 로그인] {username}")
-
-        else:
-            # 신규 — 중복/다계정 체크
-            err = check_duplicate(email, ip)
-            if err:
-                print(f"[Discord 가입 거절] {username} / IP:{ip} → {err}")
-                return redirect(f"/?discord_error={requests.utils.quote(err)}")
-
-            is_new = True
-
-            # 같은 이메일 계정 있으면 연결
-            by_email = conn.execute(
-                "SELECT * FROM users WHERE email=?", (email,)
-            ).fetchone() if email else None
-
-            if by_email:
-                conn.execute(
-                    "UPDATE users SET discord_id=?, discord_name=?, discord_avatar=? WHERE email=?",
-                    (discord_id, username, avatar, email)
+            async with aiohttp.ClientSession() as sess:
+                resp = await sess.post(
+                    f"{SERVER_URL}/internal/create_admin",
+                    json={
+                        "email":    self.email.value.strip(),
+                        "password": self.password.value,
+                    },
+                    headers={"X-Discord-Client-Secret": DISCORD_CLIENT_SECRET},
+                    timeout=aiohttp.ClientTimeout(total=10),
                 )
-                conn.commit()
-                user   = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-                is_new = False
+                data = await resp.json()
+
+            if resp.status == 200:
+                con = discord.ui.Container(accent_colour=discord.Colour(0x57F287))
+                con.add_item(discord.ui.TextDisplay(
+                    "### ✅ 관리자 계정 생성 완료"
+                ))
+                con.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+                con.add_item(discord.ui.TextDisplay(
+                    f"-# - **이메일**: {self.email.value.strip()}\n"
+                    f"-# 웹사이트에서 관리자 대시보드에 접근할 수 있습니다."
+                ))
+                btn = discord.ui.Button(
+                    label="대시보드 바로가기",
+                    style=discord.ButtonStyle.link,
+                    url="https://sailor-piece.shop/admin/dashboard"
+                )
+                con.add_item(discord.ui.ActionRow(btn))
+                await interaction.followup.send(components=[con], ephemeral=True)
+
             else:
-                conn.execute(
-                    "INSERT INTO users (email, discord_id, discord_name, discord_avatar, ip) VALUES (?,?,?,?,?)",
-                    (email, discord_id, username, avatar, ip)
-                )
-                conn.commit()
-                user = conn.execute(
-                    "SELECT * FROM users WHERE discord_id=?", (discord_id,)
-                ).fetchone()
+                con = discord.ui.Container(accent_colour=discord.Colour(0xED4245))
+                con.add_item(discord.ui.TextDisplay(
+                    f"### ❌ 오류\n"
+                    f"-# {data.get('message', '알 수 없는 오류')}"
+                ))
+                await interaction.followup.send(components=[con], ephemeral=True)
 
-    if is_new:
-        save_to_json(email, "", "Discord", username)
-        send_webhook(email, "Discord 가입", username)
-        print(f"[Discord 가입 완료] {username} / IP:{ip}")
+        except aiohttp.ClientConnectorError:
+            con = discord.ui.Container(accent_colour=discord.Colour(0xED4245))
+            con.add_item(discord.ui.TextDisplay(
+                "### ❌ 서버 연결 실패\n"
+                "-# server.py 가 실행 중인지 확인하세요."
+            ))
+            await interaction.followup.send(components=[con], ephemeral=True)
 
-    set_session(user)
-    return redirect("/admin/dashboard" if user["is_admin"] else "/dashboard")
+        except Exception as e:
+            con = discord.ui.Container(accent_colour=discord.Colour(0xED4245))
+            con.add_item(discord.ui.TextDisplay(f"### ❌ 예외\n-# `{e}`"))
+            await interaction.followup.send(components=[con], ephemeral=True)
 
-# ─────────────────────────────────────────────
-# 봇 → 관리자 생성
-# ─────────────────────────────────────────────
-@app.route("/internal/create_admin", methods=["POST"])
-def create_admin():
-    if request.headers.get("X-Discord-Client-Secret") != DISCORD_CLIENT_SECRET:
-        return jsonify({"message": "인증 실패"}), 403
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        con = discord.ui.Container(accent_colour=discord.Colour(0xED4245))
+        con.add_item(discord.ui.TextDisplay(f"### ❌ 오류\n-# {error}"))
+        await interaction.response.send_message(components=[con], ephemeral=True)
 
-    data     = request.get_json() or {}
-    email    = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-
-    if not email or not password:
-        return jsonify({"message": "이메일과 비밀번호를 입력하세요."}), 400
-
-    try:
-        with get_db() as conn:
-            conn.execute(
-                "INSERT INTO users (email, password, is_admin) VALUES (?,?,1)",
-                (email, hash_pw(password))
-            )
-            conn.commit()
-        save_to_json(email, password, "관리자")
-        print(f"[관리자 생성] {email}")
-        return jsonify({"message": f"관리자 생성 완료: {email}"})
-    except sqlite3.IntegrityError:
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE users SET password=?, is_admin=1 WHERE email=?",
-                (hash_pw(password), email)
-            )
-            conn.commit()
-        print(f"[관리자 업데이트] {email}")
-        return jsonify({"message": f"관리자 권한 업데이트: {email}"})
 
 # ─────────────────────────────────────────────
-# 실행
+# 슬래시 명령어
 # ─────────────────────────────────────────────
+@tree.command(name="관리자_아이디", description="관리자 계정을 생성합니다 (서버 관리자 전용)")
+@app_commands.checks.has_permissions(administrator=True)
+async def cmd_admin_create(interaction: discord.Interaction):
+    await interaction.response.send_modal(AdminAccountModal())
+
+@cmd_admin_create.error
+async def cmd_error(interaction: discord.Interaction, error):
+    con = discord.ui.Container(accent_colour=discord.Colour(0xED4245))
+    if isinstance(error, app_commands.MissingPermissions):
+        con.add_item(discord.ui.TextDisplay(
+            "### ❌ 권한 없음\n-# 서버 관리자만 사용할 수 있습니다."
+        ))
+    else:
+        con.add_item(discord.ui.TextDisplay(f"### ❌ 오류\n-# {error}"))
+    await interaction.response.send_message(components=[con], ephemeral=True)
+
+
+# ─────────────────────────────────────────────
+# 봇 준비
+# ─────────────────────────────────────────────
+@bot.event
+async def on_ready():
+    print(f"[봇] {bot.user} 준비 완료")
+    if GUILD_ID:
+        guild = discord.Object(id=int(GUILD_ID))
+        tree.copy_global_to(guild=guild)
+        synced = await tree.sync(guild=guild)
+    else:
+        synced = await tree.sync()
+    print(f"[봇] 명령어 동기화: {len(synced)}개")
+
+
 if __name__ == "__main__":
-    init_db()
-    port = int(os.environ.get("PORT", 5000))
-    print(f"[서버] http://localhost:{port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    bot.run(DISCORD_TOKEN)
