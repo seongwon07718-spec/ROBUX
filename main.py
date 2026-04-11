@@ -15,7 +15,6 @@
         nav {
             background: rgba(255, 255, 255, 0.02);
             backdrop-filter: blur(15px);
-            -webkit-backdrop-filter: blur(15px);
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             padding: 0.8rem 1rem;
             display: flex;
@@ -32,42 +31,50 @@
         }
         body.light-mode .glass-card { background: rgba(0, 0, 0, 0.02); border: 1px solid rgba(0, 0, 0, 0.08); }
 
-        /* 제품 그리드 2열 고정 */
-        .product-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-        }
+        .product-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 
-        /* 하단 수치용 전용 유리 박스 */
+        /* 하단 수치 박스 */
         .bottom-stats-box {
             display: flex;
             justify-content: space-around;
-            align-items: center;
-            padding: 8px 4px;
-            margin-top: 10px;
-            border-radius: 12px;
+            padding: 6px 0;
+            margin-top: 8px;
+            border-radius: 10px;
             background: rgba(255, 255, 255, 0.02);
-            border: 1px solid rgba(255, 255, 255, 0.04);
         }
-
         .stat-unit { text-align: center; }
-        .stat-title { font-size: 9px; color: #777; display: block; margin-bottom: 1px; }
-        .stat-num { font-size: 10px; font-weight: 700; color: #ddd; }
-        body.light-mode .stat-num { color: #333; }
+        .stat-title { font-size: 8px; color: #666; display: block; }
+        .stat-num { font-size: 9px; font-weight: 700; color: #bbb; }
 
-        .hr-line {
-            height: 1px;
-            background: rgba(255, 255, 255, 0.08);
-            margin: 20px 0;
-            border: none;
+        /* 구매 영역: 버튼 + 재고 */
+        .action-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .stock-tag {
+            flex-shrink: 0;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            font-size: 10px;
+            color: #888;
+            text-align: center;
+            min-width: 55px;
         }
-        body.light-mode .hr-line { background: rgba(0, 0, 0, 0.08); }
+
+        .hr-line { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 20px 0; border: none; }
+
+        /* 이용약관 텍스트 */
+        .terms-box {
+            padding: 20px;
+            font-size: 11px;
+            line-height: 1.6;
+            color: #555;
+            border-radius: 16px;
+            margin-top: 20px;
+            background: rgba(255, 255, 255, 0.01);
+        }
 
         @media (max-width: 640px) {
-            .product-card { padding: 14px !important; border-radius: 22px !important; }
-            .product-name { font-size: 15px !important; }
-            .product-desc { display: none; }
+            .product-card { padding: 12px !important; border-radius: 20px !important; }
+            .product-name { font-size: 14px !important; }
         }
     </style>
 </head>
@@ -75,96 +82,83 @@
 
     <nav>
         <div class="flex items-center space-x-2">
-            <button onclick="alert('충전')" class="px-4 py-2 rounded-xl bg-white text-black font-bold text-sm">충전하기</button>
-            <button onclick="alert('정보')" class="px-4 py-2 rounded-xl glass-card text-white font-bold text-sm">내 정보</button>
-            <button onclick="toggleTheme()" class="p-2 text-gray-500"><i id="t-icon" class="fa-solid fa-moon"></i></button>
+            <button class="px-3 py-2 rounded-lg bg-white text-black font-bold text-xs">충전하기</button>
+            <button class="px-3 py-2 rounded-lg glass-card text-white font-bold text-xs">내 정보</button>
+            <button onclick="toggleTheme()" class="p-2 text-gray-500"><i id="t-icon" class="fa-solid fa-moon text-sm"></i></button>
         </div>
     </nav>
 
-    <main class="max-w-4xl mx-auto p-5">
+    <main class="max-w-4xl mx-auto p-4">
         <div class="py-4">
-            <h1 class="text-3xl font-bold mb-1">구매하기</h1>
-            <p class="text-gray-500 text-sm">아래 제품을 선택하여 구매하세요.</p>
+            <h1 class="text-2xl font-bold mb-1">구매하기</h1>
+            <p class="text-gray-500 text-xs">아래 제품을 선택하여 구매하세요.</p>
         </div>
 
         <hr class="hr-line">
 
         <div class="product-grid">
-            
-            <div class="glass-card product-card p-6 rounded-[28px] flex flex-col">
-                <div class="w-full aspect-square bg-white/5 rounded-2xl flex items-center justify-center mb-4">
-                    <i class="fa-solid fa-robot text-4xl text-gray-600"></i>
+            <div class="glass-card product-card p-5 rounded-[24px] flex flex-col">
+                <div class="w-full aspect-square bg-white/5 rounded-xl flex items-center justify-center mb-3">
+                    <i class="fa-solid fa-robot text-3xl text-gray-600"></i>
                 </div>
                 
-                <h3 class="product-name text-lg font-bold truncate">자판기 봇</h3>
-                <p class="product-desc text-xs text-gray-500 mt-1 mb-3">자동 판매 시스템</p>
+                <h3 class="product-name text-base font-bold truncate">자판기 봇</h3>
+                <div class="text-sm font-medium text-gray-400 mt-1 mb-3">30,000₩</div>
 
                 <div class="mt-auto">
-                    <div class="text-xl font-bold mb-3">30,000₩</div>
-                    <button class="w-full bg-white text-black py-2.5 rounded-xl font-bold text-sm mb-1">구매</button>
+                    <div class="action-row">
+                        <button class="flex-1 bg-white text-black py-2 rounded-lg font-bold text-xs">구매</button>
+                        <div class="stock-tag">재고 12개</div>
+                    </div>
                     
                     <div class="bottom-stats-box">
-                        <div class="stat-unit">
-                            <span class="stat-title">평점</span>
-                            <span class="stat-num">4.9</span>
-                        </div>
-                        <div class="stat-unit">
-                            <span class="stat-title">만족도</span>
-                            <span class="stat-num">99%</span>
-                        </div>
-                        <div class="stat-unit">
-                            <span class="stat-title">지급</span>
-                            <span class="stat-num">즉시</span>
-                        </div>
+                        <div class="stat-unit"><span class="stat-title">평점</span><span class="stat-num">4.9</span></div>
+                        <div class="stat-unit"><span class="stat-title">만족도</span><span class="stat-num">99%</span></div>
+                        <div class="stat-unit"><span class="stat-title">지급</span><span class="stat-num">즉시</span></div>
                     </div>
                 </div>
             </div>
 
-            <div class="glass-card product-card p-6 rounded-[28px] flex flex-col">
-                <div class="w-full aspect-square bg-white/5 rounded-2xl flex items-center justify-center mb-4">
-                    <i class="fa-solid fa-bolt text-4xl text-gray-600"></i>
+            <div class="glass-card product-card p-5 rounded-[24px] flex flex-col">
+                <div class="w-full aspect-square bg-white/5 rounded-xl flex items-center justify-center mb-3">
+                    <i class="fa-solid fa-bolt text-3xl text-gray-600"></i>
                 </div>
                 
-                <h3 class="product-name text-lg font-bold truncate">매크로</h3>
-                <p class="product-desc text-xs text-gray-500 mt-1 mb-3">고성능 자동화</p>
+                <h3 class="product-name text-base font-bold truncate">매크로</h3>
+                <div class="text-sm font-medium text-gray-400 mt-1 mb-3">10,000₩</div>
 
                 <div class="mt-auto">
-                    <div class="text-xl font-bold mb-3">10,000₩</div>
-                    <button class="w-full bg-white text-black py-2.5 rounded-xl font-bold text-sm mb-1">구매</button>
+                    <div class="action-row">
+                        <button class="flex-1 bg-white text-black py-2 rounded-lg font-bold text-xs">구매</button>
+                        <div class="stock-tag">재고 5개</div>
+                    </div>
                     
                     <div class="bottom-stats-box">
-                        <div class="stat-unit">
-                            <span class="stat-title">평점</span>
-                            <span class="stat-num">4.7</span>
-                        </div>
-                        <div class="stat-unit">
-                            <span class="stat-title">만족도</span>
-                            <span class="stat-num">97%</span>
-                        </div>
-                        <div class="stat-unit">
-                            <span class="stat-title">지급</span>
-                            <span class="stat-num">1분</span>
-                        </div>
+                        <div class="stat-unit"><span class="stat-title">평점</span><span class="stat-num">4.7</span></div>
+                        <div class="stat-unit"><span class="stat-title">만족도</span><span class="stat-num">97%</span></div>
+                        <div class="stat-unit"><span class="stat-title">지급</span><span class="stat-num">1분</span></div>
                     </div>
                 </div>
             </div>
-
         </div>
 
         <hr class="hr-line">
+
+        <div class="terms-box glass-card">
+            <h4 class="font-bold mb-2 text-gray-400">이용약관 및 주의사항</h4>
+            <p>1. 모든 제품은 구매 즉시 지급 시스템을 통해 전달됩니다.<br>
+            2. 디지털 상품 특성상 수령 후 단순 변심으로 인한 환불은 불가능합니다.<br>
+            3. 제품 결함 발생 시 고객센터를 통해 24시간 이내에 문의해 주시기 바랍니다.<br>
+            4. 타인에게 계정을 공유하거나 프로그램을 불법 수정할 경우 이용이 제한될 수 있습니다.</p>
+        </div>
     </main>
 
     <script>
         function toggleTheme() {
-            const b = document.body;
-            const i = document.getElementById('t-icon');
+            const b = document.body; const i = document.getElementById('t-icon');
             b.classList.toggle('light-mode');
             const isL = b.classList.contains('light-mode');
             i.className = isL ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
-            
-            const btn = document.querySelector('.glass-card.text-white, .glass-card.text-black');
-            if (isL) { btn.classList.replace('text-white', 'text-black'); }
-            else { btn.classList.replace('text-black', 'text-white'); }
         }
     </script>
 </body>
