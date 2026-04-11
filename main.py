@@ -11,26 +11,28 @@
         
         body { 
             font-family: 'Inter', sans-serif; 
-            /* 은은한 배경 그라데이션 */
-            background: radial-gradient(circle at top right, #1a1a1a, #000); 
+            background-color: #000; /* 기본 배경 검정 */
             color: #fff; 
-            overflow: hidden; 
+            transition: background-color 0.3s ease;
+            overflow: hidden;
         }
 
-        /* [유리 박스 핵심 스타일] */
+        /* 배경 전환용 클래스 */
+        body.alt-bg { background-color: #1a1a1a; }
+
         .glass-card {
-            background: rgba(255, 255, 255, 0.03); /* 매우 투명한 흰색 */
-            backdrop-filter: blur(15px); /* 배경 흐림 효과 */
-            -webkit-backdrop-filter: blur(15px);
-            border: 1px solid rgba(255, 255, 255, 0.1); /* 미세한 테두리 */
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
         }
 
         .input-field {
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 12px;
-            transition: all 0.2s ease;
+            transition: all 0.2s;
         }
         
         .input-field:focus {
@@ -50,77 +52,76 @@
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
 
-    <div onclick="toggleAuth()" class="absolute top-8 right-8 flex items-center space-x-3 cursor-pointer group z-10">
-        <span id="nav-text" class="text-sm font-medium text-gray-400 group-hover:text-white transition-colors">회원가입</span>
-        <div class="p-2 rounded-full bg-white/5 group-hover:bg-white/10 transition-colors">
-            <i id="nav-icon" class="fa-solid fa-moon text-lg text-gray-400 group-hover:text-white"></i>
-        </div>
+    <div class="absolute top-8 right-8 flex items-center space-x-6 z-10">
+        <button onclick="toggleAuth()" id="nav-text" class="text-sm font-semibold text-gray-400 hover:text-white transition-colors">
+            회원가입
+        </button>
+        
+        <button onclick="toggleBg()" class="p-2 rounded-full bg-white/5 hover:bg-white/10 transition-all active:scale-90">
+            <i id="theme-icon" class="fa-solid fa-moon text-lg text-gray-300"></i>
+        </button>
     </div>
 
-    <div class="w-full max-w-md glass-card p-8 md:p-10 rounded-[32px] fade-in relative overflow-hidden">
+    <div class="w-full max-w-md glass-card p-10 rounded-[32px] fade-in relative">
         
-        <div class="absolute -top-24 -left-24 w-48 h-48 bg-white/5 rounded-full blur-3xl"></div>
-
         <div id="login-section" class="space-y-8">
             <div class="text-left">
                 <h1 class="text-3xl font-bold mb-2">로그인 👋</h1>
-                <p class="text-gray-400 text-sm leading-relaxed">세일러 피스 서비스에 오신 것을 환영합니다.</p>
+                <p class="text-gray-400 text-sm">세일러 피스 자동 판매봇에 오신 것을 환영합니다.</p>
             </div>
 
             <form class="space-y-5" onsubmit="return false;">
                 <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 ml-1">아이디</label>
+                    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-tighter mb-2 ml-1">ID</label>
                     <input type="text" placeholder="아이디를 입력하세요" class="input-field w-full px-4 py-4 text-sm">
                 </div>
                 <div class="relative">
-                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 ml-1">비밀번호</label>
+                    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-tighter mb-2 ml-1">Password</label>
                     <input type="password" placeholder="비밀번호를 입력하세요" class="input-field w-full px-4 py-4 text-sm pr-12">
-                    <button type="button" class="absolute right-4 top-11 text-gray-500 hover:text-white transition">
+                    <button type="button" class="absolute right-4 top-11 text-gray-500 hover:text-white">
                         <i class="fa-regular fa-eye"></i>
                     </button>
                 </div>
-                <button class="w-full bg-white text-black font-bold py-4 rounded-2xl hover:bg-gray-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 mt-4 shadow-lg shadow-white/5">
-                    로그인 하기
+                <button class="w-full bg-white text-black font-bold py-4 rounded-2xl hover:bg-gray-200 transition-all mt-4">
+                    로그인
                 </button>
             </form>
 
-            <div class="pt-6 text-center">
-                <p class="text-sm text-gray-500">
-                    아직 계정이 없으신가요? 
-                    <button onclick="toggleAuth()" class="text-white font-bold hover:underline ml-1">회원가입</button>
-                </p>
+            <div class="pt-4 text-center">
+                <button onclick="toggleAuth()" class="text-sm text-gray-500 hover:text-white transition">
+                    아직 계정이 없으신가요? <span class="font-bold text-white underline underline-offset-4 ml-1">회원가입</span>
+                </button>
             </div>
         </div>
 
         <div id="signup-section" class="hidden space-y-8">
             <div class="text-left">
                 <h1 class="text-3xl font-bold mb-2">회원가입 👋</h1>
-                <p class="text-gray-400 text-sm leading-relaxed">정보를 입력하여 새 계정을 생성하세요.</p>
+                <p class="text-gray-400 text-sm">새로운 계정을 생성하여 시작하세요.</p>
             </div>
 
             <form class="space-y-5" onsubmit="return false;">
                 <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 ml-1">아이디 <span class="text-red-500">*</span></label>
-                    <input type="text" placeholder="사용할 아이디 입력" class="input-field w-full px-4 py-4 text-sm">
+                    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-tighter mb-2 ml-1">ID <span class="text-red-500">*</span></label>
+                    <input type="text" placeholder="아이디 입력" class="input-field w-full px-4 py-4 text-sm">
                 </div>
                 <div class="relative">
-                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 ml-1">비밀번호 <span class="text-red-500">*</span></label>
+                    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-tighter mb-2 ml-1">Password <span class="text-red-500">*</span></label>
                     <input type="password" placeholder="비밀번호 설정" class="input-field w-full px-4 py-4 text-sm">
                 </div>
                 <div class="relative">
-                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 ml-1">비밀번호 확인 <span class="text-red-500">*</span></label>
+                    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-tighter mb-2 ml-1">Confirm Password <span class="text-red-500">*</span></label>
                     <input type="password" placeholder="비밀번호 재입력" class="input-field w-full px-4 py-4 text-sm">
                 </div>
-                <button class="w-full bg-white text-black font-bold py-4 rounded-2xl hover:bg-gray-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 mt-4 shadow-lg shadow-white/5">
-                    계정 만들기
+                <button class="w-full bg-white text-black font-bold py-4 rounded-2xl hover:bg-gray-200 transition-all mt-4">
+                    가입 완료
                 </button>
             </form>
 
-            <div class="pt-6 text-center">
-                <p class="text-sm text-gray-500">
-                    이미 계정이 있으신가요? 
-                    <button onclick="toggleAuth()" class="text-white font-bold hover:underline ml-1">로그인</button>
-                </p>
+            <div class="pt-4 text-center">
+                <button onclick="toggleAuth()" class="text-sm text-gray-500 hover:text-white transition">
+                    이미 계정이 있으신가요? <span class="font-bold text-white underline underline-offset-4 ml-1">로그인</span>
+                </button>
             </div>
         </div>
     </div>
@@ -128,22 +129,33 @@
     <script>
         let isLoginView = true;
 
+        // 배경색 토글 함수
+        function toggleBg() {
+            const body = document.body;
+            const icon = document.getElementById('theme-icon');
+            body.classList.toggle('alt-bg');
+            
+            if (body.classList.contains('alt-bg')) {
+                icon.className = 'fa-solid fa-sun text-lg text-yellow-400';
+            } else {
+                icon.className = 'fa-solid fa-moon text-lg text-gray-300';
+            }
+        }
+
+        // 로그인/회원가입 전환 함수
         function toggleAuth() {
             const loginSec = document.getElementById('login-section');
             const signupSec = document.getElementById('signup-section');
             const navText = document.getElementById('nav-text');
-            const navIcon = document.getElementById('nav-icon');
 
             if (isLoginView) {
                 loginSec.classList.add('hidden');
                 signupSec.classList.remove('hidden');
-                navText.innerText = '로그인하러 가기';
-                navIcon.className = 'fa-solid fa-arrow-right-to-bracket text-lg';
+                navText.innerText = '로그인';
             } else {
                 signupSec.classList.add('hidden');
                 loginSec.classList.remove('hidden');
                 navText.innerText = '회원가입';
-                navIcon.className = 'fa-solid fa-moon text-lg';
             }
             isLoginView = !isLoginView;
         }
