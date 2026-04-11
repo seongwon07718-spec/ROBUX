@@ -1,165 +1,34 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>세일러 피스</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        
-        body { font-family: 'Inter', sans-serif; background-color: #000; color: #fff; margin: 0; min-height: 100vh; -webkit-font-smoothing: antialiased; transition: background-color 0.3s, color 0.3s; }
-        body.light-mode { background-color: #ffffff !important; color: #000000 !important; }
-        
-        nav { background: rgba(255, 255, 255, 0.02); backdrop-filter: blur(15px); border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding: 0.8rem 1rem; display: flex; justify-content: flex-end; position: sticky; top: 0; z-index: 100; }
-        body.light-mode nav { background: rgba(0, 0, 0, 0.03); border-bottom: 1px solid rgba(0, 0, 0, 0.1); }
+from flask import Flask, render_template, request, redirect, url_for
 
-        .glass-card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.06); }
-        body.light-mode .glass-card { background: rgba(0, 0, 0, 0.03); border: 1px solid rgba(0, 0, 0, 0.1); }
+app = Flask(__name__)
 
-        /* PC에서 너무 커지지 않도록 그리드 밸런스 조정 */
-        .product-grid { 
-            display: grid; 
-            grid-template-columns: repeat(2, 1fr); 
-            gap: 12px; 
-        }
-        @media (min-width: 1024px) {
-            .product-grid { grid-template-columns: repeat(4, 1fr); gap: 20px; } /* PC는 4열로 배치하여 크기 축소 */
-        }
+# 메인 상점 페이지
+@app.route('/')
+def index():
+    return render_template('main.html')
 
-        .review-container { height: 24px; overflow: hidden; position: relative; margin-top: 8px; }
-        .review-track { position: absolute; width: 100%; animation: slideUp 8s infinite; }
-        .review-item { height: 24px; font-size: 11px; color: #888; display: flex; align-items: center; gap: 6px; }
-        body.light-mode .review-item { color: #666; }
+# 1단계: 입금 정보 입력 페이지
+@app.route('/change')
+def change():
+    return render_template('change.html')
 
-        @keyframes slideUp {
-            0%, 20% { transform: translateY(0); }
-            25%, 45% { transform: translateY(-24px); }
-            50%, 70% { transform: translateY(-48px); }
-            75%, 95% { transform: translateY(-72px); }
-            100% { transform: translateY(0); }
-        }
+# 2단계: 계좌 정보 표시 API (POST로 데이터를 받음)
+@app.route('/change/api', methods=['POST'])
+def change_api():
+    depositor = request.form.get('depositor')
+    amount = request.form.get('amount')
+    
+    # 예금주와 계좌번호 설정
+    bank_info = {
+        "owner": "정성원",
+        "bank": "카카오뱅크",
+        "account": "3333-01-2345678"
+    }
+    
+    return render_template('change_api.html', 
+                           depositor=depositor, 
+                           amount=amount, 
+                           bank=bank_info)
 
-        .action-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-        .buy-btn { width: 35%; background: #fff; color: #000; padding: 8px 0; border-radius: 10px; font-weight: 700; font-size: 11px; text-align: center; transition: all 0.2s; }
-        body.light-mode .buy-btn { background: #000 !important; color: #fff !important; }
-        
-        .stock-tag { flex: 1; padding: 8px 0; border-radius: 10px; background: rgba(255, 255, 255, 0.05); font-size: 10px; color: #aaa; text-align: center; font-weight: 600; }
-        body.light-mode .stock-tag { background: rgba(0, 0, 0, 0.05); color: #555; }
-
-        .bottom-stats-box { display: flex; justify-content: space-around; padding: 6px 0; margin-top: 8px; border-radius: 10px; background: rgba(255, 255, 255, 0.02); }
-        body.light-mode .bottom-stats-box { background: rgba(0, 0, 0, 0.03); }
-        
-        .stat-unit { text-align: center; }
-        .stat-title { font-size: 8px; color: #666; display: block; }
-        .stat-num { font-size: 9px; font-weight: 700; color: #bbb; }
-        body.light-mode .stat-num { color: #333; }
-
-        .hr-line { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 16px 0; border: none; }
-        body.light-mode .hr-line { background: rgba(0, 0, 0, 0.1); }
-
-        .nav-btn-main { background: #fff; color: #000; }
-        body.light-mode .nav-btn-main { background: #000; color: #fff; }
-        
-        .nav-btn-sub { background: rgba(255, 255, 255, 0.03); color: #fff; }
-        body.light-mode .nav-btn-sub { background: rgba(0, 0, 0, 0.03); color: #000; border: 1px solid rgba(0, 0, 0, 0.1); }
-
-        .terms-box { padding: 18px; font-size: 10px; line-height: 1.6; color: #555; border-radius: 16px; margin-top: 20px; background: rgba(255, 255, 255, 0.01); }
-        body.light-mode .terms-box { background: rgba(0, 0, 0, 0.02); color: #777; }
-
-        @media (max-width: 640px) {
-            .product-card { padding: 12px !important; border-radius: 20px !important; }
-            .product-name { font-size: 14px !important; }
-        }
-    </style>
-</head>
-<body id="main-body">
-
-    <nav>
-        <div class="flex items-center space-x-2">
-            <button class="nav-btn-main px-3 py-1.5 rounded-lg font-bold text-[11px]">충전하기</button>
-            <button class="nav-btn-sub px-3 py-1.5 rounded-lg font-bold text-[11px]">내 정보</button>
-            <button onclick="toggleTheme()" class="p-2 text-gray-500 hover:text-white transition-colors">
-                <i id="t-icon" class="fa-solid fa-moon text-sm"></i>
-            </button>
-        </div>
-    </nav>
-
-    <main class="max-w-6xl mx-auto p-4"> <div class="py-2">
-            <h1 class="text-2xl font-bold mb-1">구매하기</h1>
-            <p class="text-gray-500 text-xs">아래 제품을 선택하여 구매하세요.</p>
-            
-            <div class="review-container">
-                <div class="review-track">
-                    <div class="review-item"><i class="fa-solid fa-circle-check text-green-500"></i> user***님이 자판기 봇을 구매했습니다.</div>
-                    <div class="review-item"><i class="fa-solid fa-comment-dots text-blue-400"></i> "지급 진짜 빠르네요 만족합니다!"</div>
-                    <div class="review-item"><i class="fa-solid fa-circle-check text-green-500"></i> kimm***님이 매크로를 구매했습니다.</div>
-                    <div class="review-item"><i class="fa-solid fa-comment-dots text-blue-400"></i> "디자인이 너무 예뻐요."</div>
-                </div>
-            </div>
-        </div>
-
-        <hr class="hr-line">
-
-        <div class="product-grid">
-            <div class="glass-card product-card p-4 rounded-[24px] flex flex-col">
-                <div class="w-full aspect-square bg-white/5 rounded-xl flex items-center justify-center mb-3">
-                    <i class="fa-solid fa-robot text-3xl text-gray-400"></i>
-                </div>
-                <h3 class="product-name text-sm font-bold truncate">자판기 봇</h3>
-                <div class="text-xs font-medium text-gray-500 mt-1 mb-3">30,000₩</div>
-
-                <div class="mt-auto">
-                    <div class="action-row">
-                        <button class="buy-btn">구매</button>
-                        <div class="stock-tag">재고 12개</div>
-                    </div>
-                    <div class="bottom-stats-box">
-                        <div class="stat-unit"><span class="stat-title">평점</span><span class="stat-num">4.9</span></div>
-                        <div class="stat-unit"><span class="stat-title">만족도</span><span class="stat-num">99%</span></div>
-                        <div class="stat-unit"><span class="stat-title">지급</span><span class="stat-num">즉시</span></div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="glass-card product-card p-4 rounded-[24px] flex flex-col">
-                <div class="w-full aspect-square bg-white/5 rounded-xl flex items-center justify-center mb-3">
-                    <i class="fa-solid fa-bolt text-3xl text-gray-400"></i>
-                </div>
-                <h3 class="product-name text-sm font-bold truncate">매크로</h3>
-                <div class="text-xs font-medium text-gray-500 mt-1 mb-3">10,000₩</div>
-
-                <div class="mt-auto">
-                    <div class="action-row">
-                        <button class="buy-btn">구매</button>
-                        <div class="stock-tag">재고 5개</div>
-                    </div>
-                    <div class="bottom-stats-box">
-                        <div class="stat-unit"><span class="stat-title">평점</span><span class="stat-num">4.7</span></div>
-                        <div class="stat-unit"><span class="stat-title">만족도</span><span class="stat-num">97%</span></div>
-                        <div class="stat-unit"><span class="stat-title">지급</span><span class="stat-num">1분</span></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <hr class="hr-line">
-
-        <div class="terms-box glass-card">
-            <h4 class="font-bold mb-1">주의사항</h4>
-            <p>모든 상품은 디지털 재화이며 발송 후 환불이 불가합니다.</p>
-        </div>
-    </main>
-
-    <script>
-        function toggleTheme() {
-            const b = document.getElementById('main-body');
-            const i = document.getElementById('t-icon');
-            b.classList.toggle('light-mode');
-            const isL = b.classList.contains('light-mode');
-            i.className = isL ? 'fa-solid fa-sun text-sm' : 'fa-solid fa-moon text-sm';
-        }
-    </script>
-</body>
-</html>
+if __name__ == '__main__':
+    app.run(debug=True)
