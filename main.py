@@ -1,804 +1,1211 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RobloxStore - 대시보드</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  *, *::before, *::after {
+    margin: 0; padding: 0; box-sizing: border-box;
+  }
 
   :root {
-    --bg: #000000;
-    --sidebar-bg: #000000;
-    --card-bg: #0d0d0d;
-    --card-border: #1e1e1e;
-    --text-primary: #ffffff;
-    --text-secondary: #777;
-    --text-muted: #444;
-    --accent: #ffffff;
-    --accent-hover: #e0e0e0;
-    --green: #4caf7d;
-    --yellow: #e8b84b;
-    --blue: #4a9eff;
-    --sidebar-width: 190px;
-    --header-height: 56px;
+    --bg: #000;
+    --surface: #0a0a0a;
+    --surface2: #111;
+    --border: #1e1e1e;
+    --border2: #2a2a2a;
+    --text: #fff;
+    --muted: #666;
+    --muted2: #444;
+    --green: #3ecf7a;
+    --red: #ff4d4d;
+    --nav-h: 54px;
+    --font: 'DM Sans', sans-serif;
+    --mono: 'DM Mono', monospace;
   }
 
   body {
     background: var(--bg);
-    color: var(--text-primary);
-    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--text);
+    font-family: var(--font);
     font-size: 14px;
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
   }
 
-  /* HEADER */
-  header {
-    height: var(--header-height);
-    background: #000;
-    border-bottom: 1px solid #1a1a1a;
+  nav {
+    height: var(--nav-h);
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 20px;
-    position: fixed;
-    top: 0; left: 0; right: 0;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
     z-index: 100;
+    gap: 16px;
   }
 
-  .logo {
+  .nav-left {
     display: flex;
     align-items: center;
-    gap: 10px;
-    font-weight: 700;
+    gap: 28px;
+  }
+
+  .brand {
     font-size: 15px;
-    letter-spacing: -0.3px;
+    font-weight: 700;
+    letter-spacing: -0.4px;
+    white-space: nowrap;
+    color: var(--text);
   }
 
-  .logo-icon {
-    width: 30px; height: 30px;
-    background: #ffffff;
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
 
-  .logo-icon svg { width: 16px; height: 16px; fill: none; stroke: #000; stroke-width: 2; }
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    text-decoration: none;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
 
-  .header-right {
+  .nav-link:hover {
+    color: var(--text);
+    background: var(--surface2);
+  }
+
+  .nav-link.active {
+    color: var(--text);
+    border-bottom: 2px solid var(--text);
+    border-radius: 0;
+    padding-bottom: 4px;
+  }
+
+  .nav-link svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+
+  .nav-right {
     display: flex;
     align-items: center;
     gap: 10px;
   }
 
-  .header-btn {
-    width: 32px; height: 32px;
-    background: #0d0d0d;
-    border: 1px solid #1e1e1e;
-    border-radius: 7px;
-    display: flex; align-items: center; justify-content: center;
+  .nav-pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
     cursor: pointer;
-    color: var(--text-secondary);
-    transition: all 0.15s;
+    white-space: nowrap;
+    transition: background 0.15s;
   }
 
-  .header-btn:hover { background: #1a1a1a; color: var(--text-primary); }
+  .nav-pill:hover {
+    background: var(--surface2);
+  }
 
-  .status-dot {
-    width: 8px; height: 8px;
+  .nav-pill .dot {
+    width: 7px;
+    height: 7px;
     background: var(--green);
     border-radius: 50%;
-    box-shadow: 0 0 6px var(--green);
-  }
-
-  /* LAYOUT */
-  .layout {
-    display: flex;
-    margin-top: var(--header-height);
-    min-height: calc(100vh - var(--header-height));
-  }
-
-  /* SIDEBAR */
-  aside {
-    width: var(--sidebar-width);
-    background: var(--sidebar-bg);
-    border-right: 1px solid #1a1a1a;
-    position: fixed;
-    top: var(--header-height);
-    left: 0;
-    height: calc(100vh - var(--header-height));
-    display: flex;
-    flex-direction: column;
-    padding: 16px 0;
-    overflow-y: auto;
-    z-index: 50;
-    transition: transform 0.25s ease;
-  }
-
-  .nav-section-label {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    padding: 0 16px 6px;
-    margin-top: 12px;
-  }
-
-  .nav-section-label:first-child { margin-top: 0; }
-
-  .nav-item {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 8px 14px;
-    margin: 0 8px;
-    border-radius: 8px;
-    cursor: pointer;
-    color: var(--text-secondary);
-    font-size: 13px;
-    transition: all 0.15s;
-    text-decoration: none;
-    user-select: none;
-  }
-
-  .nav-item:hover { background: #111; color: var(--text-primary); }
-
-  .nav-item.active {
-    background: #141414;
-    color: var(--text-primary);
-    border: 1px solid #252525;
-  }
-
-  .nav-item svg { width: 15px; height: 15px; flex-shrink: 0; }
-
-  .nav-bottom {
-    margin-top: auto;
-    padding-top: 12px;
-    border-top: 1px solid #1a1a1a;
-  }
-
-  .nav-item.danger { color: #ff4444; }
-  .nav-item.danger:hover { background: rgba(255,68,68,0.08); }
-
-  /* MAIN */
-  main {
-    margin-left: var(--sidebar-width);
-    flex: 1;
-    padding: 28px;
-    min-width: 0;
-  }
-
-  .page-title {
-    font-size: 20px;
-    font-weight: 700;
-    letter-spacing: -0.3px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    margin-bottom: 4px;
-  }
-
-  .page-title svg { width: 18px; height: 18px; color: var(--text-secondary); }
-
-  .page-subtitle {
-    color: var(--text-secondary);
-    font-size: 13px;
-    margin-bottom: 24px;
-  }
-
-  /* STAT CARDS */
-  .stat-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-    margin-bottom: 20px;
-  }
-
-  .stat-card {
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 20px 22px;
-  }
-
-  .stat-label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-bottom: 10px;
-  }
-
-  .stat-label svg { width: 13px; height: 13px; }
-
-  .stat-value {
-    font-size: 32px;
-    font-weight: 700;
-    letter-spacing: -1px;
-    line-height: 1;
-    margin-bottom: 7px;
-  }
-
-  .stat-change {
-    font-size: 12px;
-    color: var(--green);
-    font-weight: 500;
-  }
-
-  /* CHART */
-  .chart-card {
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 20px 22px;
-    margin-bottom: 20px;
-  }
-
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 18px;
-  }
-
-  .card-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  .card-title svg { width: 14px; height: 14px; color: var(--text-secondary); }
-
-  .period-select {
-    background: #000;
-    border: 1px solid #222;
-    color: var(--text-primary);
-    font-size: 12px;
-    padding: 5px 10px;
-    border-radius: 7px;
-    cursor: pointer;
-    outline: none;
-  }
-
-  .chart-wrap {
-    position: relative;
-    height: 180px;
-  }
-
-  canvas { width: 100% !important; }
-
-  /* BOTTOM GRID */
-  .bottom-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-  }
-
-  /* RECENT EVENTS */
-  .event-list { display: flex; flex-direction: column; gap: 2px; }
-
-  .event-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 11px 14px;
-    border-radius: 9px;
-    transition: background 0.12s;
-    cursor: pointer;
-  }
-
-  .event-item:hover { background: #252525; }
-
-  .event-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
     flex-shrink: 0;
+    box-shadow: 0 0 5px var(--green);
   }
 
-  .event-dot.red { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
-  .event-dot.yellow { background: var(--yellow); box-shadow: 0 0 5px var(--yellow); }
-  .event-dot.green { background: var(--green); box-shadow: 0 0 5px var(--green); }
-  .event-dot.blue { background: var(--blue); box-shadow: 0 0 5px var(--blue); }
-
-  .event-content { flex: 1; min-width: 0; }
-
-  .event-title {
-    font-size: 13px;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .event-sub {
-    font-size: 11px;
-    color: var(--text-secondary);
-    margin-top: 1px;
-  }
-
-  .event-time {
-    font-size: 11px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  /* QUICK SETTINGS */
-  .quick-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-
-  .quick-btn {
-    background: #111;
-    border: 1px solid #1e1e1e;
-    border-radius: 10px;
-    padding: 14px 10px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 7px;
-    cursor: pointer;
-    font-size: 12px;
-    color: var(--text-primary);
-    transition: all 0.15s;
-  }
-
-  .quick-btn:hover { background: #1a1a1a; border-color: #2a2a2a; }
-  .quick-btn svg { width: 18px; height: 18px; color: var(--text-secondary); }
-
-  .toggle-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 4px;
-    border-bottom: 1px solid #141414;
-  }
-
-  .toggle-row:last-child { border-bottom: none; }
-
-  .toggle-label { font-size: 13px; font-weight: 600; }
-  .toggle-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
-
-  .toggle {
-    width: 40px; height: 22px;
-    border-radius: 11px;
-    border: none;
-    cursor: pointer;
-    position: relative;
-    transition: background 0.2s;
-    flex-shrink: 0;
-  }
-
-  .toggle.off { background: #2a2a2a; }
-  .toggle.on { background: #ffffff; }
-
-  .toggle::after {
-    content: '';
-    width: 16px; height: 16px;
-    border-radius: 50%;
-    position: absolute;
-    top: 3px;
-    transition: left 0.2s;
-  }
-
-  .toggle.off::after { left: 3px; background: #666; }
-  .toggle.on::after { left: 21px; background: #000; }
-
-  /* HAMBURGER */
   .hamburger {
     display: none;
     flex-direction: column;
     gap: 4px;
     cursor: pointer;
-    padding: 6px;
+    padding: 4px;
+    background: none;
+    border: none;
   }
 
   .hamburger span {
     display: block;
-    width: 20px; height: 2px;
-    background: var(--text-secondary);
+    width: 18px;
+    height: 2px;
+    background: var(--muted);
     border-radius: 2px;
-    transition: all 0.2s;
   }
 
-  .sidebar-overlay {
+  .page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 24px;
+  }
+
+  .welcome {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+
+  .welcome-text h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }
+
+  .welcome-text p {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .welcome-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .search-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: text;
+    min-width: 160px;
+  }
+
+  .search-box svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+
+  .btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font);
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn:hover {
+    background: var(--surface2);
+    border-color: var(--border2);
+  }
+
+  .btn svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .btn-primary {
+    background: var(--text);
+    color: #000;
+    border-color: var(--text);
+  }
+
+  .btn-primary:hover {
+    background: #e0e0e0;
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+
+  .stat-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .stat-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .stat-label svg { width: 12px; height: 12px; }
+  .stat-label .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-green { background: var(--green); }
+  .dot-white { background: #fff; }
+
+  .stat-badge {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--green);
+    font-family: var(--mono);
+  }
+  .stat-badge svg { width: 10px; height: 10px; }
+
+  .stat-value {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+
+  .stat-sub {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .chart-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 24px;
+  }
+
+  .chart-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .chart-head-left h3 {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 3px;
+  }
+
+  .chart-head-left p {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .chart-head-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .legend-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+
+  .chart-wrap {
+    position: relative;
+    height: 260px;
+    margin: 16px 0 0;
+  }
+
+  canvas {
+    display: block;
+  }
+
+  .chart-tooltip {
+    position: absolute;
+    background: #fff;
+    color: #000;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 6px;
+    pointer-events: none;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s;
+    transform: translate(-50%, -100%);
+    margin-top: -8px;
+    z-index: 10;
+    font-family: var(--mono);
+  }
+
+  .chart-tooltip.visible {
+    opacity: 1;
+  }
+
+  .deals-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .deal-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .deal-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .deal-card-title {
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .deal-card-title span {
+    font-weight: 400;
+    color: var(--muted);
+    margin-left: 5px;
+    font-size: 13px;
+  }
+
+  .deal-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .deal-table th {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 8px 20px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .deal-table td {
+    padding: 11px 20px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+
+  .deal-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .deal-table tr:hover td {
+    background: #0d0d0d;
+  }
+
+  .user-cell {
+    display: flex;
+    align-items: center;
+    gap: -4px;
+  }
+
+  .avatar {
+    width: 24px;
+    height: 24px;
+    background: var(--surface2);
+    border: 2px solid var(--border2);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    margin-right: -6px;
+    position: relative;
+  }
+
+  .avatar:first-child {
+    z-index: 2;
+  }
+
+  .avatar:last-child {
+    margin-right: 8px;
+    z-index: 1;
+  }
+
+  .coin-badge {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: #0d0d0d;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--mono);
+  }
+
+  .coin-dot {
+    width: 6px;
+    height: 6px;
+    background: #fff;
+    border-radius: 50%;
+  }
+
+  .amount {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .actions-cell {
+    display: flex;
+    gap: 4px;
+  }
+
+  .action-dot {
+    width: 4px;
+    height: 4px;
+    background: var(--muted2);
+    border-radius: 50%;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .status-open {
+    background: rgba(255,255,255,0.07);
+    color: #fff;
+  }
+
+  .status-closed {
+    background: rgba(62,207,122,0.12);
+    color: var(--green);
+  }
+
+  .add-deal {
+    padding: 12px 20px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+
+  .add-deal a {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+  }
+
+  .add-deal a:hover {
+    text-decoration: underline;
+  }
+
+  .mobile-menu {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.6);
-    z-index: 40;
+    z-index: 200;
   }
 
-  /* MOBILE */
-  @media (max-width: 900px) {
-    :root { --sidebar-width: 0px; }
-
-    aside {
-      width: 200px;
-      transform: translateX(-100%);
-    }
-
-    aside.open { transform: translateX(0); }
-
-    .sidebar-overlay.show { display: block; }
-
-    main { margin-left: 0; padding: 20px 16px; }
-
-    .hamburger { display: flex; }
-
-    .stat-grid { grid-template-columns: repeat(2, 1fr); }
-
-    .bottom-grid { grid-template-columns: 1fr; }
-
-    .stat-value { font-size: 26px; }
+  .mobile-menu.open {
+    display: block;
   }
 
-  @media (max-width: 480px) {
-    .stat-grid { grid-template-columns: 1fr; }
-    main { padding: 16px 12px; }
-    .page-title { font-size: 17px; }
+  .mm-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+  }
+
+  .mm-panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 230px;
+    height: 100%;
+    background: #060606;
+    border-right: 1px solid var(--border);
+    padding: 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .mobile-menu.open .mm-panel {
+    transform: translateX(0);
+  }
+
+  .mm-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--muted);
+    text-decoration: none;
+    transition: all 0.12s;
+  }
+
+  .mm-link:hover,
+  .mm-link.active {
+    background: var(--surface2);
+    color: var(--text);
+  }
+
+  .mm-link svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  @media (max-width: 1100px) {
+      .stat-grid {
+          grid-template-columns: repeat(2, 1fr);
+      }
+  }
+
+  @media (max-width: 860px) {
+      .deals-grid {
+          grid-template-columns: 1fr;
+      }
+      .nav-links {
+          display: none;
+      }
+      .hamburger {
+          display: flex;
+      }
+      .search-box {
+          display: none;
+      }
+  }
+
+  @media (max-width: 600px) {
+      .page {
+          padding: 20px 14px;
+      }
+      nav {
+          padding: 0 16px;
+      }
+      .stat-grid {
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+      }
+      .stat-value {
+          font-size: 24px;
+      }
+      .welcome-actions {
+          width: 100%;
+      }
+      .welcome-text h1 {
+          font-size: 19px;
+      }
+      .deal-table th:nth-child(3),
+      .deal-table td:nth-child(3) {
+          display: none;
+      }
+  }
+  @media (max-width: 400px) {
+      .stat-grid {
+          grid-template-columns: 1fr;
+      }
   }
 </style>
 </head>
 <body>
 
-<!-- HEADER -->
-<header>
-  <div style="display:flex;align-items:center;gap:12px;">
-    <div class="hamburger" id="hamburger">
+<!-- NAV -->
+<nav>
+  <div class="nav-left">
+    <button class="hamburger" id="hamburger" aria-label="메뉴 열기">
       <span></span><span></span><span></span>
-    </div>
-    <div class="logo">
-      <div class="logo-icon">
-        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-      </div>
-      RobloxStore
+    </button>
+    <div class="brand"> {/* 브랜드명 그대로 유지 가능, 삭제 원하면 알려주세요 */}RobloxStore</div>
+    <div class="nav-links">
+      <a href="#" class="nav-link active" aria-current="page">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="7" height="7" />
+          <rect x="14" y="3" width="7" height="7" />
+          <rect x="14" y="14" width="7" height="7" />
+          <rect x="3" y="14" width="7" height="7" />
+        </svg>
+        대시보드
+      </a>
+      <a href="#" class="nav-link">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <path d="M16 10a4 4 0 01-8 0" />
+        </svg>
+        상품
+      </a>
+      <a href="#" class="nav-link">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+        주문
+      </a>
+      <a href="#" class="nav-link">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 8v4l3 3" />
+        </svg>
+        지원
+      </a>
     </div>
   </div>
-  <div class="header-right">
-    <div class="status-dot"></div>
-    <button class="header-btn" title="새로고침">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
-    </button>
-    <button class="header-btn" title="라이트 모드">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+  <div class="nav-right">
+    <div class="nav-pill" tabindex="0" role="button">
+      <div class="dot"></div>
+      관리자
+    </div>
+    <button class="btn btn-primary" type="button" style="padding:6px 14px;font-size:12px;">
+      <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+      상품 추가
     </button>
   </div>
-</header>
+</nav>
 
-<div class="sidebar-overlay" id="overlay"></div>
-
-<div class="layout">
-
-  <!-- SIDEBAR -->
-  <aside id="sidebar">
-    <div class="nav-section-label">메인</div>
-    <a class="nav-item active" href="#">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+<!-- MOBILE MENU -->
+<div class="mobile-menu" id="mobileMenu" aria-hidden="true">
+  <div class="mm-overlay" id="mmOverlay" tabindex="0"></div>
+  <div class="mm-panel">
+    <div style="font-size:15px;font-weight:700;padding:4px 12px 16px;border-bottom:1px solid var(--border);margin-bottom:8px;">RobloxStore</div>
+    <a href="#" class="mm-link active" aria-current="page">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="7" height="7" />
+        <rect x="14" y="3" width="7" height="7" />
+        <rect x="14" y="14" width="7" height="7" />
+        <rect x="3" y="14" width="7" height="7" />
+      </svg>
       대시보드
     </a>
-    <a class="nav-item" href="#">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+    <a href="#" class="mm-link">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+        <line x1="3" y1="6" x2="21" y2="6" />
+        <path d="M16 10a4 4 0 01-8 0" />
+      </svg>
       상품 관리
     </a>
-    <a class="nav-item" href="#">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+    <a href="#" class="mm-link">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <line x1="8" y1="6" x2="21" y2="6" />
+        <line x1="8" y1="12" x2="21" y2="12" />
+        <line x1="8" y1="18" x2="21" y2="18" />
+        <line x1="3" y1="6" x2="3.01" y2="6" />
+        <line x1="3" y1="12" x2="3.01" y2="12" />
+        <line x1="3" y1="18" x2="3.01" y2="18" />
+      </svg>
       주문 목록
     </a>
-    <a class="nav-item" href="#">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z"/><path d="M12 8v4l3 3"/></svg>
-      거래 내역
-    </a>
-
-    <div class="nav-section-label">관리</div>
-    <a class="nav-item" href="#">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+    <a href="#" class="mm-link">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+      </svg>
       구매자 관리
     </a>
-    <a class="nav-item" href="#">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 8h1a4 4 0 010 8h-1"/><path d="M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
-      쿠폰 관리
-    </a>
-
-    <div class="nav-section-label">로그</div>
-    <a class="nav-item" href="#">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+    <a href="#" class="mm-link">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
       판매 로그
     </a>
-
-    <div class="nav-bottom">
-      <a class="nav-item" href="#">
-        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg>
-        라이트 모드
-      </a>
-      <a class="nav-item danger" href="#">
-        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    <div style="margin-top:auto;padding-top:16px;border-top:1px solid var(--border);">
+      <a href="#" class="mm-link" style="color:#ff4d4d;">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+          <polyline points="16 17 21 12 16 7" />
+          <line x1="21" y1="12" x2="9" y2="12" />
+        </svg>
         로그아웃
       </a>
     </div>
-  </aside>
+  </div>
+</div>
 
-  <!-- MAIN CONTENT -->
-  <main>
-    <div class="page-title">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-      대시보드
+<!-- PAGE -->
+<div class="page">
+
+  <div class="welcome">
+    <div class="welcome-text">
+      <h1>안녕하세요, 관리자님</h1>
+      <p>현재 판매 현황 및 최근 거래 내역을 확인하세요</p>
     </div>
-    <p class="page-subtitle">RobloxStore 판매 현황 및 빠른 설정</p>
-
-    <!-- STAT CARDS -->
-    <div class="stat-grid">
-      <div class="stat-card">
-        <div class="stat-label">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          오늘 판매
-        </div>
-        <div class="stat-value">3,512</div>
-        <div class="stat-change">+24% 어제 대비</div>
+    <div class="welcome-actions">
+      <div class="search-box">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+        검색...
       </div>
-      <div class="stat-card">
-        <div class="stat-label">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          주간 판매
-        </div>
-        <div class="stat-value">18,740</div>
-        <div class="stat-change">+12% 지난 주 대비</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-          월간 판매
-        </div>
-        <div class="stat-value">74,320</div>
-        <div class="stat-change">+8% 지난 달 대비</div>
-      </div>
+      <button class="btn" type="button">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <line x1="16" y1="2" x2="16" y2="6" />
+          <line x1="8" y1="2" x2="8" y2="6" />
+          <line x1="3" y1="10" x2="21" y2="10" />
+        </svg>
+        최근 7일
+      </button>
     </div>
+  </div>
 
-    <!-- CHART -->
-    <div class="chart-card">
-      <div class="card-header">
-        <div class="card-title">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-          판매 추이
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-card-top">
+        <div class="stat-label"><span class="dot dot-green"></span> 완료된 판매</div>
+        <div class="stat-badge">
+          <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+          74.5%
         </div>
-        <select class="period-select">
-          <option>주</option>
-          <option>월</option>
-          <option>연</option>
-        </select>
       </div>
-      <div class="chart-wrap">
-        <canvas id="salesChart"></canvas>
-      </div>
+      <div class="stat-value">2,664</div>
+      <div class="stat-sub">총 판매 건수</div>
     </div>
-
-    <!-- BOTTOM -->
-    <div class="bottom-grid">
-      <!-- RECENT EVENTS -->
-      <div class="chart-card" style="margin-bottom:0;">
-        <div class="card-header">
-          <div class="card-title">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-            최근 이벤트
-          </div>
-        </div>
-        <div class="event-list">
-          <div class="event-item">
-            <div class="event-dot red"></div>
-            <div class="event-content">
-              <div class="event-title">신규 주문 — #sword-pack-001</div>
-              <div class="event-sub">Gaming Zone · user#4821</div>
-            </div>
-            <div class="event-time">방금</div>
-          </div>
-          <div class="event-item">
-            <div class="event-dot yellow"></div>
-            <div class="event-content">
-              <div class="event-title">결제 대기 — VIP 패스</div>
-              <div class="event-sub">Anime Hub · user#3392</div>
-            </div>
-            <div class="event-time">3분</div>
-          </div>
-          <div class="event-item">
-            <div class="event-dot green"></div>
-            <div class="event-content">
-              <div class="event-title">자동 배송 완료</div>
-              <div class="event-sub">Dev Community · 신규 구매자</div>
-            </div>
-            <div class="event-time">11분</div>
-          </div>
-          <div class="event-item">
-            <div class="event-dot red"></div>
-            <div class="event-content">
-              <div class="event-title">사기 의심 결제 감지</div>
-              <div class="event-sub">Anime Hub · fakepay.xyz</div>
-            </div>
-            <div class="event-time">28분</div>
-          </div>
-          <div class="event-item">
-            <div class="event-dot blue"></div>
-            <div class="event-content">
-              <div class="event-title">가격 정책 업데이트</div>
-              <div class="event-sub">할인율 변경 5% → 3%</div>
-            </div>
-            <div class="event-time">1시간</div>
-          </div>
+    <div class="stat-card">
+      <div class="stat-card-top">
+        <div class="stat-label"><span class="dot dot-white"></span> 총 판매 금액</div>
+        <div class="stat-badge">
+          <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+          74.5%
         </div>
       </div>
+      <div class="stat-value">₩14,899</div>
+      <div class="stat-sub">이번 주 누적</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-top">
+        <div class="stat-label"><span class="dot dot-white"></span> 평균 처리 시간</div>
+        <div class="stat-badge">
+          <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+          74.5%
+        </div>
+      </div>
+      <div class="stat-value">1.4<span style="font-size:16px;font-weight:400;color:var(--muted);margin-left:4px;">일</span></div>
+      <div class="stat-sub">평균 배송 일수</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-top">
+        <div class="stat-label"><span class="dot dot-green"></span> 진행 중</div>
+        <div class="stat-badge">
+          <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+          74.5%
+        </div>
+      </div>
+      <div class="stat-value">2,664</div>
+      <div class="stat-sub">처리 중인 주문</div>
+    </div>
+  </div>
 
-      <!-- QUICK SETTINGS -->
-      <div class="chart-card" style="margin-bottom:0;">
-        <div class="card-header">
-          <div class="card-title">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg>
-            빠른 설정
-          </div>
+  <div class="chart-section">
+    <div class="chart-head">
+      <div class="chart-head-left">
+        <h3>판매 완료 현황</h3>
+        <p>현재 판매 추이 및 세부 내역</p>
+      </div>
+      <div class="chart-head-right">
+        <div class="legend">
+          <div class="legend-item"><div class="legend-dot" style="background:#fff;"></div> 완료 판매</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#3ecf7a;"></div> 평균 처리</div>
         </div>
-
-        <div class="quick-grid">
-          <button class="quick-btn">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
-            상품 추가
-          </button>
-          <button class="quick-btn">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            주문 조회
-          </button>
-          <button class="quick-btn">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-            결제 관리
-          </button>
-          <button class="quick-btn">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
-            키워드 필터
-          </button>
-          <button class="quick-btn">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            사기 감지
-          </button>
-          <button class="quick-btn">
-            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-            구매자 인증
-          </button>
-        </div>
-
-        <div class="toggle-row">
-          <div>
-            <div class="toggle-label">판매 일시정지</div>
-            <div class="toggle-sub">즉시 판매 중단</div>
-          </div>
-          <button class="toggle off" onclick="this.classList.toggle('on');this.classList.toggle('off')"></button>
-        </div>
-        <div class="toggle-row">
-          <div>
-            <div class="toggle-label">주문 알림 DM</div>
-            <div class="toggle-sub">구매자에게 자동 DM 발송</div>
-          </div>
-          <button class="toggle on" onclick="this.classList.toggle('on');this.classList.toggle('off')"></button>
-        </div>
-        <div class="toggle-row">
-          <div>
-            <div class="toggle-label">관리자 알림</div>
-            <div class="toggle-sub">이벤트 발생 시 채널 공지</div>
-          </div>
-          <button class="toggle on" onclick="this.classList.toggle('on');this.classList.toggle('off')"></button>
-        </div>
+        <button class="btn" type="button">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="3" y="4" width="18" height="18" rx="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+          최근 7일
+        </button>
       </div>
     </div>
-  </main>
+    <div class="chart-wrap">
+      <canvas id="chart"></canvas>
+      <div id="tip" class="chart-tooltip"></div>
+    </div>
+  </div>
+
+  <div class="deals-grid">
+
+    <div class="deal-card">
+      <div class="deal-card-head">
+        <div class="deal-card-title">진행 중 주문 <span>(3)</span></div>
+        <button class="btn" style="padding:5px 10px;font-size:11px;" type="button">전체 보기</button>
+      </div>
+      <table class="deal-table" role="grid">
+        <thead>
+          <tr>
+            <th>구매자</th>
+            <th>상품</th>
+            <th>금액</th>
+            <th>상태</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <div class="user-cell">
+                <div class="avatar" aria-label="KJ 유저">KJ</div>
+                <div class="avatar" aria-label="MR 유저">MR</div>
+                <span style="margin-left:10px;font-size:12px;">user#4821</span>
+              </div>
+            </td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>소드팩</div></td>
+            <td><span class="amount">₩8,500</span></td>
+            <td><span class="status-badge status-open">진행</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="user-cell">
+                <div class="avatar" aria-label="YS 유저">YS</div>
+                <div class="avatar" aria-label="PK 유저">PK</div>
+                <span style="margin-left:10px;font-size:12px;">user#3392</span>
+              </div>
+            </td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>VIP 패스</div></td>
+            <td><span class="amount">₩15,000</span></td>
+            <td><span class="status-badge status-open">진행</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="user-cell">
+                <div class="avatar" aria-label="TH 유저">TH</div>
+                <div class="avatar" aria-label="LM 유저">LM</div>
+                <span style="margin-left:10px;font-size:12px;">user#7701</span>
+              </div>
+            </td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>코인팩 x10</div></td>
+            <td><span class="amount">₩5,200</span></td>
+            <td><span class="status-badge status-open">진행</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="add-deal">다른 상품 등록? <a href="#">여기를 클릭</a></div>
+    </div>
+
+    <div class="deal-card">
+      <div class="deal-card-head">
+        <div class="deal-card-title">완료 주문 <span>(10)</span></div>
+        <button class="btn" style="padding:5px 10px;font-size:11px;" type="button">전체 보기</button>
+      </div>
+      <table class="deal-table" role="grid">
+        <thead>
+          <tr>
+            <th>구매자</th>
+            <th>상품</th>
+            <th>금액</th>
+            <th>상태</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="user-cell"><div class="avatar" aria-label="AB 유저">AB</div><div class="avatar" aria-label="CD 유저">CD</div><span style="margin-left:10px;font-size:12px;">user#1012</span></div></td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>소드팩</div></td>
+            <td><span class="amount">₩8,500</span></td>
+            <td><span class="status-badge status-closed">완료</span></td>
+          </tr>
+          <tr>
+            <td><div class="user-cell"><div class="avatar" aria-label="EF 유저">EF</div><div class="avatar" aria-label="GH 유저">GH</div><span style="margin-left:10px;font-size:12px;">user#2234</span></div></td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>VIP 패스</div></td>
+            <td><span class="amount">₩15,000</span></td>
+            <td><span class="status-badge status-closed">완료</span></td>
+          </tr>
+          <tr>
+            <td><div class="user-cell"><div class="avatar" aria-label="IJ 유저">IJ</div><div class="avatar" aria-label="KL 유저">KL</div><span style="margin-left:10px;font-size:12px;">user#3358</span></div></td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>코인팩 x5</div></td>
+            <td><span class="amount">₩2,900</span></td>
+            <td><span class="status-badge status-closed">완료</span></td>
+          </tr>
+          <tr>
+            <td><div class="user-cell"><div class="avatar" aria-label="MN 유저">MN</div><div class="avatar" aria-label="OP 유저">OP</div><span style="margin-left:10px;font-size:12px;">user#4490</span></div></td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>스킨팩</div></td>
+            <td><span class="amount">₩11,200</span></td>
+            <td><span class="status-badge status-closed">완료</span></td>
+          </tr>
+          <tr>
+            <td><div class="user-cell"><div class="avatar" aria-label="QR 유저">QR</div><div class="avatar" aria-label="ST 유저">ST</div><span style="margin-left:10px;font-size:12px;">user#5512</span></div></td>
+            <td><div class="coin-badge"><div class="coin-dot"></div>소드팩</div></td>
+            <td><span class="amount">₩8,500</span></td>
+            <td><span class="status-badge status-closed">완료</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
 </div>
 
 <script>
-  // Sidebar toggle
-  const sidebar = document.getElementById('sidebar');
-  const overlay = document.getElementById('overlay');
   const hamburger = document.getElementById('hamburger');
+  const mobileMenu = document.getElementById('mobileMenu');
+  const mmOverlay = document.getElementById('mmOverlay');
 
   hamburger.addEventListener('click', () => {
-    sidebar.classList.toggle('open');
-    overlay.classList.toggle('show');
+    mobileMenu.classList.toggle('open');
+    mobileMenu.setAttribute('aria-hidden', mobileMenu.classList.contains('open') ? 'false' : 'true');
   });
 
-  overlay.addEventListener('click', () => {
-    sidebar.classList.remove('open');
-    overlay.classList.remove('show');
+  mmOverlay.addEventListener('click', () => {
+    mobileMenu.classList.remove('open');
+    mobileMenu.setAttribute('aria-hidden', 'true');
   });
 
-  // Chart
-  const canvas = document.getElementById('salesChart');
+  const canvas = document.getElementById('chart');
   const ctx = canvas.getContext('2d');
+  const tip = document.getElementById('tip');
 
-  function drawChart() {
-    const W = canvas.parentElement.clientWidth;
-    const H = 180;
-    canvas.width = W * devicePixelRatio;
-    canvas.height = H * devicePixelRatio;
-    canvas.style.width = W + 'px';
-    canvas.style.height = H + 'px';
-    ctx.scale(devicePixelRatio, devicePixelRatio);
+  const sales = [12, 18, 22, 45, 58, 72, 80];
+  const avg = [3, 5, 7, 12, 15, 18, 20];
+  const xlabels = ['2/5', '2/6', '2/7', '2/8', '2/9', '2/10', '2/11'];
+  const MINS = 0, MAXS = 90;
+  const H = 260;
+  const PAD = { l: 36, r: 16, t: 16, b: 36 };
 
-    const data = [420, 280, 520, 260, 680, 740, 490];
-    const labels = ['월', '화', '수', '목', '금', '토', '일'];
-    const pad = { l: 40, r: 20, t: 10, b: 30 };
-    const cW = W - pad.l - pad.r;
-    const cH = H - pad.t - pad.b;
-    const minV = 200, maxV = 800;
+  let CW = 0, PXs = [], PYs = [], PYa = [];
+  let activeIdx = -1, tipX = 0, tipTX = 0, rafId = null;
 
-    const x = (i) => pad.l + (i / (data.length - 1)) * cW;
-    const y = (v) => pad.t + cH - ((v - minV) / (maxV - minV)) * cH;
+  function buildPts() {
+    const cW = CW - PAD.l - PAD.r;
+    const cH = H - PAD.t - PAD.b;
+    PXs = sales.map((_, i) => PAD.l + (i / (sales.length - 1)) * cW);
+    PYs = sales.map(v => PAD.t + cH - ((v - MINS) / (MAXS - MINS)) * cH);
+    PYa = avg.map(v => PAD.t + cH - ((v - MINS) / (MAXS - MINS)) * cH);
+  }
 
-    // Grid lines
-    ctx.strokeStyle = '#161616';
-    ctx.lineWidth = 1;
-    [250, 350, 450, 550, 650, 750].forEach(v => {
-      ctx.beginPath();
-      ctx.moveTo(pad.l, y(v));
-      ctx.lineTo(W - pad.r, y(v));
-      ctx.stroke();
-    });
-
-    // Y labels
-    ctx.fillStyle = '#444';
-    ctx.font = '10px Segoe UI, sans-serif';
-    ctx.textAlign = 'right';
-    [250, 350, 450, 550, 650, 750].forEach(v => {
-      ctx.fillText(v, pad.l - 6, y(v) + 4);
-    });
-
-    // X labels
-    ctx.textAlign = 'center';
-    labels.forEach((l, i) => {
-      ctx.fillText(l, x(i), H - 6);
-    });
-
-    // Area fill
-    const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
-    grad.addColorStop(0, 'rgba(255,255,255,0.12)');
-    grad.addColorStop(1, 'rgba(255,255,255,0)');
+  function drawArea(pts, color) {
+    const cH = H - PAD.t - PAD.b;
+    const grad = ctx.createLinearGradient(0, PAD.t, 0, PAD.t + cH);
+    grad.addColorStop(0, color.replace('1)', '0.18)'));
+    grad.addColorStop(1, color.replace('1)', '0)'));
     ctx.beginPath();
-    ctx.moveTo(x(0), y(data[0]));
-    for (let i = 1; i < data.length; i++) {
-      const cx = (x(i - 1) + x(i)) / 2;
-      ctx.bezierCurveTo(cx, y(data[i - 1]), cx, y(data[i]), x(i), y(data[i]));
+    ctx.moveTo(PXs[0], pts[0]);
+    for (let i = 1; i < pts.length; i++) {
+      const mx = (PXs[i - 1] + PXs[i]) / 2;
+      ctx.bezierCurveTo(mx, pts[i - 1], mx, pts[i], PXs[i], pts[i]);
     }
-    ctx.lineTo(x(data.length - 1), pad.t + cH);
-    ctx.lineTo(x(0), pad.t + cH);
+    ctx.lineTo(PXs[pts.length - 1], PAD.t + cH);
+    ctx.lineTo(PXs[0], PAD.t + cH);
     ctx.closePath();
     ctx.fillStyle = grad;
     ctx.fill();
+  }
 
-    // Line
+  function drawLine(pts, color, w = 2) {
     ctx.beginPath();
-    ctx.moveTo(x(0), y(data[0]));
-    for (let i = 1; i < data.length; i++) {
-      const cx = (x(i - 1) + x(i)) / 2;
-      ctx.bezierCurveTo(cx, y(data[i - 1]), cx, y(data[i]), x(i), y(data[i]));
+    ctx.moveTo(PXs[0], pts[0]);
+    for (let i = 1; i < pts.length; i++) {
+      const mx = (PXs[i - 1] + PXs[i]) / 2;
+      ctx.bezierCurveTo(mx, pts[i - 1], mx, pts[i], PXs[i], pts[i]);
     }
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = w;
+    ctx.lineJoin = 'round';
     ctx.stroke();
+  }
 
-    // Dots
-    data.forEach((v, i) => {
+  function draw(hi = -1) {
+    const dpr = devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, CW, H);
+    const cH = H - PAD.t - PAD.b;
+    const font = "11px 'DM Sans', sans-serif";
+
+    ctx.strokeStyle = '#181818';
+    ctx.lineWidth = 1;
+    [0, 20, 40, 60, 80].forEach(v => {
+      const yy = PAD.t + cH - ((v - MINS) / (MAXS - MINS)) * cH;
       ctx.beginPath();
-      ctx.arc(x(i), y(v), 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2;
+      ctx.moveTo(PAD.l, yy);
+      ctx.lineTo(CW - PAD.r, yy);
       ctx.stroke();
+    });
+
+    ctx.font = font;
+    ctx.fillStyle = '#444';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    [0, 20, 40, 60, 80].forEach(v => {
+      const yy = PAD.t + cH - ((v - MINS) / (MAXS - MINS)) * cH;
+      ctx.fillText(v, PAD.l - 6, yy);
+    });
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#444';
+    PXs.forEach((px, i) => ctx.fillText(xlabels[i], px, H - 8));
+
+    if (hi >= 0) {
+      ctx.beginPath();
+      ctx.moveTo(PXs[hi], PAD.t);
+      ctx.lineTo(PXs[hi], PAD.t + cH);
+      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    drawArea(PYs, 'rgba(255,255,255,1)');
+    drawArea(PYa, 'rgba(62,207,122,1)');
+    drawLine(PYa, '#3ecf7a', 2);
+    drawLine(PYs, '#ffffff', 2.5);
+
+    [[PYs, '#fff'], [PYa, '#3ecf7a']].forEach(([pts, col]) => {
+      pts.forEach((py, i) => {
+        const a = i === hi;
+        ctx.beginPath();
+        ctx.arc(PXs[i], py, a ? 5 : 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = col;
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = a ? 2.5 : 1.5;
+        ctx.stroke();
+      });
     });
   }
 
-  drawChart();
-  window.addEventListener('resize', drawChart);
+  function resize() {
+    CW = canvas.parentElement.clientWidth;
+    const dpr = devicePixelRatio || 1;
+    canvas.width = CW * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = CW + 'px';
+    canvas.style.height = H + 'px';
+    buildPts();
+  }
+
+  function animTip() {
+    tipX += (tipTX - tipX) * 0.2;
+    tip.style.left = tipX + 'px';
+    if (Math.abs(tipTX - tipX) > 0.4) rafId = requestAnimationFrame(animTip);
+    else rafId = null;
+  }
+
+  function nearest(cx) {
+    const r = canvas.getBoundingClientRect();
+    const mx = (cx - r.left) / r.width * CW;
+    let bi = -1, bd = 9999;
+    PXs.forEach((px, i) => {
+      const d = Math.abs(mx - px);
+      if (d < bd) {
+        bd = d;
+        bi = i;
+      }
+    });
+    return bd < CW / sales.length ? bi : -1;
+  }
+
+  function showTip(idx) {
+    if (idx < 0) { hideTip(); return; }
+    activeIdx = idx;
+    const r = canvas.getBoundingClientRect();
+    const sx = r.width / CW, sy = r.height / H;
+    tipTX = PXs[idx] * sx;
+    const ty = PYs[idx] * sy;
+    if (!tip.classList.contains('visible')) { tipX = tipTX; tip.style.left = tipX + 'px'; }
+    tip.style.top = (ty - 8) + 'px';
+    tip.textContent = `${xlabels[idx]}  판매 ${sales[idx]}건 / 처리 ${avg[idx]}건`;
+    tip.classList.add('visible');
+    if (!rafId) rafId = requestAnimationFrame(animTip);
+    draw(idx);
+  }
+
+  function hideTip() {
+    activeIdx = -1;
+    tip.classList.remove('visible');
+    draw(-1);
+  }
+
+  canvas.addEventListener('mousemove', e => showTip(nearest(e.clientX)));
+  canvas.addEventListener('mouseleave', hideTip);
+  canvas.addEventListener('touchstart', e => { e.preventDefault(); showTip(nearest(e.touches[0].clientX)); }, { passive: false });
+  canvas.addEventListener('touchmove', e => { e.preventDefault(); showTip(nearest(e.touches[0].clientX)); }, { passive: false });
+  canvas.addEventListener('touchend', () => setTimeout(hideTip, 1800));
+
+  resize();
+  draw();
+  window.addEventListener('resize', () => { resize(); draw(activeIdx); });
 </script>
+
 </body>
 </html>
