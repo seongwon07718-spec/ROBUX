@@ -3,7 +3,7 @@ from discord import app_commands, ui
 
 TOKEN = ''
 
-class vending(ui.LayoutView):
+class VendingView(ui.LayoutView):
 
     def __init__(self, bot):
         super().__init__(timeout=None)
@@ -16,7 +16,7 @@ class vending(ui.LayoutView):
         con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         charge = ui.Button(label="충전", custom_id="charge", style=discord.ButtonStyle.gray)
-        charge.callback = self.change_callback
+        charge.callback = self.charge_callback  # change -> charge 오타 수정
 
         info = ui.Button(label="정보", custom_id="info", style=discord.ButtonStyle.gray)
         info.callback = self.info_callback
@@ -29,9 +29,9 @@ class vending(ui.LayoutView):
 
         con.add_item(ui.ActionRow(charge, info, shop, calc))
         self.add_item(con)
-        return con
-    
-    async def change_callback(self, interaction: discord.Interaction):
+        # return con 제거
+
+    async def charge_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message("충전 메뉴입니다.", ephemeral=True)
 
     async def info_callback(self, interaction: discord.Interaction):
@@ -43,6 +43,7 @@ class vending(ui.LayoutView):
     async def calc_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message("계산 페이지입니다.", ephemeral=True)
 
+
 class MyBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
@@ -51,13 +52,14 @@ class MyBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print(f"{self.user}")
+        print(f"Logged in as {self.user}")
+
 
 bot = MyBot()
 
 @bot.tree.command(name="자판기", description="자판기 메뉴를 불러옵니다")
-async def vending(it: discord.Interaction):
-    view = vending(bot)
-    await it.response.send_message(view=view)
+async def vending_command(it: discord.Interaction):  # 함수명 변경
+    view = VendingView(bot)
+    await it.response.send_message(view=view)  # LayoutView는 view= 사용
 
 bot.run(TOKEN)
