@@ -1,65 +1,152 @@
-import discord
-from discord import app_commands, ui
+import os
+import random
+import string
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
+from dotenv import load_dotenv
 
-TOKEN = ''
+load_dotenv()
 
-class VendingView(ui.LayoutView):
+app = FastAPI()
 
-    def __init__(self, bot):
-        super().__init__(timeout=None)
-        self.bot = bot
+# ── CORS 설정 (HTML 파일에서 API 호출 허용) ──
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-        con = ui.Container()
-        con.accent_color = 0xffffff
+# ── 인증코드 임시 저장 (메모리) ──
+# { email: { code: "123456", expires: datetime } }
+code_store: dict = {}
 
-        con.add_item(ui.TextDisplay("### 테스트"))
-        con.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-
-        charge = ui.Button(label="충전", custom_id="charge", style=discord.ButtonStyle.gray)
-        charge.callback = self.charge_callback  # change -> charge 오타 수정
-
-        info = ui.Button(label="정보", custom_id="info", style=discord.ButtonStyle.gray)
-        info.callback = self.info_callback
-
-        shop = ui.Button(label="구매", custom_id="buying", style=discord.ButtonStyle.gray)
-        shop.callback = self.shop_callback
-
-        calc = ui.Button(label="계산", custom_id="calc", style=discord.ButtonStyle.gray)
-        calc.callback = self.calc_callback
-
-        con.add_item(ui.ActionRow(charge, info, shop, calc))
-        self.add_item(con)
-        # return con 제거
-
-    async def charge_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("충전 메뉴입니다.", ephemeral=True)
-
-    async def info_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("정보 페이지입니다.", ephemeral=True)
-
-    async def shop_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("구매 창을 엽니다.", ephemeral=True)
-
-    async def calc_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("계산 페이지입니다.", ephemeral=True)
+# ── Gmail 설정 (.env에서 불러옴) ──
+GMAIL_USER = os.getenv("GMAIL_USER")      # your@gmail.com
+GMAIL_APP_PW = os.getenv("GMAIL_APP_PW")  # 앱 비밀번호 16자리
 
 
-class MyBot(discord.Client):
-    def __init__(self):
-        intents = discord.Intents.default()
-        super().__init__(intents=intents)
-        self.tree = app_commands.CommandTree(self)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 요청/응답 모델
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class SendCodeRequest(BaseModel):
+    email: EmailStr
 
-    async def setup_hook(self):
-        await self.tree.sync()
-        print(f"Logged in as {self.user}")
+class VerifyCodeRequest(BaseModel):
+    email: EmailStr
+    code: str
 
 
-bot = MyBot()
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 이메일 발송 함수
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def send_email(to_email: str, code: str):
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "[OTT 최상급] 이메일 인증 코드"
+    msg["From"] = GMAIL_USER
+    msg["To"] = to_email
 
-@bot.tree.command(name="자판기", description="자판기 메뉴를 불러옵니다")
-async def vending_command(it: discord.Interaction):  # 함수명 변경
-    view = VendingView(bot)
-    await it.response.send_message(view=view)  # LayoutView는 view= 사용
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Noto Sans KR',sans-serif;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:40px 20px;">
+        <tr>
+          <td align="center">
+            <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+              <!-- 헤더 -->
+              <tr>
+                <td style="background:#2563eb;padding:32px;text-align:center;">
+                  <p style="margin:0;font-size:22px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">OTT 최상급</p>
+                  <p style="margin:8px 0 0;font-size:13px;color:rgba(255,255,255,0.75);">프리미엄 구독 서비스</p>
+                </td>
+              </tr>
+              <!-- 본문 -->
+              <tr>
+                <td style="padding:36px 32px;">
+                  <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a;">이메일 인증 코드</p>
+                  <p style="margin:0 0 28px;font-size:14px;color:#64748b;line-height:1.6;">
+                    아래 6자리 인증 코드를 입력해주세요.<br>코드는 <strong>5분간</strong> 유효합니다.
+                  </p>
+                  <!-- 코드 박스 -->
+                  <div style="background:#f1f5f9;border-radius:14px;padding:24px;text-align:center;margin-bottom:28px;">
+                    <p style="margin:0;font-size:42px;font-weight:900;color:#2563eb;letter-spacing:12px;">{code}</p>
+                  </div>
+                  <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
+                    본인이 요청하지 않았다면 이 이메일을 무시해주세요.<br>
+                    인증 코드는 타인에게 공유하지 마세요.
+                  </p>
+                </td>
+              </tr>
+              <!-- 푸터 -->
+              <tr>
+                <td style="background:#f8fafc;padding:20px 32px;text-align:center;border-top:1px solid #e2e8f0;">
+                  <p style="margin:0;font-size:12px;color:#94a3b8;">© 2025 OTT 최상급. All rights reserved.</p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
 
-bot.run(TOKEN)
+    msg.attach(MIMEText(html_body, "html"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(GMAIL_USER, GMAIL_APP_PW)
+        server.sendmail(GMAIL_USER, to_email, msg.as_string())
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API 엔드포인트
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get("/")
+def root():
+    return {"status": "OTT 최상급 서버 정상 동작 중"}
+
+
+@app.post("/send-code")
+def send_code(req: SendCodeRequest):
+    """인증코드 생성 후 이메일 발송"""
+    # 6자리 숫자 코드 생성
+    code = "".join(random.choices(string.digits, k=6))
+
+    # 만료 시간 5분 설정
+    expires = datetime.now() + timedelta(minutes=5)
+    code_store[req.email] = {"code": code, "expires": expires}
+
+    try:
+        send_email(req.email, code)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"이메일 발송 실패: {str(e)}")
+
+    return {"message": "인증 코드가 발송되었습니다."}
+
+
+@app.post("/verify-code")
+def verify_code(req: VerifyCodeRequest):
+    """인증코드 검증"""
+    stored = code_store.get(req.email)
+
+    if not stored:
+        raise HTTPException(status_code=400, detail="인증 코드를 먼저 요청해주세요.")
+
+    if datetime.now() > stored["expires"]:
+        del code_store[req.email]
+        raise HTTPException(status_code=400, detail="인증 코드가 만료되었습니다. 다시 요청해주세요.")
+
+    if stored["code"] != req.code:
+        raise HTTPException(status_code=400, detail="인증 코드가 올바르지 않습니다.")
+
+    # 인증 성공 → 코드 삭제
+    del code_store[req.email]
+    return {"message": "인증 성공!", "email": req.email}
