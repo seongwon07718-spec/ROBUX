@@ -16,6 +16,17 @@ import uvicorn
 
 load_dotenv()
 
+GMAIL_USER = os.getenv("GMAIL_USER")
+GMAIL_APP_PW = os.getenv("GMAIL_APP_PW")
+
+# ━━━ 환경변수 체크 ━━━
+if not GMAIL_USER or not GMAIL_APP_PW:
+    print("=" * 50)
+    print("❌ 오류: .env 파일에 GMAIL_USER 또는 GMAIL_APP_PW가 없습니다!")
+    print("   .env 파일을 확인해주세요.")
+    print("=" * 50)
+    # 그래도 서버는 실행 (이메일만 안됨)
+
 app = FastAPI()
 
 app.add_middleware(
@@ -27,10 +38,6 @@ app.add_middleware(
 )
 
 code_store: dict = {}
-
-GMAIL_USER = os.getenv("GMAIL_USER")
-GMAIL_APP_PW = os.getenv("GMAIL_APP_PW")
-
 HTML_PATH = Path(__file__).parent / "login.html"
 
 
@@ -83,7 +90,6 @@ def send_email(to_email: str, code: str):
         server.sendmail(GMAIL_USER, to_email, msg.as_string())
 
 
-# ━━━ HTML 서빙 ━━━
 @app.get("/", response_class=HTMLResponse)
 def serve_html():
     if not HTML_PATH.exists():
@@ -91,7 +97,6 @@ def serve_html():
     return HTMLResponse(content=HTML_PATH.read_text(encoding="utf-8"))
 
 
-# ━━━ API ━━━
 @app.get("/health")
 def health():
     return {"status": "정상 동작 중"}
@@ -125,6 +130,5 @@ def verify_code(req: VerifyCodeRequest):
     return {"message": "인증 성공!", "email": req.email}
 
 
-# ━━━ python server.py 로 바로 실행 ━━━
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
