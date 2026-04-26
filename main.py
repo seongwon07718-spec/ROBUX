@@ -31,8 +31,7 @@ code_store: dict = {}
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PW = os.getenv("GMAIL_APP_PW")
 
-# server.py 와 같은 폴더의 ott_final.html 자동 인식
-HTML_PATH = Path(__file__).parent / "ott_final.html"
+HTML_PATH = Path(__file__).parent / "login.html"
 
 
 class SendCodeRequest(BaseModel):
@@ -88,7 +87,7 @@ def send_email(to_email: str, code: str):
 @app.get("/", response_class=HTMLResponse)
 def serve_html():
     if not HTML_PATH.exists():
-        raise HTTPException(status_code=404, detail=f"ott_final.html 파일을 찾을 수 없습니다. 경로: {HTML_PATH}")
+        raise HTTPException(status_code=404, detail=f"login.html 파일을 찾을 수 없습니다. 경로: {HTML_PATH}")
     return HTMLResponse(content=HTML_PATH.read_text(encoding="utf-8"))
 
 
