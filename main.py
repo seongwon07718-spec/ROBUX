@@ -12,6 +12,9 @@ async def on_ready():
 
 class PanelContainer(discord.ui.Container):
     text = discord.ui.TextDisplay("## 구매하기\n원하는 항목을 선택하세요")
+    image = discord.ui.MediaGallery(
+        discord.MediaGalleryItem(media="https://여기에이미지URL.png")
+    )
     sep = discord.ui.Separator()
     row = discord.ui.ActionRow()
 
@@ -39,3 +42,6 @@ class PanelLayout(discord.ui.LayoutView):
 @bot.tree.command(name="panel", description="구매 패널을 표시합니다")
 async def panel(interaction: discord.Interaction):
     await interaction.response.send_message(view=PanelLayout())
+
+
+bot.run("YOUR_BOT_TOKEN")
