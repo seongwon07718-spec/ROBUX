@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import time
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -30,6 +31,8 @@ class DepositModal(discord.ui.Modal, title="계좌이체 충전"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        expires_timestamp = int(time.time()) + (5 * 60)  # 현재시간 + 5분
+
         class BankContainer(discord.ui.Container):
             text = discord.ui.TextDisplay(
                 f"## 🏦 계좌 정보\n"
@@ -38,6 +41,7 @@ class DepositModal(discord.ui.Modal, title="계좌이체 충전"):
                 f"**은행명:** {BANK_NAME}\n"
                 f"**계좌번호:** {BANK_ACCOUNT}\n"
                 f"**예금주:** {BANK_OWNER}\n\n"
+                f"⏱️ 입금 마감: <t:{expires_timestamp}:R>\n\n"
                 f"입금 확인 후 자동으로 충전됩니다."
             )
 
