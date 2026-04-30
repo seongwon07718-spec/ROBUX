@@ -1,13 +1,14 @@
 class RegisterConfirmLayout(discord.ui.LayoutView):
-    """서버 등록 확인 - ActionRow 사용 버전"""
+    """서버 등록 확인 - ActionRow + 동적 callback 방식"""
     def __init__(self, key: str, days: int, expires: str, guild_name: str):
-        super().__init__(timeout=None)   # 타임아웃 없애기 (중요)
+        super().__init__(timeout=None)
         self.license_key = key
         self.days = days
         self.expires = expires
         self.guild_name = guild_name
 
-        self.container = discord.ui.Container(
+        # Container 생성
+        container = discord.ui.Container(
             discord.ui.TextDisplay(content="## 서버 등록 확인"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(
@@ -20,26 +21,31 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
                 )
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            # ActionRow 사용
-            discord.ui.ActionRow(
-                discord.ui.Button(
-                    label="진행", 
-                    style=discord.ButtonStyle.primary, 
-                    custom_id="reg_confirm"
-                ),
-                discord.ui.Button(
-                    label="취소", 
-                    style=discord.ButtonStyle.secondary, 
-                    custom_id="reg_cancel"
-                ),
-            ),
             accent_color=discord.Color.from_str("#5865F2"),
         )
-        self.add_item(self.container)
 
-    # ActionRow의 custom_id와 매칭되는 콜백 (LayoutView 방식)
-    @discord.ui.button(custom_id="reg_confirm")
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 진행 버튼 + callback 동적 연결
+        btn_confirm = discord.ui.Button(
+            label="진행", 
+            style=discord.ButtonStyle.primary
+        )
+        btn_confirm.callback = self.confirm_callback   # ← 동적 연결
+
+        # 취소 버튼 + callback 동적 연결
+        btn_cancel = discord.ui.Button(
+            label="취소", 
+            style=discord.ButtonStyle.secondary
+        )
+        btn_cancel.callback = self.cancel_callback     # ← 동적 연결
+
+        # ActionRow에 버튼 추가 후 Container에 넣기
+        action_row = discord.ui.ActionRow(btn_confirm, btn_cancel)
+        container.add_item(action_row)
+
+        self.add_item(container)
+
+    # ==================== 진행 버튼 콜백 ====================
+    async def confirm_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -65,6 +71,7 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
             conn.commit()
             conn.close()
 
+            # 서버 DB 등록
             db_path = init_guild_db(str(guild.id), guild.name)
             with sqlite3.connect(db_path) as guild_conn:
                 gc = guild_conn.cursor()
@@ -76,20 +83,21 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
             await interaction.edit_original_response(
                 view=SimpleLayout(
                     "## 등록 완료",
-                    f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n자판기 봇이 정상 등록되었습니다.",
+                    f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n자판기 봇이 정상적으로 등록되었습니다.",
                     discord.Color.green()
                 )
             )
 
         except Exception as e:
-            print(f"등록 진행 중 오류: {e}")
+            print(f"[등록 진행 오류] {e}")
             await interaction.edit_original_response(
                 view=SimpleLayout("## 오류 발생", "처리 중 문제가 발생했습니다.", discord.Color.red())
             )
 
-    @discord.ui.button(custom_id="reg_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    # ==================== 취소 버튼 콜백 ====================
+    async def cancel_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
         await interaction.edit_original_response(
             view=SimpleLayout(
                 "## 등록 취소",
@@ -97,10 +105,3 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
                 discord.Color.from_str("#99AAB5")
             )
         )
-
-@bot.event
-async def on_ready():
-    init_license_db()
-    bot.add_view(RegisterConfirmLayout("", 0, "", ""))   # Persistent View 등록
-    await bot.tree.sync()
-    print(f"{bot.user} 온라인")
