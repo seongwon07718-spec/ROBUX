@@ -13,7 +13,6 @@ TOKEN = ""
 ADMIN_IDS = [1454398431996018724]
 DB_DIR = "DB"
 LICENSE_DB = os.path.join(DB_DIR, "라이센스.db")
-# ──────────────────────────────────────────────────────
 
 os.makedirs(DB_DIR, exist_ok=True)
 
@@ -25,17 +24,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def init_license_db():
     conn = sqlite3.connect(LICENSE_DB)
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS licenses (
-            key TEXT PRIMARY KEY,
-            days INTEGER NOT NULL,
-            used INTEGER DEFAULT 0,
-            guild_id TEXT DEFAULT NULL,
-            guild_name TEXT DEFAULT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT DEFAULT NULL
-        )
-    """)
+    c.execute("""CREATE TABLE IF NOT EXISTS licenses (
+        key TEXT PRIMARY KEY, days INTEGER NOT NULL, used INTEGER DEFAULT 0,
+        guild_id TEXT, guild_name TEXT, created_at TEXT, expires_at TEXT)""")
     conn.commit()
     conn.close()
 
@@ -45,38 +36,23 @@ def init_guild_db(guild_id: str, guild_name: str):
     path = os.path.join(DB_DIR, f"{safe_name}.db")
     conn = sqlite3.connect(path)
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS info (
-            guild_id TEXT PRIMARY KEY,
-            guild_name TEXT,
-            license_key TEXT,
-            registered_at TEXT,
-            expires_at TEXT,
-            vending_title TEXT DEFAULT "VOUT 자판기",
-            vending_description TEXT DEFAULT "",
-            accent_color TEXT DEFAULT "#5865F2",
-            enabled_features TEXT DEFAULT "products buy charge info"
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            stock INTEGER NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
+    c.execute("""CREATE TABLE IF NOT EXISTS info (
+        guild_id TEXT PRIMARY KEY, guild_name TEXT, license_key TEXT,
+        registered_at TEXT, expires_at TEXT,
+        vending_title TEXT DEFAULT "VOUT 자판기",
+        vending_description TEXT DEFAULT "",
+        accent_color TEXT DEFAULT "#5865F2",
+        enabled_features TEXT DEFAULT "제품 구매 충전 정보")""")
+    c.execute("""CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER, 
+        stock INTEGER, content TEXT, created_at TEXT)""")
     conn.commit()
     conn.close()
     return path
 
 
-# ── 라이센스 키 생성 ────────────────────────────────────
 def generate_license_key() -> str:
-    def rand(n):
-        return "".join(random.choices(string.ascii_uppercase + string.digits, k=n))
+    def rand(n): return "".join(random.choices(string.ascii_uppercase + string.digits, k=n))
     return f"VOUT-{rand(6)}-{rand(4)}-{rand(4)}"
 
 
@@ -84,9 +60,7 @@ def is_key_duplicate(key: str) -> bool:
     conn = sqlite3.connect(LICENSE_DB)
     c = conn.cursor()
     c.execute("SELECT 1 FROM licenses WHERE key = ?", (key,))
-    result = c.fetchone()
-    conn.close()
-    return result is not None
+    return c.fetchone() is not None
 
 
 def create_unique_key() -> str:
@@ -100,10 +74,6 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
-# ══════════════════════════════════════════════════════
-# Simple Layout
-# ══════════════════════════════════════════════════════
-
 class SimpleLayout(discord.ui.LayoutView):
     def __init__(self, title: str, body: str, color: discord.Color):
         super().__init__()
@@ -116,128 +86,15 @@ class SimpleLayout(discord.ui.LayoutView):
         self.add_item(self.container)
 
 
-class RegisterConfirmLayout(discord.ui.LayoutView):
-    def __init__(self, key: str, days: int, expires: str, guild_name: str):
-        super().__init__(timeout=None)
-        self.license_key = key
-        self.days = days
-        self.expires = expires
-        self.guild_name = guild_name
-
-        container = discord.ui.Container(
-            discord.ui.TextDisplay(content="## 서버 등록 확인"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(
-                content=(
-                    f"> **라이센스:** `{key}`\n"
-                    f"> **서버:** {guild_name}\n"
-                    f"> **기간:** {days}일\n"
-                    f"> **만료일:** {expires}\n\n"
-                    "이 서버에 등록하시겠습니까?"
-                )
-            ),
-            accent_color=discord.Color.from_str("#5865F2"),
-        )
-
-        btn_confirm = discord.ui.Button(label="진행", style=discord.ButtonStyle.primary)
-        btn_confirm.callback = self.confirm_callback
-
-        btn_cancel = discord.ui.Button(label="취소", style=discord.ButtonStyle.secondary)
-        btn_cancel.callback = self.cancel_callback
-
-        action_row = discord.ui.ActionRow(btn_confirm, btn_cancel)
-        container.add_item(action_row)
-        self.add_item(container)
-
-    async def confirm_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            conn = sqlite3.connect(LICENSE_DB)
-            c = conn.cursor()
-            c.execute("SELECT used FROM licenses WHERE key = ?", (self.license_key,))
-            row = c.fetchone()
-
-            if not row or row[0] == 1:
-                conn.close()
-                await interaction.edit_original_response(
-                    view=SimpleLayout("## 등록 실패", "이미 사용된 라이센스이거나 유효하지 않습니다", discord.Color.red())
-                )
-                return
-
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            guild = interaction.guild
-
-            c.execute(
-                "UPDATE licenses SET used = 1, guild_id = ?, guild_name = ?, expires_at = ? WHERE key = ?",
-                (str(guild.id), guild.name, self.expires, self.license_key)
-            )
-            conn.commit()
-            conn.close()
-
-            db_path = init_guild_db(str(guild.id), guild.name)
-            with sqlite3.connect(db_path) as guild_conn:
-                gc = guild_conn.cursor()
-                gc.execute(
-                    "INSERT OR REPLACE INTO info VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (str(guild.id), guild.name, self.license_key, now, self.expires, None, None, None, None)
-                )
-
-            await interaction.edit_original_response(
-                view=SimpleLayout(
-                    "## 서버 등록 완료",
-                    f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n`/설정`으로 자판기를 커스터마이징하세요.",
-                    discord.Color.green()
-                )
-            )
-
-        except Exception as e:
-            print(f"[등록 진행 오류] {e}")
-            await interaction.edit_original_response(
-                view=SimpleLayout("## 오류 발생", "처리 중 문제가 발생했습니다", discord.Color.red())
-            )
-
-    async def cancel_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        await interaction.edit_original_response(
-            view=SimpleLayout(
-                "## 서버 등록 취소",
-                "서버 등록이 취소되었습니다.\n다시 등록하려면 `/등록` 명령어를 사용하세요.",
-                discord.Color.from_str("#99AAB5")
-            )
-        )
-
-
-# ==================== 자판기 설정 Modal ====================
+# ==================== 자판기 설정 Modal (색상 최대 지원) ====================
 class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
     def __init__(self):
         super().__init__()
 
-        self.add_item(discord.ui.TextInput(
-            label="자판기 제목",
-            placeholder="예: VOUT 자동 자판기",
-            required=True,
-            max_length=100,
-            custom_id="title"
-        ))
-
-        self.add_item(discord.ui.TextInput(
-            label="자판기 설명",
-            style=discord.TextStyle.long,
-            placeholder="자판기 하단에 표시될 설명을 입력하세요.",
-            required=False,
-            max_length=500,
-            custom_id="description"
-        ))
-
-        self.add_item(discord.ui.TextInput(
-            label="컨테이너 색상",
-            placeholder="#5865F2 또는 ffffff 또는 흰색",
-            required=True,
-            max_length=20,
-            custom_id="color"
-        ))
-
+        self.add_item(discord.ui.TextInput(label="자판기 제목", placeholder="VOUT 자동 자판기", required=True, max_length=100))
+        self.add_item(discord.ui.TextInput(label="자판기 설명", style=discord.TextStyle.long, placeholder="설명을 입력하세요 (선택)", required=False, max_length=500))
+        self.add_item(discord.ui.TextInput(label="컨테이너 색상", placeholder="노랑, 초록, 빨강, 파랑, 흰색, 검정, 하늘색 등", required=True, max_length=30))
+        
         self.add_item(discord.ui.CheckboxGroup(
             custom_id="enabled_features",
             options=[
@@ -249,53 +106,77 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
         ))
 
     async def on_submit(self, interaction: discord.Interaction):
+        title = self.children[0].value.strip() or "VOUT 자판기"
+        description = self.children[1].value.strip() if self.children[1].value else ""
+        color_input = self.children[2].value.strip().lower()
+        enabled = [cb.label for cb in self.children[3].values if cb.selected]
+        enabled_str = " ".join(enabled) if enabled else "제품 구매 충전 정보"
+
+        # ==================== 색상 변환 (최대한 많은 색상 지원) ====================
+        color_map = {
+            "노랑": "#FEE75C", "노란색": "#FEE75C", "yellow": "#FEE75C", "골드": "#FEE75C",
+            "초록": "#57F287", "녹색": "#57F287", "green": "#57F287", "라임": "#57F287",
+            "빨강": "#ED4245", "빨간색": "#ED4245", "red": "#ED4245",
+            "파랑": "#5865F2", "블루": "#5865F2", "blue": "#5865F2",
+            "하늘": "#00B0F4", "하늘색": "#00B0F4", "sky": "#00B0F4",
+            "흰색": "#FFFFFF", "white": "#FFFFFF",
+            "검정": "#000000", "검은색": "#000000", "black": "#000000",
+            "보라": "#B23AEE", "purple": "#B23AEE", "violet": "#B23AEE",
+            "주황": "#FFAA00", "orange": "#FFAA00",
+            "핑크": "#FF69B4", "pink": "#FF69B4",
+            "회색": "#99AAB5", "gray": "#99AAB5", "grey": "#99AAB5",
+            "청록": "#1ABC9C", "teal": "#1ABC9C",
+        }
+
         try:
-            title = self.children[0].value.strip()
-            description = self.children[1].value.strip() if self.children[1].value else ""
-            color_input = self.children[2].value.strip()
-
-            # 색상 파싱
-            try:
-                if color_input.startswith("#"):
-                    color_str = color_input
+            if color_input.startswith("#"):
+                color_str = color_input.upper()
+            elif color_input in color_map:
+                color_str = color_map[color_input]
+            else:
+                # # 없이 hex 입력 처리
+                cleaned = color_input.lstrip("#")
+                if len(cleaned) in (6, 8):
+                    color_str = "#" + cleaned.upper()
                 else:
-                    color_map = {"흰색": "#ffffff", "white": "#ffffff", "검정": "#000000", "black": "#000000"}
-                    hex_color = color_map.get(color_input.lower(), "#" + color_input.lstrip("#"))
-                    color_str = hex_color
-                accent_color = discord.Color.from_str(color_str)
-            except:
-                color_str = "#5865F2"
-                accent_color = discord.Color.from_str("#5865F2")
+                    color_str = "#5865F2"
+            accent_color = discord.Color.from_str(color_str)
+        except:
+            color_str = "#5865F2"
+            accent_color = discord.Color.from_str("#5865F2")
 
-            # 체크된 기능
-            enabled = []
-            for checkbox in self.children[3].values:
-                if checkbox.selected:
-                    enabled.append(checkbox.label.lower())
+        # DB 저장
+        safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
+        db_path = os.path.join(DB_DIR, f"{safe_name}.db")
 
-            enabled_str = " ".join(enabled) if enabled else "products buy charge info"
+        with sqlite3.connect(db_path) as conn:
+            c = conn.cursor()
+            c.execute("""UPDATE info SET 
+                vending_title=?, vending_description=?, accent_color=?, enabled_features=?
+                WHERE guild_id=?""", 
+                (title, description, color_str, enabled_str, str(interaction.guild.id)))
+            conn.commit()
 
-            # 서버 DB 저장
-            safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
-            db_path = os.path.join(DB_DIR, f"{safe_name}.db")
+        await interaction.response.send_message(
+            embed=discord.Embed(title="✅ 설정 저장 완료", color=accent_color), 
+            ephemeral=True
+        )
 
-            with sqlite3.connect(db_path) as conn:
-                c = conn.cursor()
-                c.execute("""
-                    UPDATE info 
-                    SET vending_title = ?, vending_description = ?, accent_color = ?, enabled_features = ?
-                    WHERE guild_id = ?
-                """, (title, description, color_str, enabled_str, str(interaction.guild.id)))
-                conn.commit()
 
-            await interaction.response.send_message(
-                embed=discord.Embed(title="✅ 설정이 저장되었습니다", color=accent_color),
-                ephemeral=True
-            )
+# ==================== 설정 명령어 ====================
+@bot.tree.command(name="설정", description="자판기 설정을 관리합니다")
+async def settings(interaction: discord.Interaction):
+    safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
+    db_path = os.path.join(DB_DIR, f"{safe_name}.db")
+    
+    if not os.path.exists(db_path):
+        await interaction.response.send_message(
+            view=SimpleLayout("## 등록 필요", "먼저 `/등록` 명령어를 사용해주세요.", discord.Color.red()), 
+            ephemeral=True
+        )
+        return
 
-        except Exception as e:
-            print(f"[Modal 오류] {e}")
-            await interaction.response.send_message("설정 저장 중 오류가 발생했습니다.", ephemeral=True)
+    await interaction.response.send_modal(VendingSettingModal())
 
 
 # ==================== /자판기 명령어 ====================
@@ -306,38 +187,29 @@ async def vending_machine(interaction: discord.Interaction):
 
     if not os.path.exists(db_path):
         await interaction.response.send_message(
-            view=SimpleLayout("## 등록되지 않은 서버", "먼저 `/등록` 명령어로 서버를 등록해주세요.", discord.Color.red()),
+            view=SimpleLayout("## 등록 필요", "먼저 `/등록` 명령어를 사용해주세요.", discord.Color.red()), 
             ephemeral=True
         )
         return
 
-    # 설정 불러오기
     with sqlite3.connect(db_path) as conn:
         c = conn.cursor()
         c.execute("SELECT vending_title, vending_description, accent_color, enabled_features FROM info WHERE guild_id = ?", 
                   (str(interaction.guild.id),))
         row = c.fetchone()
 
-    if not row:
-        title = "VOUT 자판기"
-        description = ""
-        color_str = "#5865F2"
-        enabled_features = "products buy charge info"
-    else:
-        title, description, color_str, enabled_features = row
-        if not title:
-            title = "VOUT 자판기"
-        if not color_str:
-            color_str = "#5865F2"
+    title = row[0] if row and row[0] else "VOUT 자판기"
+    description = row[1] if row and row[1] else ""
+    color_str = row[2] if row and row[2] else "#5865F2"
+    enabled_features = row[3] if row and row[3] else "제품 구매 충전 정보"
 
     try:
         accent_color = discord.Color.from_str(color_str)
     except:
         accent_color = discord.Color.from_str("#5865F2")
 
-    enabled = enabled_features.lower().split() if enabled_features else []
+    enabled = enabled_features.lower().split()
 
-    # 자판기 컨테이너 생성
     view = discord.ui.LayoutView()
     container = discord.ui.Container(
         discord.ui.TextDisplay(content=f"## {title}"),
@@ -349,71 +221,29 @@ async def vending_machine(interaction: discord.Interaction):
         container.add_item(discord.ui.TextDisplay(content=description))
         container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-    # 체크된 버튼만 동적으로 추가
     buttons = []
-    if "products" in enabled or "제품" in enabled:
-        btn = discord.ui.Button(label="제품", style=discord.ButtonStyle.primary, custom_id="vending_products")
-        buttons.append(btn)
-    if "buy" in enabled or "구매" in enabled:
-        btn = discord.ui.Button(label="구매", style=discord.ButtonStyle.success, custom_id="vending_buy")
-        buttons.append(btn)
-    if "charge" in enabled or "충전" in enabled:
-        btn = discord.ui.Button(label="충전", style=discord.ButtonStyle.green, custom_id="vending_charge")
-        buttons.append(btn)
-    if "info" in enabled or "정보" in enabled:
-        btn = discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary, custom_id="vending_info")
-        buttons.append(btn)
+    if any(x in enabled for x in ["제품", "products"]):
+        buttons.append(discord.ui.Button(label="제품", style=discord.ButtonStyle.primary))
+    if any(x in enabled for x in ["구매", "buy"]):
+        buttons.append(discord.ui.Button(label="구매", style=discord.ButtonStyle.success))
+    if any(x in enabled for x in ["충전", "charge"]):
+        buttons.append(discord.ui.Button(label="충전", style=discord.ButtonStyle.green))
+    if any(x in enabled for x in ["정보", "info"]):
+        buttons.append(discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary))
 
     if buttons:
-        action_row = discord.ui.ActionRow(*buttons)
-        container.add_item(action_row)
+        container.add_item(discord.ui.ActionRow(*buttons))
 
     view.add_item(container)
-
-    await interaction.response.send_message(view=view, ephemeral=False)
-
-
-# ==================== 설정 명령어 ====================
-@bot.tree.command(name="설정", description="자판기 설정을 관리합니다")
-async def settings(interaction: discord.Interaction):
-    safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
-    db_path = os.path.join(DB_DIR, f"{safe_name}.db")
-    
-    if not os.path.exists(db_path):
-        await interaction.response.send_message(
-            view=SimpleLayout("## 등록되지 않음", "먼저 `/등록` 명령어로 서버를 등록해주세요.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    view = discord.ui.LayoutView()
-    container = discord.ui.Container(
-        discord.ui.TextDisplay(content="## 자판기 설정"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(content="자판기 제목, 설명, 색상, 표시 기능을 설정합니다."),
-        accent_color=discord.Color.from_str("#5865F2"),
-    )
-
-    select = discord.ui.Select(
-        placeholder="설정할 항목을 선택하세요...",
-        options=[
-            discord.SelectOption(label="자판기 설정", value="vending_setting", description="제목, 설명, 색상, 버튼 설정"),
-        ]
-    )
-    select.callback = lambda i: i.response.send_modal(VendingSettingModal())
-    container.add_item(discord.ui.ActionRow(select))
-    view.add_item(container)
-
-    await interaction.response.send_message(view=view, ephemeral=True)
+    await interaction.response.send_message(view=view)
 
 
 # ── 봇 이벤트 ──────────────────────────────────────────
 @bot.event
 async def on_ready():
     init_license_db()
-    bot.add_view(RegisterConfirmLayout("", 0, "", ""))
     await bot.tree.sync()
-    print(f"{bot.user} 온라인 | 슬래시 명령어 동기화 완료")
+    print(f"{bot.user} 온라인 | 명령어 동기화 완료")
 
 
 bot.run(TOKEN)
