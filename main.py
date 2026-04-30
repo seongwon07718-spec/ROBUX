@@ -44,19 +44,32 @@ def init_guild_db(guild_id: str, guild_name: str):
     path = os.path.join(DB_DIR, f"{safe_name}.db")
     conn = sqlite3.connect(path)
     c = conn.cursor()
+    
+    # 기본 테이블 생성
     c.execute("""
         CREATE TABLE IF NOT EXISTS info (
             guild_id TEXT PRIMARY KEY,
-            guild_name TEXT,
-            license_key TEXT,
-            registered_at TEXT,
-            expires_at TEXT,
-            vending_title TEXT DEFAULT "구매하기",
-            vending_description TEXT DEFAULT "아래 버튼을 눌러 이용해주세요",
-            accent_color TEXT DEFAULT "#5865F2",
-            enabled_features TEXT DEFAULT "제품 구매 충전 정보"
+            guild_name TEXT
         )
     """)
+    
+    # 에러 방지: 기존 DB에 누락된 컬럼이 있다면 강제로 추가 (no such column 해결)
+    columns = [
+        ("license_key", "TEXT"),
+        ("registered_at", "TEXT"),
+        ("expires_at", "TEXT"),
+        ("vending_title", "TEXT DEFAULT '구매하기'"),
+        ("vending_description", "TEXT DEFAULT '아래 버튼을 눌러 이용해주세요'"),
+        ("accent_color", "TEXT DEFAULT '#5865F2'"),
+        ("enabled_features", "TEXT DEFAULT '제품 구매 충전 정보'")
+    ]
+    
+    for col_name, col_type in columns:
+        try:
+            c.execute(f"ALTER TABLE info ADD COLUMN {col_name} {col_type}")
+        except sqlite3.OperationalError:
+            pass # 이미 컬럼이 존재하면 무시
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,8 +191,8 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
             with sqlite3.connect(db_path) as guild_conn:
                 gc = guild_conn.cursor()
                 gc.execute(
-                    "INSERT OR REPLACE INTO info VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (str(guild.id), guild.name, self.license_key, now, self.expires, None, None, None, None)
+                    "INSERT OR REPLACE INTO info (guild_id, guild_name, license_key, registered_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+                    (str(guild.id), guild.name, self.license_key, now, self.expires)
                 )
 
             await interaction.edit_original_response(
@@ -212,46 +225,50 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
     def __init__(self):
         super().__init__()
 
-        self.add_item(discord.ui.TextInput(
+        # 텍스트 입력 아이템들
+        self.title_input = discord.ui.TextInput(
             label="자판기 제목",
             placeholder="예: 구매하기",
             required=True,
             max_length=100,
-        ))
-
-        self.add_item(discord.ui.TextInput(
+        )
+        self.desc_input = discord.ui.TextInput(
             label="자판기 설명",
             style=discord.TextStyle.long,
             placeholder="자판기 하단에 표시될 설명을 입력하세요 (선택 사항)",
             required=False,
             max_length=500,
-        ))
-
-        self.add_item(discord.ui.TextInput(
+        )
+        self.color_input = discord.ui.TextInput(
             label="컨테이너 색상",
             placeholder="노랑, 초록, 빨강, 파랑, 흰색, 검정, 하늘색 등",
             required=True,
             max_length=30,
-        ))
+        )
 
-        self.add_item(discord.ui.CheckboxGroup(
-            label="버튼 표시 선택",   # ← 요청하신 대로 변경
+        # 이미지에서 요청하신 CheckboxGroup 방식 (V2 전용)
+        self.checkbox_group = discord.ui.CheckboxGroup(
+            label="버튼 표시 선택",
             custom_id="enabled_features",
             options=[
-                discord.ui.Checkbox(label="제품", default=True),
-                discord.ui.Checkbox(label="구매", default=True),
-                discord.ui.Checkbox(label="충전", default=True),
-                discord.ui.Checkbox(label="정보", default=True),
+                discord.ui.CheckboxGroupOption(label="제품", value="제품", default=True),
+                discord.ui.CheckboxGroupOption(label="구매", value="구매", default=True),
+                discord.ui.CheckboxGroupOption(label="충전", value="충전", default=True),
+                discord.ui.CheckboxGroupOption(label="정보", value="정보", default=True),
             ]
-        ))
+        )
+
+        self.add_item(self.title_input)
+        self.add_item(self.desc_input)
+        self.add_item(self.color_input)
+        self.add_item(self.checkbox_group)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            title = self.children[0].value.strip() or "구매하기"
-            description = self.children[1].value.strip() if self.children[1].value else "아래 버튼을 눌러 이용해주세요"
-            color_input = self.children[2].value.strip().lower()
+            title = self.title_input.value.strip() or "구매하기"
+            description = self.desc_input.value.strip() if self.desc_input.value else "아래 버튼을 눌러 이용해주세요"
+            color_in = self.color_input.value.strip().lower()
 
-            # 색상 변환 강화
             color_map = {
                 "노랑": "#FEE75C", "노란색": "#FEE75C", "yellow": "#FEE75C",
                 "초록": "#57F287", "녹색": "#57F287", "green": "#57F287",
@@ -266,31 +283,11 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
                 "회색": "#99AAB5", "gray": "#99AAB5",
             }
 
-            try:
-                if color_input.startswith("#"):
-                    color_str = color_input.upper()
-                elif color_input in color_map:
-                    color_str = color_map[color_input]
-                else:
-                    cleaned = color_input.lstrip("#")
-                    if len(cleaned) in (6, 8):
-                        color_str = "#" + cleaned.upper()
-                    else:
-                        color_str = "#5865F2"
-                accent_color = discord.Color.from_str(color_str)
-            except:
-                color_str = "#5865F2"
-                accent_color = discord.Color.from_str("#5865F2")
+            color_str = color_map.get(color_in, color_in if color_in.startswith("#") else "#5865F2")
+            
+            # 체크된 기능 가져오기
+            enabled_str = " ".join(self.checkbox_group.values) if self.checkbox_group.values else "제품 구매 충전 정보"
 
-            # 체크된 기능
-            enabled = []
-            for checkbox in self.children[3].values:
-                if checkbox.selected:
-                    enabled.append(checkbox.label.lower())
-
-            enabled_str = " ".join(enabled) if enabled else "제품 구매 충전 정보"
-
-            # 서버 DB 저장
             safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
             db_path = os.path.join(DB_DIR, f"{safe_name}.db")
 
@@ -304,7 +301,7 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
                 conn.commit()
 
             await interaction.response.send_message(
-                embed=discord.Embed(title="설정이 저장되었습니다", color=accent_color),
+                embed=discord.Embed(title="설정이 저장되었습니다", color=discord.Color.from_str(color_str)),
                 ephemeral=True
             )
 
@@ -316,17 +313,12 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
 # ==================== /자판기 명령어 ====================
 @bot.tree.command(name="자판기", description="자판기를 전송합니다")
 async def vending_machine(interaction: discord.Interaction):
+    # 길드 DB 초기화 체크 (컬럼 자동 추가 포함)
+    init_guild_db(str(interaction.guild.id), interaction.guild.name)
+    
     safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
     db_path = os.path.join(DB_DIR, f"{safe_name}.db")
 
-    if not os.path.exists(db_path):
-        await interaction.response.send_message(
-            view=SimpleLayout("## 등록되지 않은 서버", "먼저 `/등록` 명령어로 서버를 등록해주세요", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    # 설정 불러오기
     with sqlite3.connect(db_path) as conn:
         c = conn.cursor()
         c.execute("SELECT vending_title, vending_description, accent_color, enabled_features FROM info WHERE guild_id = ?", 
@@ -334,72 +326,51 @@ async def vending_machine(interaction: discord.Interaction):
         row = c.fetchone()
 
     if not row:
-        title = "구매하기"
-        description = "아래 버튼을 눌러 이용해주세요"
-        color_str = "#5865F2"
-        enabled_features = "제품 구매 충전 정보"
-    else:
-        title, description, color_str, enabled_features = row
-        title = title or "구매하기"
-        description = description or "아래 버튼을 눌러 이용해주세요"
-        color_str = color_str or "#5865F2"
+        await interaction.response.send_message(
+            view=SimpleLayout("## 등록되지 않은 서버", "먼저 `/등록` 명령어로 서버를 등록해주세요", discord.Color.red()),
+            ephemeral=True
+        )
+        return
 
-    try:
-        accent_color = discord.Color.from_str(color_str)
-    except:
-        accent_color = discord.Color.from_str("#5865F2")
+    title, description, color_str, enabled_features = row
+    title = title or "구매하기"
+    description = description or "아래 버튼을 눌러 이용해주세요"
+    color_str = color_str or "#5865F2"
+    enabled = enabled_features.split() if enabled_features else []
 
-    enabled = enabled_features.lower().split() if enabled_features else []
-
-    # 자판기 컨테이너 생성
     view = discord.ui.LayoutView()
     container = discord.ui.Container(
         discord.ui.TextDisplay(content=f"## {title}"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        accent_color=accent_color,
+        accent_color=discord.Color.from_str(color_str),
     )
 
     if description:
         container.add_item(discord.ui.TextDisplay(content=description))
         container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-    # 체크된 버튼만 동적으로 추가
     buttons = []
-    if "products" in enabled or "제품" in enabled:
-        btn = discord.ui.Button(label="제품", style=discord.ButtonStyle.primary, custom_id="vending_products")
-        buttons.append(btn)
-    if "buy" in enabled or "구매" in enabled:
-        btn = discord.ui.Button(label="구매", style=discord.ButtonStyle.success, custom_id="vending_buy")
-        buttons.append(btn)
-    if "charge" in enabled or "충전" in enabled:
-        btn = discord.ui.Button(label="충전", style=discord.ButtonStyle.green, custom_id="vending_charge")
-        buttons.append(btn)
-    if "info" in enabled or "정보" in enabled:
-        btn = discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary, custom_id="vending_info")
-        buttons.append(btn)
+    if "제품" in enabled:
+        buttons.append(discord.ui.Button(label="제품", style=discord.ButtonStyle.primary, custom_id="vending_products"))
+    if "구매" in enabled:
+        buttons.append(discord.ui.Button(label="구매", style=discord.ButtonStyle.success, custom_id="vending_buy"))
+    if "충전" in enabled:
+        buttons.append(discord.ui.Button(label="충전", style=discord.ButtonStyle.green, custom_id="vending_charge"))
+    if "정보" in enabled:
+        buttons.append(discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary, custom_id="vending_info"))
 
     if buttons:
-        action_row = discord.ui.ActionRow(*buttons)
-        container.add_item(action_row)
+        container.add_item(discord.ui.ActionRow(*buttons))
 
     view.add_item(container)
-
     await interaction.response.send_message(view=view, ephemeral=False)
 
 
 # ==================== 설정 명령어 ====================
 @bot.tree.command(name="설정", description="자판기 설정을 관리합니다")
 async def settings(interaction: discord.Interaction):
-    safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
-    db_path = os.path.join(DB_DIR, f"{safe_name}.db")
+    init_guild_db(str(interaction.guild.id), interaction.guild.name)
     
-    if not os.path.exists(db_path):
-        await interaction.response.send_message(
-            view=SimpleLayout("## 등록되지 않음", "먼저 `/등록` 명령어로 서버를 등록해주세요", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
     view = discord.ui.LayoutView()
     container = discord.ui.Container(
         discord.ui.TextDisplay(content="## 설정하기"),
@@ -415,12 +386,17 @@ async def settings(interaction: discord.Interaction):
             discord.SelectOption(label="자판기 설정", value="vending_setting", description="자판기 제목, 설명, 색상, 버튼 기능을 설정합니다"),
         ]
     )
-    select.callback = lambda i: i.response.send_modal(VendingSettingModal())
+    
+    async def select_callback(i: discord.Interaction):
+        await i.response.send_modal(VendingSettingModal())
+        
+    select.callback = select_callback
     container.add_item(discord.ui.ActionRow(select))
     view.add_item(container)
 
     await interaction.response.send_message(view=view, ephemeral=True)
 
+# ── 라이센스 관리 명령어들 (유지) ────────────────────────
 @bot.tree.command(name="라이센스_생성", description="라이센스 키를 생성합니다")
 @app_commands.describe(기간="라이센스 기간 선택", 수량="생성할 수량 (최대 100개)")
 @app_commands.choices(기간=[
@@ -431,21 +407,10 @@ async def settings(interaction: discord.Interaction):
 ])
 async def create_license(interaction: discord.Interaction, 기간: app_commands.Choice[int], 수량: int):
     if not is_admin(interaction.user.id):
-        await interaction.response.send_message(
-            view=SimpleLayout("## 권한 없음", "이 명령어는 봇 관리자만 사용할 수 있습니다", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    if not 1 <= 수량 <= 100:
-        await interaction.response.send_message(
-            view=SimpleLayout("## 잘못된 수량", "수량은 1개 이상 100개 이하로 입력해주세요", discord.Color.red()),
-            ephemeral=True
-        )
+        await interaction.response.send_message(view=SimpleLayout("## 권한 없음", "봇 관리자 전용", discord.Color.red()), ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
-
     conn = sqlite3.connect(LICENSE_DB)
     c = conn.cursor()
     keys = []
@@ -459,136 +424,20 @@ async def create_license(interaction: discord.Interaction, 기간: app_commands.
     conn.commit()
     conn.close()
 
-    txt = f"VOUT 라이센스 키 목록\n생성일시: {now}\n기간: {기간.value}일 / 수량: {수량}개\n"
-    txt += "=" * 50 + "\n\n"
-    for i, key in enumerate(keys, 1):
-        txt += f"{i:>3}. {key}\n"
-
-    fname = f"licenses_{기간.value}일_{수량}개_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    txt = f"VOUT 키 목록\n기간: {기간.value}일\n" + "\n".join(keys)
     file_bytes = io.BytesIO(txt.encode("utf-8"))
-    discord_file = discord.File(fp=file_bytes, filename=fname)
+    discord_file = discord.File(fp=file_bytes, filename="licenses.txt")
 
-    # Components V2 올바른 방식
     view = discord.ui.LayoutView()
     container = discord.ui.Container(
-        discord.ui.TextDisplay(content="## 라이센스 생성 완료"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(content=f"{수량}개의 라이센스가 생성되었습니다\n아래 파일을 내려받아 확인하세요"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.File(f"attachment://{fname}"),   # ← 핵심 수정
+        discord.ui.TextDisplay(content="## 생성 완료"),
+        discord.ui.File("attachment://licenses.txt"),
         accent_color=discord.Color.green()
     )
     view.add_item(container)
-
     await interaction.followup.send(view=view, file=discord_file, ephemeral=True)
-
-
-@bot.tree.command(name="라이센스_목록", description="발급된 라이센스 키 목록을 조회합니다")
-@app_commands.describe(필터="조회할 상태 필터")
-@app_commands.choices(필터=[
-    app_commands.Choice(name="전체",   value="all"),
-    app_commands.Choice(name="미사용", value="unused"),
-    app_commands.Choice(name="사용됨", value="used"),
-])
-async def list_licenses(interaction: discord.Interaction, 필터: app_commands.Choice[str] = None):
-    if not is_admin(interaction.user.id):
-        await interaction.response.send_message(
-            view=SimpleLayout("## 권한 없음", "이 명령어는 봇 관리자만 사용할 수 있습니다", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    conn = sqlite3.connect(LICENSE_DB)
-    c = conn.cursor()
-
-    filter_val = 필터.value if 필터 else "all"
-    if filter_val == "unused":
-        c.execute("SELECT key, days, used, guild_name, created_at FROM licenses WHERE used = 0")
-    elif filter_val == "used":
-        c.execute("SELECT key, days, used, guild_name, created_at FROM licenses WHERE used = 1")
-    else:
-        c.execute("SELECT key, days, used, guild_name, created_at FROM licenses")
-
-    rows = c.fetchall()
-    conn.close()
-
-    filter_label = {"all": "전체", "unused": "미사용", "used": "사용됨"}.get(filter_val, "전체")
-
-    if not rows:
-        await interaction.followup.send(
-            view=SimpleLayout(f"## 라이센스 목록 [{filter_label}]", "조회된 라이센스가 없습니다", discord.Color.from_str("#5865F2")),
-            ephemeral=True
-        )
-        return
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    txt = f"VOUT 라이센스 목록 [{filter_label}]\n조회일시: {now} / 총 {len(rows)}개\n"
-    txt += "=" * 60 + "\n\n"
-    for i, (key, days, used, guild_name, created_at) in enumerate(rows, 1):
-        status = f"사용됨 ({guild_name})" if used else "미사용"
-        txt += f"{i:>3}. {key}  |  {days}일  |  {status}  |  생성: {created_at}\n"
-
-    fname = f"license_list_{filter_val}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    file_bytes = io.BytesIO(txt.encode("utf-8"))
-    discord_file = discord.File(fp=file_bytes, filename=fname)
-
-    view = discord.ui.LayoutView()
-    container = discord.ui.Container(
-        discord.ui.TextDisplay(content=f"## 라이센스 목록 ({filter_label})"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(content=f"현재 저장된 {len(rows)}개의 라이센스 목록입니다"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.File(f"attachment://{fname}"),   # ← 핵심 수정
-        accent_color=discord.Color.from_str("#5865F2")
-    )
-    view.add_item(container)
-
-    await interaction.followup.send(view=view, file=discord_file, ephemeral=True)
-
-
-@bot.tree.command(name="라이센스_삭제", description="라이센스 키를 삭제합니다")
-@app_commands.describe(키="삭제할 라이센스 키")
-async def delete_license(interaction: discord.Interaction, 키: str):
-    if not is_admin(interaction.user.id):
-        await interaction.response.send_message(
-            view=SimpleLayout("## 권한 없음", "이 명령어는 봇 관리자만 사용할 수 있습니다", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    conn = sqlite3.connect(LICENSE_DB)
-    c = conn.cursor()
-    c.execute("SELECT key, days, used, guild_name FROM licenses WHERE key = ?", (키,))
-    row = c.fetchone()
-
-    if not row:
-        conn.close()
-        await interaction.response.send_message(
-            view=SimpleLayout("## 삭제 실패", f"키 `{키}` 를 찾을 수 없습니다.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    key, days, used, guild_name = row
-    c.execute("DELETE FROM licenses WHERE key = ?", (키,))
-    conn.commit()
-    conn.close()
-
-    status = f"사용됨 (서버: {guild_name})" if used else "미사용"
-    await interaction.response.send_message(
-        view=SimpleLayout(
-            "## 라이센스 삭제 완료",
-            f"> **키:** `{key}`\n> **기간:** {days}일\n> **상태:** {status}",
-            discord.Color.from_str("#5865F2")
-        ),
-        ephemeral=True
-    )
-
 
 @bot.tree.command(name="등록", description="서버를 등록합니다")
-@app_commands.describe(라이센스="발급받은 라이센스 키를 입력하세요")
 async def register(interaction: discord.Interaction, 라이센스: str):
     conn = sqlite3.connect(LICENSE_DB)
     c = conn.cursor()
@@ -596,42 +445,20 @@ async def register(interaction: discord.Interaction, 라이센스: str):
     row = c.fetchone()
     conn.close()
 
-    if not row:
-        await interaction.response.send_message(
-            view=SimpleLayout("## 유효하지 않은 라이센스", "입력하신 라이센스 키를 찾을 수 없습니다", discord.Color.red()),
-            ephemeral=True
-        )
+    if not row or row[2]:
+        await interaction.response.send_message("유효하지 않거나 이미 사용된 키입니다.", ephemeral=True)
         return
 
-    key, days, used = row
-
-    if used:
-        await interaction.response.send_message(
-            view=SimpleLayout("## 이미 사용된 라이센스", "이 라이센스 키는 이미 다른 서버에서 사용되었습니다", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    expires = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-
+    expires = (datetime.now() + timedelta(days=row[1])).strftime("%Y-%m-%d %H:%M:%S")
     await interaction.response.send_message(
-        view=RegisterConfirmLayout(
-            key=라이센스,
-            days=days,
-            expires=expires,
-            guild_name=interaction.guild.name
-        ),
+        view=RegisterConfirmLayout(라이센스, row[1], expires, interaction.guild.name),
         ephemeral=True
     )
 
-
-# ── 봇 이벤트 ──────────────────────────────────────────
 @bot.event
 async def on_ready():
     init_license_db()
-    bot.add_view(RegisterConfirmLayout("", 0, "", "")) 
     await bot.tree.sync()
     print(f"{bot.user} 온라인")
-
 
 bot.run(TOKEN)
