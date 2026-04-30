@@ -134,16 +134,16 @@ class SmsWebhookPayload(BaseModel):
     @field_validator("sms_body")
     @classmethod
     def validate_sms_body(cls, v):
-        if len(v) > 500:
+        if len(v) > 1000:
             raise ValueError("문자 내용이 너무 깁니다")
         return v
 
     @field_validator("token")
     @classmethod
     def validate_token_format(cls, v):
-        # token은 hex 48자 (secrets.token_hex(24))
-        if not re.fullmatch(r"[0-9a-f]{48}", v):
-            raise ValueError("잘못된 토큰 형식")
+        v = v.strip()
+        if len(v) < 8 or len(v) > 128:
+            raise ValueError("잘못된 토큰 길이")
         return v
 
 
@@ -151,6 +151,7 @@ class SmsWebhookPayload(BaseModel):
 async def sms_webhook(payload: SmsWebhookPayload, request: Request):
     # Rate limit
     client_ip = request.client.host
+    print(f"[웹훅 수신] IP={client_ip} guild_id={payload.guild_id} token_len={len(payload.token)}")
     if not rate_limit_check(client_ip, limit=30, window=60):
         raise HTTPException(status_code=429, detail="Too Many Requests")
 
@@ -255,6 +256,21 @@ async def shortcut_guide(token: str, guild_id: str, request: Request):
 @app.get("/health")
 async def health():
     return {"status": "ok", "time": datetime.now().isoformat()}
+
+
+@app.post("/webhook/debug")
+async def debug_webhook(request: Request):
+    """단축어 테스트용 - 실제 들어오는 바디 그대로 출력"""
+    body = await request.body()
+    headers = dict(request.headers)
+    try:
+        import json
+        parsed = json.loads(body)
+    except Exception:
+        parsed = body.decode("utf-8", errors="replace")
+    print(f"[DEBUG] headers={headers}")
+    print(f"[DEBUG] body={parsed}")
+    return {"received": parsed, "headers": headers}
 
 
 if __name__ == "__main__":
