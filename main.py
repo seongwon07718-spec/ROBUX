@@ -9,8 +9,8 @@ import io
 from datetime import datetime, timedelta
 
 # ── 설정 ──────────────────────────────────────────────
-TOKEN = "YOUR_BOT_TOKEN"
-ADMIN_IDS = [123456789]  # 봇 운영자 디스코드 ID 목록
+TOKEN = ""
+ADMIN_IDS = [1454398431996018724]  # 봇 운영자 디스코드 ID 목록
 DB_DIR = "DB"
 LICENSE_DB = os.path.join(DB_DIR, "라이센스.db")
 # ──────────────────────────────────────────────────────
