@@ -51,10 +51,10 @@ def init_guild_db(guild_id: str, guild_name: str):
             license_key TEXT,
             registered_at TEXT,
             expires_at TEXT,
-            vending_title TEXT DEFAULT "VOUT 자판기",
-            vending_description TEXT DEFAULT "",
+            vending_title TEXT DEFAULT "구매하기",
+            vending_description TEXT DEFAULT "아래 버튼을 눌러 이용해주세요",
             accent_color TEXT DEFAULT "#5865F2",
-            enabled_features TEXT DEFAULT "products buy charge info"
+            enabled_features TEXT DEFAULT "제품 구매 충전 정보"
         )
     """)
     c.execute("""
@@ -207,7 +207,7 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
         )
 
 
-# ==================== 자판기 설정 Modal (색상 최대 지원) ====================
+# ==================== 자판기 설정 Modal ====================
 class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
     def __init__(self):
         super().__init__()
@@ -235,7 +235,7 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
         ))
 
         self.add_item(discord.ui.CheckboxGroup(
-            label="표시할 버튼 기능 선택",
+            label="버튼 표시 선택",   # ← 요청하신 대로 변경
             custom_id="enabled_features",
             options=[
                 discord.ui.Checkbox(label="제품", default=True),
@@ -248,10 +248,10 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             title = self.children[0].value.strip() or "구매하기"
-            description = self.children[1].value.strip() if self.children[1].value else ""
+            description = self.children[1].value.strip() if self.children[1].value else "아래 버튼을 눌러 이용해주세요"
             color_input = self.children[2].value.strip().lower()
 
-            # ==================== 색상 변환 강화 ====================
+            # 색상 변환 강화
             color_map = {
                 "노랑": "#FEE75C", "노란색": "#FEE75C", "yellow": "#FEE75C",
                 "초록": "#57F287", "녹색": "#57F287", "green": "#57F287",
@@ -288,7 +288,7 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
                 if checkbox.selected:
                     enabled.append(checkbox.label.lower())
 
-            enabled_str = " ".join(enabled) if enabled else "products buy charge info"
+            enabled_str = " ".join(enabled) if enabled else "제품 구매 충전 정보"
 
             # 서버 DB 저장
             safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
@@ -335,15 +335,14 @@ async def vending_machine(interaction: discord.Interaction):
 
     if not row:
         title = "구매하기"
-        description = ""
+        description = "아래 버튼을 눌러 이용해주세요"
         color_str = "#5865F2"
-        enabled_features = "products buy charge info"
+        enabled_features = "제품 구매 충전 정보"
     else:
         title, description, color_str, enabled_features = row
-        if not title:
-            title = "구매하기"
-        if not color_str:
-            color_str = "#5865F2"
+        title = title or "구매하기"
+        description = description or "아래 버튼을 눌러 이용해주세요"
+        color_str = color_str or "#5865F2"
 
     try:
         accent_color = discord.Color.from_str(color_str)
