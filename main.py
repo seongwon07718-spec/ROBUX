@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 import sqlite3
 import os
 import re
@@ -15,12 +14,8 @@ WEBHOOK_SECRET = "f1356103e6b861cb00d3c502cb27d9f66bd84880f70d3b98186fdbd5cd1d84
 ALLOWED_DOMAIN = "여기에_도메인_입력"   # 예: yourdomain.com
 # ──────────────────────────────────────────────────────
 
+# Cloudflare 사용 시 TrustedHostMiddleware 제거
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=["localhost", "127.0.0.1", ALLOWED_DOMAIN, f"*.{ALLOWED_DOMAIN}"]
-)
 
 # Rate limit (IP당 분당 30회)
 _rate_limit_store: dict[str, list] = {}
@@ -129,19 +124,22 @@ class SmsWebhookPayload(BaseModel):
     guild_id: str    # 디스코드 서버 ID
     sms_body: str    # 카카오뱅크 입금 알림 문자 원문
 
-    @validator("guild_id")
+    @field_validator("guild_id")
+    @classmethod
     def validate_guild_id(cls, v):
         if not re.fullmatch(r"\d{17,20}", v):
             raise ValueError("잘못된 guild_id")
         return v
 
-    @validator("sms_body")
+    @field_validator("sms_body")
+    @classmethod
     def validate_sms_body(cls, v):
         if len(v) > 500:
             raise ValueError("문자 내용이 너무 깁니다")
         return v
 
-    @validator("token")
+    @field_validator("token")
+    @classmethod
     def validate_token_format(cls, v):
         # token은 hex 48자 (secrets.token_hex(24))
         if not re.fullmatch(r"[0-9a-f]{48}", v):
