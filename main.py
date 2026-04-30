@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 # ── 설정 ──────────────────────────────────────────────
 TOKEN = "crE"
-ADMIN_IDS = [1454398431996018724]  # 봇 운영자 디스코드 ID 목록
+ADMIN_IDS = [1454398431996018724]
 DB_DIR = "DB"
 LICENSE_DB = os.path.join(DB_DIR, "라이센스.db")
 # ──────────────────────────────────────────────────────
@@ -207,7 +207,7 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
         )
 
 
-# ==================== 자판기 설정 Modal ====================
+# ==================== 자판기 설정 Modal (색상 최대 지원) ====================
 class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
     def __init__(self):
         super().__init__()
@@ -217,7 +217,6 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
             placeholder="예: 구매하기",
             required=True,
             max_length=100,
-            custom_id="title"
         ))
 
         self.add_item(discord.ui.TextInput(
@@ -226,15 +225,13 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
             placeholder="자판기 하단에 표시될 설명을 입력하세요 (선택 사항)",
             required=False,
             max_length=500,
-            custom_id="description"
         ))
 
         self.add_item(discord.ui.TextInput(
             label="컨테이너 색상",
-            placeholder="색상 코드 또는 색상 이름을 입력하세요",
+            placeholder="노랑, 초록, 빨강, 파랑, 흰색, 검정, 하늘색 등",
             required=True,
-            max_length=20,
-            custom_id="color"
+            max_length=30,
         ))
 
         self.add_item(discord.ui.CheckboxGroup(
@@ -250,18 +247,36 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            title = self.children[0].value.strip()
+            title = self.children[0].value.strip() or "구매하기"
             description = self.children[1].value.strip() if self.children[1].value else ""
-            color_input = self.children[2].value.strip()
+            color_input = self.children[2].value.strip().lower()
 
-            # 색상 파싱
+            # ==================== 색상 변환 강화 ====================
+            color_map = {
+                "노랑": "#FEE75C", "노란색": "#FEE75C", "yellow": "#FEE75C",
+                "초록": "#57F287", "녹색": "#57F287", "green": "#57F287",
+                "빨강": "#ED4245", "빨간색": "#ED4245", "red": "#ED4245",
+                "파랑": "#5865F2", "블루": "#5865F2", "blue": "#5865F2",
+                "하늘": "#00B0F4", "하늘색": "#00B0F4", "sky": "#00B0F4",
+                "흰색": "#FFFFFF", "white": "#FFFFFF",
+                "검정": "#000000", "검은색": "#000000", "black": "#000000",
+                "보라": "#B23AEE", "purple": "#B23AEE",
+                "주황": "#FFAA00", "orange": "#FFAA00",
+                "핑크": "#FF69B4", "pink": "#FF69B4",
+                "회색": "#99AAB5", "gray": "#99AAB5",
+            }
+
             try:
                 if color_input.startswith("#"):
-                    color_str = color_input
+                    color_str = color_input.upper()
+                elif color_input in color_map:
+                    color_str = color_map[color_input]
                 else:
-                    color_map = {"흰색": "#ffffff", "white": "#ffffff", "검정": "#000000", "black": "#000000"}
-                    hex_color = color_map.get(color_input.lower(), "#" + color_input.lstrip("#"))
-                    color_str = hex_color
+                    cleaned = color_input.lstrip("#")
+                    if len(cleaned) in (6, 8):
+                        color_str = "#" + cleaned.upper()
+                    else:
+                        color_str = "#5865F2"
                 accent_color = discord.Color.from_str(color_str)
             except:
                 color_str = "#5865F2"
@@ -406,3 +421,6 @@ async def settings(interaction: discord.Interaction):
     view.add_item(container)
 
     await interaction.response.send_message(view=view, ephemeral=True)
+
+
+bot.run(TOKEN)
