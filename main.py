@@ -186,7 +186,7 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
             await interaction.edit_original_response(
                 view=SimpleLayout(
                     "## 서버 등록 완료",
-                    f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n`/설정` 명령어로 자판기를 커스터마이징 할 수 있습니다.",
+                    f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n`/설정`으로 자판기를 커스터마이징하세요.",
                     discord.Color.green()
                 )
             )
@@ -238,7 +238,6 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
             custom_id="color"
         ))
 
-        # Checkbox Group (Discord 최신 기능)
         self.add_item(discord.ui.CheckboxGroup(
             custom_id="enabled_features",
             options=[
@@ -258,20 +257,17 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
             # 색상 파싱
             try:
                 if color_input.startswith("#"):
-                    accent_color = discord.Color.from_str(color_input)
                     color_str = color_input
                 else:
                     color_map = {"흰색": "#ffffff", "white": "#ffffff", "검정": "#000000", "black": "#000000"}
-                    hex_color = color_map.get(color_input.lower(), color_input)
-                    if not hex_color.startswith("#"):
-                        hex_color = "#" + hex_color
-                    accent_color = discord.Color.from_str(hex_color)
+                    hex_color = color_map.get(color_input.lower(), "#" + color_input.lstrip("#"))
                     color_str = hex_color
+                accent_color = discord.Color.from_str(color_str)
             except:
-                accent_color = discord.Color.from_str("#5865F2")
                 color_str = "#5865F2"
+                accent_color = discord.Color.from_str("#5865F2")
 
-            # 체크된 기능 가져오기
+            # 체크된 기능
             enabled = []
             for checkbox in self.children[3].values:
                 if checkbox.selected:
@@ -279,37 +275,105 @@ class VendingSettingModal(discord.ui.Modal, title="자판기 설정"):
 
             enabled_str = " ".join(enabled) if enabled else "products buy charge info"
 
-            # 서버 DB에 저장
+            # 서버 DB 저장
             safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
             db_path = os.path.join(DB_DIR, f"{safe_name}.db")
 
             with sqlite3.connect(db_path) as conn:
                 c = conn.cursor()
                 c.execute("""
-                    UPDATE info SET 
-                        vending_title = ?,
-                        vending_description = ?,
-                        accent_color = ?,
-                        enabled_features = ?
+                    UPDATE info 
+                    SET vending_title = ?, vending_description = ?, accent_color = ?, enabled_features = ?
                     WHERE guild_id = ?
                 """, (title, description, color_str, enabled_str, str(interaction.guild.id)))
                 conn.commit()
 
             await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="✅ 자판기 설정 저장 완료",
-                    description=f"**제목:** {title}\n**색상:** {color_str}\n**표시 기능:** {', '.join([e.capitalize() for e in enabled]) or '기본값'}",
-                    color=accent_color
-                ),
+                embed=discord.Embed(title="✅ 설정이 저장되었습니다", color=accent_color),
                 ephemeral=True
             )
 
         except Exception as e:
-            print(f"[Modal 저장 오류] {e}")
+            print(f"[Modal 오류] {e}")
             await interaction.response.send_message("설정 저장 중 오류가 발생했습니다.", ephemeral=True)
 
 
-# ── 설정 명령어 ──────────────────────────────────────────
+# ==================== /자판기 명령어 ====================
+@bot.tree.command(name="자판기", description="자판기를 엽니다")
+async def vending_machine(interaction: discord.Interaction):
+    safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
+    db_path = os.path.join(DB_DIR, f"{safe_name}.db")
+
+    if not os.path.exists(db_path):
+        await interaction.response.send_message(
+            view=SimpleLayout("## 등록되지 않은 서버", "먼저 `/등록` 명령어로 서버를 등록해주세요.", discord.Color.red()),
+            ephemeral=True
+        )
+        return
+
+    # 설정 불러오기
+    with sqlite3.connect(db_path) as conn:
+        c = conn.cursor()
+        c.execute("SELECT vending_title, vending_description, accent_color, enabled_features FROM info WHERE guild_id = ?", 
+                  (str(interaction.guild.id),))
+        row = c.fetchone()
+
+    if not row:
+        title = "VOUT 자판기"
+        description = ""
+        color_str = "#5865F2"
+        enabled_features = "products buy charge info"
+    else:
+        title, description, color_str, enabled_features = row
+        if not title:
+            title = "VOUT 자판기"
+        if not color_str:
+            color_str = "#5865F2"
+
+    try:
+        accent_color = discord.Color.from_str(color_str)
+    except:
+        accent_color = discord.Color.from_str("#5865F2")
+
+    enabled = enabled_features.lower().split() if enabled_features else []
+
+    # 자판기 컨테이너 생성
+    view = discord.ui.LayoutView()
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(content=f"## {title}"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        accent_color=accent_color,
+    )
+
+    if description:
+        container.add_item(discord.ui.TextDisplay(content=description))
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+    # 체크된 버튼만 동적으로 추가
+    buttons = []
+    if "products" in enabled or "제품" in enabled:
+        btn = discord.ui.Button(label="제품", style=discord.ButtonStyle.primary, custom_id="vending_products")
+        buttons.append(btn)
+    if "buy" in enabled or "구매" in enabled:
+        btn = discord.ui.Button(label="구매", style=discord.ButtonStyle.success, custom_id="vending_buy")
+        buttons.append(btn)
+    if "charge" in enabled or "충전" in enabled:
+        btn = discord.ui.Button(label="충전", style=discord.ButtonStyle.green, custom_id="vending_charge")
+        buttons.append(btn)
+    if "info" in enabled or "정보" in enabled:
+        btn = discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary, custom_id="vending_info")
+        buttons.append(btn)
+
+    if buttons:
+        action_row = discord.ui.ActionRow(*buttons)
+        container.add_item(action_row)
+
+    view.add_item(container)
+
+    await interaction.response.send_message(view=view, ephemeral=False)
+
+
+# ==================== 설정 명령어 ====================
 @bot.tree.command(name="설정", description="자판기 설정을 관리합니다")
 async def settings(interaction: discord.Interaction):
     safe_name = "".join(c for c in interaction.guild.name if c.isalnum() or c in (" ", "_", "-")).strip()
@@ -341,10 +405,6 @@ async def settings(interaction: discord.Interaction):
     view.add_item(container)
 
     await interaction.response.send_message(view=view, ephemeral=True)
-
-
-# ── 기타 명령어들 (기존 유지) ─────────────────────────────────
-# (라이센스_생성, 라이센스_목록, 라이센스_삭제, 등록 명령어는 그대로 유지)
 
 
 # ── 봇 이벤트 ──────────────────────────────────────────
