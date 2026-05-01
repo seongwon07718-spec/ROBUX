@@ -20,8 +20,17 @@ API_PORT       = 8000
 
 os.makedirs(DB_DIR, exist_ok=True)
 
+class VoutBot(commands.Bot):
+    async def setup_hook(self):
+        # 이전에 guild sync로 등록된 명령어 전부 초기화
+        for guild in self.guilds:
+            self.tree.clear_commands(guild=guild)
+            await self.tree.sync(guild=guild)
+        # 글로벌 명령어만 sync
+        await self.tree.sync()
+
 intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = VoutBot(command_prefix="!", intents=intents)
 api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 pending_charges: dict[str, discord.Interaction] = {}
@@ -1455,12 +1464,6 @@ async def on_ready():
     init_license_db()
     migrate_all()
     print(f"{bot.user} 온라인")
-
-
-# 해외 표준: setup_hook 에서 전역 sync (on_ready 보다 먼저 실행, 안정적)
-@bot.event
-async def setup_hook():
-    await bot.tree.sync()
 
 
 async def main():
