@@ -1454,8 +1454,13 @@ async def health():
 async def on_ready():
     init_license_db()
     migrate_all()
-    await bot.tree.sync()
     print(f"{bot.user} 온라인")
+
+
+# 해외 표준: setup_hook 에서 전역 sync (on_ready 보다 먼저 실행, 안정적)
+@bot.event
+async def setup_hook():
+    await bot.tree.sync()
 
 
 async def main():
