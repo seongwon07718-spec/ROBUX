@@ -14,7 +14,7 @@ ADMIN_IDS      = [1454398431996018724]
 DB_DIR         = "DB"
 LICENSE_DB     = os.path.join(DB_DIR, "라이센스.db")
 WEBHOOK_SECRET = "f1356103e6b861cb00d3c502cb27d9f66bd84880f70d3b98186fdbd5cd1d840c"
-DOMAIN         = "여기에_도메인_입력"
+DOMAIN         = "pay.v0ut.com"
 API_HOST       = "0.0.0.0"
 API_PORT       = 8000
 # ──────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ def _get_color(guild_id: str, db: str) -> discord.Color:
                 return discord.Color.from_str(_hex(row[0]))
     except Exception:
         pass
-    return discord.Color.from_str("#5865F2")
+    return discord.Color.from_str("#373842")
 
 def _get_token(guild_id: str, db: str) -> str | None:
     try:
@@ -111,7 +111,6 @@ def init_license_db():
         con.commit()
 
 def init_guild_db(guild_id: str, guild_name: str) -> str:
-    """진행 버튼 눌렀을 때만 호출 → 그때 서버.db 생성"""
     p = _db_path(guild_name)
     with sqlite3.connect(p) as con:
         con.execute("CREATE TABLE IF NOT EXISTS info(guild_id TEXT PRIMARY KEY, guild_name TEXT)")
@@ -174,15 +173,6 @@ def _make_key() -> str:
 # ══════════════════════════════════════════════════════
 
 def _parse_sms(sms: str) -> tuple[str, int] | None:
-    """
-    [Web발신]
-    [카카오뱅크]
-    정*원(3823)
-    04/27 23:19
-    입금 100원
-    정성원       ← 입금자명
-    잔액 300원
-    """
     if "[카카오뱅크]" not in sms:
         return None
     lines = [l.strip() for l in sms.splitlines() if l.strip()]
@@ -216,7 +206,6 @@ class SimpleLayout(discord.ui.LayoutView):
         ))
 
 def err(msg: str, guild_color: discord.Color | None = None) -> SimpleLayout:
-    """오류 레이아웃 ─ 서버 색상 없으면 빨강"""
     return SimpleLayout("## 오류", f"-# {msg}", guild_color or discord.Color.red())
 
 
@@ -237,12 +226,13 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
                 f"> **라이센스:** `{key}`\n"
                 f"> **서버:** {guild_name}\n"
                 f"> **기간:** {days}일\n"
-                f"> **만료일:** {expires}\n\n"
+                f"> **만료일:** {expires}\n"
                 "이 서버에 등록하시겠습니까?"
             )),
-            accent_color=discord.Color.from_str("#5865F2"),
+            accent_color=discord.Color.from_str("#373842"),
         )
-        btn_ok  = discord.ui.Button(label="진행", style=discord.ButtonStyle.primary)
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        btn_ok  = discord.ui.Button(label="진행", style=discord.ButtonStyle.secondary)
         btn_ok.callback = self._confirm
         btn_no  = discord.ui.Button(label="취소", style=discord.ButtonStyle.secondary)
         btn_no.callback = self._cancel
@@ -280,7 +270,7 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
 
             await interaction.edit_original_response(view=SimpleLayout(
                 "## 서버 등록 완료",
-                f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n`/설정`으로 자판기를 커스터마이징하세요",
+                f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n`/설정`으로 자판기를 설정하세요",
                 discord.Color.green()))
         except Exception as e:
             print(f"[등록 오류] {e}")
@@ -299,7 +289,7 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
 class VendingModal(discord.ui.Modal, title="자판기 설정"):
     t = discord.ui.TextInput(label="자판기 제목",    placeholder="구매하기",  required=True,  max_length=100)
     d = discord.ui.TextInput(label="자판기 설명",    style=discord.TextStyle.long, required=False, max_length=500)
-    c = discord.ui.TextInput(label="색상 (HEX)",    placeholder="#5865F2",   required=True,  max_length=7)
+    c = discord.ui.TextInput(label="색상",    placeholder="#373842",   required=True,  max_length=7)
 
     async def on_submit(self, i: discord.Interaction):
         if not i.guild:
@@ -319,8 +309,8 @@ class VendingModal(discord.ui.Modal, title="자판기 설정"):
                 con.commit()
             gc = discord.Color.from_str(color)
             await i.response.send_message(view=SimpleLayout(
-                "## 설정 저장 완료",
-                f"> **제목:** {title}\n> **색상:** `{color}`",
+                "## 설정 저장 완료", 
+                f"> **제목:** {title}\n> **설명:** {desc or '없음'}\n> **색상:** `{color}`",
                 gc), ephemeral=True)
         except Exception as e:
             print(f"[자판기 설정 오류] {e}")
@@ -332,9 +322,9 @@ class VendingModal(discord.ui.Modal, title="자판기 설정"):
 # ══════════════════════════════════════════════════════
 
 class BankModal(discord.ui.Modal, title="계좌 설정"):
-    bn = discord.ui.TextInput(label="은행명",     placeholder="카카오뱅크", required=True, max_length=20)
-    ac = discord.ui.TextInput(label="계좌번호",   placeholder="3333-01-1234567", required=True, max_length=30)
-    ah = discord.ui.TextInput(label="예금주",     placeholder="홍길동", required=True, max_length=20)
+    bn = discord.ui.TextInput(label="은행명",     placeholder="예) 카카오뱅크", required=True, max_length=20)
+    ac = discord.ui.TextInput(label="계좌번호",   placeholder="예) 10-123-456789", required=True, max_length=30)
+    ah = discord.ui.TextInput(label="예금주",     placeholder="예) 홍길동", required=True, max_length=20)
 
     async def on_submit(self, i: discord.Interaction):
         if not i.guild:
@@ -353,7 +343,7 @@ class BankModal(discord.ui.Modal, title="계좌 설정"):
                 con.commit()
             await i.response.send_message(view=SimpleLayout(
                 "## 계좌 설정 완료",
-                f"> **은행:** {bank}\n> **계좌번호:** `{number}`\n> **예금주:** {holder}",
+                f"> **은행명:** {bank}\n> **계좌번호:** `{number}`\n> **예금주:** {holder}",
                 gc), ephemeral=True)
         except Exception as e:
             print(f"[계좌 설정 오류] {e}")
@@ -365,8 +355,8 @@ class BankModal(discord.ui.Modal, title="계좌 설정"):
 # ══════════════════════════════════════════════════════
 
 class ChargeSettingModal(discord.ui.Modal, title="충전 설정"):
-    mi = discord.ui.TextInput(label="최소 충전금액 (원)", placeholder="1000", required=True, max_length=10)
-    un = discord.ui.TextInput(label="충전 단위 (원)",     placeholder="1000", required=True, max_length=10)
+    mi = discord.ui.TextInput(label="최소 충전금액 (원)", placeholder="예) 1000", required=True, max_length=10)
+    un = discord.ui.TextInput(label="충전 단위 (원)",     placeholder="예) 1000", required=True, max_length=10)
 
     async def on_submit(self, i: discord.Interaction):
         if not i.guild:
@@ -401,8 +391,8 @@ class ChargeSettingModal(discord.ui.Modal, title="충전 설정"):
 # ══════════════════════════════════════════════════════
 
 class TransferModal(discord.ui.Modal, title="계좌이체 충전"):
-    dep = discord.ui.TextInput(label="입금자명",        placeholder="입금 시 사용할 이름", required=True, max_length=20)
-    amt = discord.ui.TextInput(label="충전 금액 (원)",  placeholder="10000",              required=True, max_length=10)
+    dep = discord.ui.TextInput(label="입금자명",        placeholder="예) 홍길동", required=True, max_length=20)
+    amt = discord.ui.TextInput(label="충전 금액 (원)",  placeholder="예) 10000",              required=True, max_length=10)
 
     def __init__(self, guild_id: str, guild_name: str):
         super().__init__()
@@ -450,7 +440,7 @@ class TransferModal(discord.ui.Modal, title="계좌이체 충전"):
         with sqlite3.connect(db) as con:
             if con.execute("SELECT charge_id FROM charge_pending WHERE user_id=? AND status='pending'",
                            (str(i.user.id),)).fetchone():
-                await i.response.send_message(view=err("이미 진행 중인 충전 요청이 있습니다\n-# 5분 후 자동 취소됩니다"), ephemeral=True); return
+                await i.response.send_message(view=err("-# 진행 중인 충전 요청이 있습니다\n-# 5분 후에 다시 신청해주세요"), ephemeral=True); return
 
         now     = datetime.now()
         expires = now + timedelta(minutes=5)
@@ -469,14 +459,17 @@ class TransferModal(discord.ui.Modal, title="계좌이체 충전"):
             discord.ui.TextDisplay(content="## 계좌 안내"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content=(
-                f"> **은행:** {bank}\n"
+                f"> **은행명:** {bank}\n"
                 f"> **계좌번호:** `{acnum}`\n"
-                f"> **예금주:** {holder}\n"
+                f"> **예금주:** {holder}\n\n"
                 f"> **입금금액:** {amount:,}원\n"
                 f"> **입금자명:** {depositor}\n"
-                f"> **만료시각:** {expires.strftime('%H:%M:%S')} (5분)\n\n"
-                "입금자명을 정확히 입력 후 이체해주세요\n"
-                "-# 5분 내 입금이 확인되지 않으면 자동 취소됩니다"
+                f"> **만료시각:** {expires.strftime('%H:%M:%S')} (5분)"
+            )),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content=(
+                "-# 입금자명을 정확히 입력 후 이체해주세요\n"
+                "-# 5분 내 입금이 확인되지 않으면 취소됩니다"
             )),
             accent_color=gc,
         ))
@@ -509,7 +502,7 @@ async def _charge_timeout(cid: str, db: str, i: discord.Interaction, gc: discord
         view.add_item(discord.ui.Container(
             discord.ui.TextDisplay(content="## 충전 취소"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content="5분 내 입금이 확인되지 않아 충전이 취소되었습니다\n-# 다시 충전하려면 충전 버튼을 눌러주세요"),
+            discord.ui.TextDisplay(content="-# 입금이 확인되지 않아 충전이 취소되었습니다\n-# 다시 충전하려면 충전 버튼을 눌러주세요"),
             accent_color=discord.Color.red(),
         ))
         await i.edit_original_response(view=view)
@@ -569,8 +562,11 @@ async def _complete_charge(cid: str, depositor: str, amount: int, guild_id: str,
                 discord.ui.TextDisplay(content="## 충전 완료"),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(content=(
-                    f"> **충전금액:** {amount:,}원\n"
-                    f"> **보유 포인트:** {new_pts:,}원\n"
+                    f"> **충전 금액:** {amount:,}원\n"
+                    f"> **보유 잔액:** {new_pts:,}원"
+                )),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(content=(
                     f"-# 처리시각: {now}"
                 )),
                 accent_color=gc,
@@ -605,13 +601,18 @@ async def _issue_token(i: discord.Interaction):
     if existing:
         view = discord.ui.LayoutView()
         container = discord.ui.Container(
-            discord.ui.TextDisplay(content="## 단축어 토큰"),
+            discord.ui.TextDisplay(content="## IOS 자충 토큰"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content=(
-                f"> **토큰:** `{existing}`\n\n"
-                "이미 발급된 토큰이 있습니다\n"
-                "-# 재발급하면 기존 토큰은 무효화됩니다"
+                f"> **토큰:** `{existing}`"
             )),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content=(
+                "-# 이미 발급된 토큰이 있습니다\n"
+                "-# 재발급하면 기존 토큰은 무효화됩니다\n"
+                "-# 본인 외에는 절대 공유하지 마세요"
+            )),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             accent_color=gc,
         )
         btn = discord.ui.Button(label="재발급", style=discord.ButtonStyle.danger,
@@ -626,9 +627,9 @@ async def _issue_token(i: discord.Interaction):
             con.commit()
         view = discord.ui.LayoutView()
         view.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(content="## 단축어 토큰 발급"),
+            discord.ui.TextDisplay(content="## IOS 자충 토큰"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content=f"> **토큰:** `{tok}`\n\n-# 절대 외부에 공유하지 마세요"),
+            discord.ui.TextDisplay(content=f"> **토큰:** `{tok}`"),
             accent_color=gc,
         ))
         await i.response.send_message(view=view, ephemeral=True)
@@ -657,7 +658,7 @@ async def cmd_vending(i: discord.Interaction):
     title, desc, color_s, features = row
     title    = _clean(title  or "구매하기", 100)
     desc     = _clean(desc   or "아래 버튼을 눌러 이용해주세요", 500)
-    color_s  = _hex(color_s  or "#5865F2")
+    color_s  = _hex(color_s  or "#373842")
     gc       = discord.Color.from_str(color_s)
     enabled  = features.split() if features else []
 
@@ -679,13 +680,13 @@ async def cmd_vending(i: discord.Interaction):
 
     btns = []
     if "구매" in enabled:
-        btns.append(discord.ui.Button(label="구매", style=discord.ButtonStyle.secondary, custom_id="vend_buy"))
+        btns.append(discord.ui.Button(label="구매", style=discord.ButtonStyle.secondary, custom_id="vend_buy", emoji="<:emoji_48:1498298170281558058>"))
     if "제품" in enabled:
-        btns.append(discord.ui.Button(label="제품", style=discord.ButtonStyle.secondary, custom_id="vend_products"))
+        btns.append(discord.ui.Button(label="제품", style=discord.ButtonStyle.secondary, custom_id="vend_products", emoji="<:emoji_46:1498296760483709029>"))
     if "충전" in enabled:
-        btns.append(discord.ui.Button(label="충전", style=discord.ButtonStyle.secondary, custom_id="vend_charge"))
+        btns.append(discord.ui.Button(label="충전", style=discord.ButtonStyle.secondary, custom_id="vend_charge", emoji="<:emoji_46:1498297238630305903>"))
     if "정보" in enabled:
-        btns.append(discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary, custom_id="vend_info"))
+        btns.append(discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary, custom_id="vend_info", emoji="<:emoji_47:1498298137406738483>"))
     if btns:
         container.add_item(discord.ui.ActionRow(*btns))
     view.add_item(container)
@@ -712,17 +713,17 @@ async def cmd_settings(i: discord.Interaction):
     gc = _get_color(str(i.guild.id), db)
     view = discord.ui.LayoutView()
     container = discord.ui.Container(
-        discord.ui.TextDisplay(content="## 설정"),
+        discord.ui.TextDisplay(content="## 설정하기"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(content="설정할 항목을 선택하세요"),
+        discord.ui.TextDisplay(content="아래 드롭바를 눌러 설정할 항목을 선택하세요"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         accent_color=gc,
     )
-    sel = discord.ui.Select(placeholder="항목 선택", options=[
-        discord.SelectOption(label="자판기 설정",    value="vending",  description="제목, 설명, 색상"),
-        discord.SelectOption(label="계좌 설정",      value="bank",     description="은행명, 계좌번호, 예금주"),
-        discord.SelectOption(label="충전 설정",      value="charge",   description="최소 충전금액, 충전 단위"),
-        discord.SelectOption(label="단축어 토큰 발급", value="token",  description="카카오뱅크 단축어용 토큰"),
+    sel = discord.ui.Select(placeholder="설정할 항목 선택해주세요", options=[
+        discord.SelectOption(label="자판기 설정",    value="vending"),
+        discord.SelectOption(label="계좌 설정",      value="bank"),
+        discord.SelectOption(label="충전 설정",      value="charge"),
+        discord.SelectOption(label="IOS 자충 토큰", value="token"),
     ])
     async def _sel(si: discord.Interaction):
         if si.guild_id != i.guild_id:
@@ -759,17 +760,17 @@ async def on_interaction(i: discord.Interaction):
             row = con.execute("SELECT bank_name,account_number FROM info WHERE guild_id=?",
                               (str(i.guild.id),)).fetchone()
         if not row or not row[0] or not row[1]:
-            await i.response.send_message(view=err("계좌 정보가 설정되지 않았습니다\n-# 관리자에게 문의하세요"), ephemeral=True); return
+            await i.response.send_message(view=err("-# 계좌 정보가 설정되지 않았습니다\n-# 관리자에게 문의하세요"), ephemeral=True); return
 
         view = discord.ui.LayoutView()
         container = discord.ui.Container(
-            discord.ui.TextDisplay(content="## 충전"),
+            discord.ui.TextDisplay(content="## 결제수단"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content="충전 방법을 선택하세요"),
+            discord.ui.TextDisplay(content="아래 버튼을 눌러 충전 방법을 선택하세요"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             accent_color=gc,
         )
-        btn = discord.ui.Button(label="계좌이체", style=discord.ButtonStyle.primary, custom_id="vend_transfer")
+        btn = discord.ui.Button(label="계좌이체 (account)", style=discord.ButtonStyle.secondary, custom_id="vend_transfer")
         container.add_item(discord.ui.ActionRow(btn))
         view.add_item(container)
         await i.response.send_message(view=view, ephemeral=True)
@@ -787,9 +788,9 @@ async def on_interaction(i: discord.Interaction):
             con.commit()
         view = discord.ui.LayoutView()
         view.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(content="## 토큰 재발급 완료"),
+            discord.ui.TextDisplay(content="## IOS 자충 토큰 재발급"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content=f"> **새 토큰:** `{tok}`\n\n-# 기존 토큰은 즉시 무효화됩니다"),
+            discord.ui.TextDisplay(content=f"> **새 토큰:** `{tok}`"),
             accent_color=gc,
         ))
         await i.response.edit_message(view=view)
@@ -835,10 +836,10 @@ async def cmd_create_license(i: discord.Interaction, 기간: app_commands.Choice
     view.add_item(discord.ui.Container(
         discord.ui.TextDisplay(content="## 라이센스 생성 완료"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(content=f"{수량}개 생성되었습니다"),
+        discord.ui.TextDisplay(content=f"{수량}개가 데이터베이스에 저장되었습니다"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         discord.ui.File(f"attachment://{fname}"),
-        accent_color=discord.Color.green(),
+        accent_color=0x373842,
     ))
     await i.followup.send(view=view, file=f, ephemeral=True)
 
@@ -872,10 +873,10 @@ async def cmd_list_license(i: discord.Interaction, 필터: app_commands.Choice[s
     view.add_item(discord.ui.Container(
         discord.ui.TextDisplay(content=f"## 라이센스 목록 [{fl}]"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(content=f"총 {len(rows)}개"),
+        discord.ui.TextDisplay(content=f"총 {len(rows)}개의 라이센스가 조회되었습니다"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         discord.ui.File(f"attachment://{fname}"),
-        accent_color=discord.Color.from_str("#5865F2"),
+        accent_color=discord.Color.from_str("#373842"),
     ))
     await i.followup.send(view=view, file=f, ephemeral=True)
 
@@ -898,7 +899,7 @@ async def cmd_del_license(i: discord.Interaction, 키: str):
     await i.response.send_message(view=SimpleLayout(
         "## 라이센스 삭제 완료",
         f"> **키:** `{key}`\n> **기간:** {days}일\n> **상태:** {st}",
-        discord.Color.from_str("#5865F2")), ephemeral=True)
+        discord.Color.from_str("#373842")), ephemeral=True)
 
 
 @bot.tree.command(name="등록", description="서버를 등록합니다")
@@ -1009,7 +1010,6 @@ async def shortcut_guide(token: str, guild_id: str, req: Request):
             f"4. URL: https://{DOMAIN}/webhook/sms",
             "5. 방법: POST  /  Content-Type: application/json",
             f'6. 본문: {{"token":"{token}","guild_id":"{guild_id}","sms_body":"[수신된 메시지 내용]"}}',
-            "7. 백그라운드 실행 활성화 / 실행 전 묻기 비활성화",
         ]
     }
 
