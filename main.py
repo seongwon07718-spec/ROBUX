@@ -1641,10 +1641,97 @@ async def health():
 # 봇 이벤트 + 통합 실행
 # ══════════════════════════════════════════════════════
 
+def migrate_all_guild_dbs():
+    """기존 서버.db에 누락된 테이블/컬럼 자동 추가"""
+    if not os.path.exists(DB_DIR):
+        return
+    for fname in os.listdir(DB_DIR):
+        if not fname.endswith(".db") or fname == "라이센스.db":
+            continue
+        p = os.path.join(DB_DIR, fname)
+        try:
+            with sqlite3.connect(p) as con:
+                # categories 테이블
+                con.execute("""CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL)""")
+                # products 테이블
+                con.execute("""CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT NOT NULL,
+                    category_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    price INTEGER NOT NULL,
+                    stock INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(category_id) REFERENCES categories(id))""")
+                # purchase_history 테이블
+                con.execute("""CREATE TABLE IF NOT EXISTS purchase_history(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    username TEXT,
+                    product_id INTEGER,
+                    name TEXT,
+                    price INTEGER,
+                    qty INTEGER,
+                    created_at TEXT NOT NULL)""")
+                # charge_history guild_id 컬럼
+                try:
+                    con.execute("ALTER TABLE charge_history ADD COLUMN guild_id TEXT")
+                except sqlite3.OperationalError:
+                    pass
+                # users total_buy 컬럼
+                try:
+                    con.execute("ALTER TABLE users ADD COLUMN total_buy INTEGER DEFAULT 0")
+                except sqlite3.OperationalError:
+                    pass
+                # shortcut_token 컬럼
+                try:
+                    con.execute("ALTER TABLE info ADD COLUMN shortcut_token TEXT")
+                except sqlite3.OperationalError:
+                    pass
+                con.commit()
+            print(f"[마이그레이션 완료] {fname}")
+        except Exception as e:
+            print(f"[마이그레이션 오류] {fname}: {e}")
+
+
+class PersistentVendingView(discord.ui.View):
+    """봇 재시작 후에도 자판기 버튼 작동"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="구매", style=discord.ButtonStyle.secondary, custom_id="vend_buy")
+    async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass  # on_interaction에서 처리
+
+    @discord.ui.button(label="제품", style=discord.ButtonStyle.secondary, custom_id="vend_products")
+    async def products(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(label="충전", style=discord.ButtonStyle.secondary, custom_id="vend_charge")
+    async def charge(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(label="정보", style=discord.ButtonStyle.secondary, custom_id="vend_info")
+    async def info(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(label="계좌이체 (account)", style=discord.ButtonStyle.secondary, custom_id="vend_transfer")
+    async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+
 @bot.event
 async def on_ready():
     init_license_db()
+    migrate_all_guild_dbs()
     bot.add_view(RegisterConfirmLayout("", 0, "", ""))
+    bot.add_view(PersistentVendingView())
     await bot.tree.sync()
     print(f"{bot.user} 온라인")
 
