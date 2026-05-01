@@ -17,7 +17,6 @@ WEBHOOK_SECRET = "f1356103e6b861cb00d3c502cb27d9f66bd84880f70d3b98186fdbd5cd1d84
 DOMAIN         = "pay.v0ut.com"
 API_HOST       = "0.0.0.0"
 API_PORT       = 8000
-# ──────────────────────────────────────────────────────
 
 os.makedirs(DB_DIR, exist_ok=True)
 
@@ -57,7 +56,7 @@ def _db_path_by_id(guild_id: str) -> str | None:
 
 def _hex(s: str) -> str:
     s = s.strip().lstrip("#")
-    return f"#{s}" if re.fullmatch(r"[0-9A-Fa-f]{6}", s) else "#5865F2"
+    return f"#{s}" if re.fullmatch(r"[0-9A-Fa-f]{6}", s) else "#373842"
 
 def _clean(s: str, n: int = 500) -> str:
     return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", s).strip()[:n]
@@ -97,6 +96,9 @@ def _get_token(guild_id: str, db: str) -> str | None:
     except Exception:
         return None
 
+def _sep() -> discord.ui.Separator:
+    return discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+
 
 # ══════════════════════════════════════════════════════
 # DB 초기화
@@ -111,6 +113,7 @@ def init_license_db():
         con.commit()
 
 def init_guild_db(guild_id: str, guild_name: str) -> str:
+    """진행 버튼 눌렀을 때만 호출 → 서버.db 생성"""
     p = _db_path(guild_name)
     with sqlite3.connect(p) as con:
         con.execute("CREATE TABLE IF NOT EXISTS info(guild_id TEXT PRIMARY KEY, guild_name TEXT)")
@@ -118,7 +121,7 @@ def init_guild_db(guild_id: str, guild_name: str) -> str:
             ("license_key","TEXT"), ("registered_at","TEXT"), ("expires_at","TEXT"),
             ("vending_title","TEXT DEFAULT '구매하기'"),
             ("vending_description","TEXT DEFAULT '아래 버튼을 눌러 이용해주세요'"),
-            ("accent_color","TEXT DEFAULT '#5865F2'"),
+            ("accent_color","TEXT DEFAULT '#373842'"),
             ("enabled_features","TEXT DEFAULT '제품 구매 충전 정보'"),
             ("bank_name","TEXT DEFAULT ''"), ("account_number","TEXT DEFAULT ''"),
             ("account_holder","TEXT DEFAULT ''"),
@@ -129,21 +132,67 @@ def init_guild_db(guild_id: str, guild_name: str) -> str:
                 con.execute(f"ALTER TABLE info ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
                 pass
+
         con.execute("""CREATE TABLE IF NOT EXISTS users(
-            user_id TEXT PRIMARY KEY, username TEXT, points INTEGER DEFAULT 0, created_at TEXT)""")
+            user_id    TEXT PRIMARY KEY,
+            username   TEXT,
+            points     INTEGER DEFAULT 0,
+            total_buy  INTEGER DEFAULT 0,
+            created_at TEXT)""")
+
         con.execute("""CREATE TABLE IF NOT EXISTS charge_pending(
-            charge_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, username TEXT,
-            depositor TEXT NOT NULL, amount INTEGER NOT NULL,
-            status TEXT DEFAULT 'pending', created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
-            completed_at TEXT, channel_id TEXT, message_id TEXT)""")
+            charge_id  TEXT PRIMARY KEY,
+            user_id    TEXT NOT NULL,
+            username   TEXT,
+            depositor  TEXT NOT NULL,
+            amount     INTEGER NOT NULL,
+            status     TEXT DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            completed_at TEXT,
+            channel_id TEXT,
+            message_id TEXT)""")
+
         con.execute("""CREATE TABLE IF NOT EXISTS charge_history(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, charge_id TEXT, user_id TEXT,
-            username TEXT, depositor TEXT, amount INTEGER, status TEXT,
-            created_at TEXT, completed_at TEXT)""")
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id     TEXT NOT NULL,
+            charge_id    TEXT,
+            user_id      TEXT,
+            username     TEXT,
+            depositor    TEXT,
+            amount       INTEGER,
+            status       TEXT,
+            created_at   TEXT,
+            completed_at TEXT)""")
+
+        con.execute("""CREATE TABLE IF NOT EXISTS categories(
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id   TEXT NOT NULL,
+            name       TEXT NOT NULL,
+            created_at TEXT NOT NULL)""")
+
         con.execute("""CREATE TABLE IF NOT EXISTS products(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-            price INTEGER NOT NULL, stock INTEGER NOT NULL,
-            content TEXT NOT NULL, created_at TEXT NOT NULL)""")
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id    TEXT NOT NULL,
+            category_id INTEGER NOT NULL,
+            name        TEXT NOT NULL,
+            price       INTEGER NOT NULL,
+            stock       INTEGER NOT NULL,
+            content     TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            FOREIGN KEY(category_id) REFERENCES categories(id))""")
+
+        con.execute("""CREATE TABLE IF NOT EXISTS purchase_history(
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id   TEXT NOT NULL,
+            user_id    TEXT NOT NULL,
+            username   TEXT,
+            product_id INTEGER,
+            name       TEXT,
+            price      INTEGER,
+            qty        INTEGER,
+            created_at TEXT NOT NULL)""")
+
         con.commit()
     return p
 
@@ -176,15 +225,15 @@ def _parse_sms(sms: str) -> tuple[str, int] | None:
     if "[카카오뱅크]" not in sms:
         return None
     lines = [l.strip() for l in sms.splitlines() if l.strip()]
-    for i, line in enumerate(lines):
+    for idx, line in enumerate(lines):
         m = re.search(r"입금\s+([\d,]+)원", line)
         if m:
             try:
                 amt = int(m.group(1).replace(",", ""))
             except ValueError:
                 return None
-            if i + 1 < len(lines):
-                dep = lines[i + 1]
+            if idx + 1 < len(lines):
+                dep = lines[idx + 1]
                 if not re.search(r"잔액", dep) and re.fullmatch(r"[가-힣a-zA-Z0-9]{1,20}", dep):
                     if 0 < amt <= 10_000_000:
                         return dep, amt
@@ -192,7 +241,7 @@ def _parse_sms(sms: str) -> tuple[str, int] | None:
 
 
 # ══════════════════════════════════════════════════════
-# Components V2 ─ SimpleLayout (색상 파라미터)
+# Components V2
 # ══════════════════════════════════════════════════════
 
 class SimpleLayout(discord.ui.LayoutView):
@@ -200,74 +249,68 @@ class SimpleLayout(discord.ui.LayoutView):
         super().__init__()
         self.add_item(discord.ui.Container(
             discord.ui.TextDisplay(content=title),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content=body),
             accent_color=color,
         ))
 
-def err(msg: str, guild_color: discord.Color | None = None) -> SimpleLayout:
-    return SimpleLayout("## 오류", f"-# {msg}", guild_color or discord.Color.red())
+def err(msg: str, gc: discord.Color | None = None) -> SimpleLayout:
+    return SimpleLayout("## 오류", f"-# {msg}", gc or discord.Color.red())
 
 
 # ══════════════════════════════════════════════════════
-# 등록 확인 Layout
+# 등록 확인
 # ══════════════════════════════════════════════════════
 
 class RegisterConfirmLayout(discord.ui.LayoutView):
     def __init__(self, key: str, days: int, expires: str, guild_name: str):
         super().__init__(timeout=None)
         self.license_key = key
-        self.days = days
-        self.expires = expires
+        self.days        = days
+        self.expires     = expires
         container = discord.ui.Container(
             discord.ui.TextDisplay(content="## 서버 등록 확인"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content=(
                 f"> **라이센스:** `{key}`\n"
                 f"> **서버:** {guild_name}\n"
                 f"> **기간:** {days}일\n"
-                f"> **만료일:** {expires}\n"
+                f"> **만료일:** {expires}\n\n"
                 "이 서버에 등록하시겠습니까?"
             )),
             accent_color=discord.Color.from_str("#373842"),
         )
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        btn_ok  = discord.ui.Button(label="진행", style=discord.ButtonStyle.secondary)
+        btn_ok = discord.ui.Button(label="진행", style=discord.ButtonStyle.secondary)
         btn_ok.callback = self._confirm
-        btn_no  = discord.ui.Button(label="취소", style=discord.ButtonStyle.secondary)
+        btn_no = discord.ui.Button(label="취소", style=discord.ButtonStyle.secondary)
         btn_no.callback = self._cancel
         container.add_item(discord.ui.ActionRow(btn_ok, btn_no))
         self.add_item(container)
 
     async def _confirm(self, interaction: discord.Interaction):
         if not interaction.guild:
-            await interaction.response.send_message("서버에서만 사용 가능합니다", ephemeral=True)
-            return
+            await interaction.response.send_message("서버에서만 사용 가능합니다", ephemeral=True); return
         await interaction.response.defer(ephemeral=True)
         try:
             with sqlite3.connect(LICENSE_DB) as con:
                 row = con.execute("SELECT used FROM licenses WHERE key=?", (self.license_key,)).fetchone()
                 if not row or row[0]:
-                    await interaction.edit_original_response(view=err("이미 사용된 라이센스입니다"))
-                    return
+                    await interaction.edit_original_response(view=err("이미 사용된 라이센스입니다")); return
                 now   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 guild = interaction.guild
                 con.execute(
                     "UPDATE licenses SET used=1,guild_id=?,guild_name=?,expires_at=? WHERE key=? AND used=0",
                     (str(guild.id), guild.name[:100], self.expires, self.license_key))
                 if con.execute("SELECT changes()").fetchone()[0] == 0:
-                    await interaction.edit_original_response(view=err("이미 사용된 라이센스입니다"))
-                    return
+                    await interaction.edit_original_response(view=err("이미 사용된 라이센스입니다")); return
                 con.commit()
-
-            # ← 진행 버튼 눌렀을 때 서버.db 생성
+            # ← 진행 버튼 눌렀을 때만 서버.db 생성
             db = init_guild_db(str(guild.id), guild.name)
             with sqlite3.connect(db) as con:
                 con.execute(
                     "INSERT OR REPLACE INTO info(guild_id,guild_name,license_key,registered_at,expires_at) VALUES(?,?,?,?,?)",
                     (str(guild.id), guild.name[:100], self.license_key, now, self.expires))
                 con.commit()
-
             await interaction.edit_original_response(view=SimpleLayout(
                 "## 서버 등록 완료",
                 f"> **서버:** {guild.name}\n> **기간:** {self.days}일\n> **만료일:** {self.expires}\n\n`/설정`으로 자판기를 설정하세요",
@@ -287,9 +330,9 @@ class RegisterConfirmLayout(discord.ui.LayoutView):
 # ══════════════════════════════════════════════════════
 
 class VendingModal(discord.ui.Modal, title="자판기 설정"):
-    t = discord.ui.TextInput(label="자판기 제목",    placeholder="구매하기",  required=True,  max_length=100)
-    d = discord.ui.TextInput(label="자판기 설명",    style=discord.TextStyle.long, required=False, max_length=500)
-    c = discord.ui.TextInput(label="색상",    placeholder="#373842",   required=True,  max_length=7)
+    t = discord.ui.TextInput(label="자판기 제목", placeholder="구매하기", required=True, max_length=100)
+    d = discord.ui.TextInput(label="자판기 설명", style=discord.TextStyle.long, required=False, max_length=500)
+    c = discord.ui.TextInput(label="색상", placeholder="#373842", required=True, max_length=7)
 
     async def on_submit(self, i: discord.Interaction):
         if not i.guild:
@@ -309,7 +352,7 @@ class VendingModal(discord.ui.Modal, title="자판기 설정"):
                 con.commit()
             gc = discord.Color.from_str(color)
             await i.response.send_message(view=SimpleLayout(
-                "## 설정 저장 완료", 
+                "## 설정 저장 완료",
                 f"> **제목:** {title}\n> **설명:** {desc or '없음'}\n> **색상:** `{color}`",
                 gc), ephemeral=True)
         except Exception as e:
@@ -322,9 +365,9 @@ class VendingModal(discord.ui.Modal, title="자판기 설정"):
 # ══════════════════════════════════════════════════════
 
 class BankModal(discord.ui.Modal, title="계좌 설정"):
-    bn = discord.ui.TextInput(label="은행명",     placeholder="예) 카카오뱅크", required=True, max_length=20)
-    ac = discord.ui.TextInput(label="계좌번호",   placeholder="예) 10-123-456789", required=True, max_length=30)
-    ah = discord.ui.TextInput(label="예금주",     placeholder="예) 홍길동", required=True, max_length=20)
+    bn = discord.ui.TextInput(label="은행명",   placeholder="예) 카카오뱅크",    required=True, max_length=20)
+    ac = discord.ui.TextInput(label="계좌번호", placeholder="예) 10-123-456789", required=True, max_length=30)
+    ah = discord.ui.TextInput(label="예금주",   placeholder="예) 홍길동",         required=True, max_length=20)
 
     async def on_submit(self, i: discord.Interaction):
         if not i.guild:
@@ -387,16 +430,214 @@ class ChargeSettingModal(discord.ui.Modal, title="충전 설정"):
 
 
 # ══════════════════════════════════════════════════════
+# Modal ─ 카테고리 추가
+# ══════════════════════════════════════════════════════
+
+class AddCategoryModal(discord.ui.Modal, title="카테고리 추가"):
+    name = discord.ui.TextInput(label="카테고리 이름", placeholder="예) 로블록스 아이템", required=True, max_length=30)
+
+    def __init__(self, guild_id: str, guild_name: str):
+        super().__init__()
+        self.gid   = guild_id
+        self.gname = guild_name
+
+    async def on_submit(self, i: discord.Interaction):
+        if not i.guild or str(i.guild.id) != self.gid:
+            await i.response.send_message("잘못된 접근입니다", ephemeral=True); return
+        name = _clean(self.name.value, 30)
+        if not name:
+            await i.response.send_message(view=err("이름을 입력해주세요"), ephemeral=True); return
+        try:
+            db = _db_path(self.gname)
+            gc = _get_color(self.gid, db)
+            with sqlite3.connect(db) as con:
+                if con.execute("SELECT 1 FROM categories WHERE guild_id=? AND name=?",
+                               (self.gid, name)).fetchone():
+                    await i.response.send_message(view=err("이미 존재하는 카테고리 이름입니다"), ephemeral=True); return
+                con.execute("INSERT INTO categories(guild_id,name,created_at) VALUES(?,?,?)",
+                            (self.gid, name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+            await i.response.send_message(view=SimpleLayout(
+                "## 카테고리 추가 완료",
+                f"> **카테고리:** {name}\n-# /설정 > 상품 관리에서 제품을 추가할 수 있습니다",
+                gc), ephemeral=True)
+        except Exception as e:
+            print(f"[카테고리 추가 오류] {e}")
+            await i.response.send_message(view=err("저장 중 문제가 발생했습니다"), ephemeral=True)
+
+
+# ══════════════════════════════════════════════════════
+# Modal ─ 제품 추가
+# ══════════════════════════════════════════════════════
+
+class AddProductModal(discord.ui.Modal, title="제품 추가"):
+    pname   = discord.ui.TextInput(label="제품명",      placeholder="예) 로블록스 100R", required=True, max_length=50)
+    price   = discord.ui.TextInput(label="가격 (원)",   placeholder="예) 5000",          required=True, max_length=10)
+    stock   = discord.ui.TextInput(label="재고 수량",   placeholder="예) 10",            required=True, max_length=6)
+    content = discord.ui.TextInput(label="제품 내용물", style=discord.TextStyle.long,
+                                   placeholder="구매 시 전달할 내용 (코드/계정 등)", required=True, max_length=1000)
+
+    def __init__(self, guild_id: str, guild_name: str, cat_id: int):
+        super().__init__()
+        self.gid    = guild_id
+        self.gname  = guild_name
+        self.cat_id = cat_id
+
+    async def on_submit(self, i: discord.Interaction):
+        if not i.guild or str(i.guild.id) != self.gid:
+            await i.response.send_message("잘못된 접근입니다", ephemeral=True); return
+        name    = _clean(self.pname.value, 50)
+        content = _clean(self.content.value, 1000)
+        try:
+            price = int(re.sub(r"[^0-9]", "", self.price.value))
+            stock = int(re.sub(r"[^0-9]", "", self.stock.value))
+        except ValueError:
+            await i.response.send_message(view=err("가격과 재고는 숫자만 입력 가능합니다"), ephemeral=True); return
+        if not (1 <= price <= 100_000_000):
+            await i.response.send_message(view=err("가격은 1원 이상 1억원 이하여야 합니다"), ephemeral=True); return
+        if not (1 <= stock <= 9999):
+            await i.response.send_message(view=err("재고는 1개 이상 9,999개 이하여야 합니다"), ephemeral=True); return
+        try:
+            db = _db_path(self.gname)
+            gc = _get_color(self.gid, db)
+            with sqlite3.connect(db) as con:
+                if not con.execute("SELECT 1 FROM categories WHERE id=? AND guild_id=?",
+                                   (self.cat_id, self.gid)).fetchone():
+                    await i.response.send_message(view=err("카테고리를 찾을 수 없습니다"), ephemeral=True); return
+                con.execute(
+                    "INSERT INTO products(guild_id,category_id,name,price,stock,content,created_at) VALUES(?,?,?,?,?,?,?)",
+                    (self.gid, self.cat_id, name, price, stock, content,
+                     datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+            await i.response.send_message(view=SimpleLayout(
+                "## 제품 추가 완료",
+                f"> **제품명:** {name}\n> **가격:** {price:,}원\n> **재고:** {stock}개",
+                gc), ephemeral=True)
+        except Exception as e:
+            print(f"[제품 추가 오류] {e}")
+            await i.response.send_message(view=err("저장 중 문제가 발생했습니다"), ephemeral=True)
+
+
+# ══════════════════════════════════════════════════════
+# Modal ─ 구매 수량
+# ══════════════════════════════════════════════════════
+
+class BuyQtyModal(discord.ui.Modal, title="구매 수량"):
+    qty = discord.ui.TextInput(label="수량", placeholder="예) 1", required=True, max_length=4)
+
+    def __init__(self, guild_id: str, guild_name: str, prod_id: int):
+        super().__init__()
+        self.gid    = guild_id
+        self.gname  = guild_name
+        self.pid    = prod_id
+
+    async def on_submit(self, i: discord.Interaction):
+        if not i.guild or str(i.guild.id) != self.gid:
+            await i.response.send_message("잘못된 접근입니다", ephemeral=True); return
+        try:
+            qty = int(re.sub(r"[^0-9]", "", self.qty.value))
+        except ValueError:
+            await i.response.send_message(view=err("숫자만 입력 가능합니다"), ephemeral=True); return
+        if qty < 1:
+            await i.response.send_message(view=err("수량은 1개 이상이어야 합니다"), ephemeral=True); return
+
+        try:
+            db = _db_path(self.gname)
+            gc = _get_color(self.gid, db)
+            with sqlite3.connect(db) as con:
+                prod = con.execute(
+                    "SELECT name,price,stock,content FROM products WHERE id=? AND guild_id=?",
+                    (self.pid, self.gid)).fetchone()
+        except Exception as e:
+            print(f"[구매 수량 DB 오류] {e}")
+            await i.response.send_message(view=err("제품 정보를 불러올 수 없습니다"), ephemeral=True); return
+
+        if not prod:
+            await i.response.send_message(view=err("제품을 찾을 수 없습니다"), ephemeral=True); return
+
+        name, price, stock, content = prod
+
+        if stock <= 0:
+            await i.response.send_message(view=err(f"**{name}** 은 품절된 상품입니다"), ephemeral=True); return
+        if qty > stock:
+            await i.response.send_message(view=err(f"재고가 부족합니다\n-# 현재 재고: {stock}개"), ephemeral=True); return
+        if qty > 99:
+            await i.response.send_message(view=err("1회 최대 구매 수량은 99개입니다"), ephemeral=True); return
+
+        total = price * qty
+
+        with sqlite3.connect(db) as con:
+            pts_row = con.execute("SELECT points FROM users WHERE user_id=?", (str(i.user.id),)).fetchone()
+            points  = pts_row[0] if pts_row else 0
+
+        if points < total:
+            await i.response.send_message(view=err(
+                f"잔액이 부족합니다\n-# 필요 금액: {total:,}원 / 보유 잔액: {points:,}원"), ephemeral=True); return
+
+        # 구매 처리 (atomic)
+        await i.response.defer(ephemeral=True)
+        try:
+            with sqlite3.connect(db) as con:
+                con.execute("UPDATE products SET stock=stock-? WHERE id=? AND guild_id=? AND stock>=?",
+                            (qty, self.pid, self.gid, qty))
+                if con.execute("SELECT changes()").fetchone()[0] == 0:
+                    await i.edit_original_response(view=err("재고가 변경되었습니다\n-# 다시 시도해주세요")); return
+
+                con.execute("UPDATE users SET points=points-?,total_buy=total_buy+? WHERE user_id=?",
+                            (total, total, str(i.user.id)))
+                new_pts = con.execute("SELECT points FROM users WHERE user_id=?", (str(i.user.id),)).fetchone()[0]
+
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                con.execute(
+                    "INSERT INTO purchase_history(guild_id,user_id,username,product_id,name,price,qty,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (self.gid, str(i.user.id), str(i.user), self.pid, name, price, qty, now))
+                con.commit()
+
+            # DM 전송
+            try:
+                await i.user.send(
+                    f"**{name}** {qty}개 구매 완료\n"
+                    f"결제 금액: {total:,}원\n"
+                    f"```\n{content}\n```")
+                dm_ok = True
+            except Exception:
+                dm_ok = False
+
+            view = discord.ui.LayoutView()
+            view.add_item(discord.ui.Container(
+                discord.ui.TextDisplay(content="## 구매 완료"),
+                _sep(),
+                discord.ui.TextDisplay(content=(
+                    f"> **제품명:** {name}\n"
+                    f"> **수량:** {qty}개\n"
+                    f"> **결제 금액:** {total:,}원\n"
+                    f"> **남은 잔액:** {new_pts:,}원"
+                )),
+                _sep(),
+                discord.ui.TextDisplay(content=(
+                    "-# 제품 내용물이 DM으로 전송되었습니다" if dm_ok
+                    else "-# DM 전송 실패 ─ DM을 허용한 후 관리자에게 문의하세요"
+                )),
+                accent_color=gc,
+            ))
+            await i.edit_original_response(view=view)
+
+        except Exception as e:
+            print(f"[구매 오류] {e}")
+            await i.edit_original_response(view=err("구매 처리 중 문제가 발생했습니다"))
+
+
+# ══════════════════════════════════════════════════════
 # Modal ─ 계좌이체 충전
 # ══════════════════════════════════════════════════════
 
 class TransferModal(discord.ui.Modal, title="계좌이체 충전"):
-    dep = discord.ui.TextInput(label="입금자명",        placeholder="예) 홍길동", required=True, max_length=20)
-    amt = discord.ui.TextInput(label="충전 금액 (원)",  placeholder="예) 10000",              required=True, max_length=10)
+    dep = discord.ui.TextInput(label="입금자명",       placeholder="예) 홍길동", required=True, max_length=20)
+    amt = discord.ui.TextInput(label="충전 금액 (원)", placeholder="예) 10000",  required=True, max_length=10)
 
     def __init__(self, guild_id: str, guild_name: str):
         super().__init__()
-        self.gid  = guild_id
+        self.gid   = guild_id
         self.gname = guild_name
 
     async def on_submit(self, i: discord.Interaction):
@@ -418,7 +659,7 @@ class TransferModal(discord.ui.Modal, title="계좌이체 충전"):
                     "SELECT bank_name,account_number,account_holder,min_charge,charge_unit FROM info WHERE guild_id=?",
                     (self.gid,)).fetchone()
         except Exception as e:
-            print(f"[충전 Modal DB 오류] {e}")
+            print(f"[충전 DB 오류] {e}")
             await i.response.send_message(view=err("서버 정보를 불러올 수 없습니다"), ephemeral=True); return
 
         if not row:
@@ -457,16 +698,19 @@ class TransferModal(discord.ui.Modal, title="계좌이체 충전"):
         view = discord.ui.LayoutView()
         view.add_item(discord.ui.Container(
             discord.ui.TextDisplay(content="## 계좌 안내"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content=(
                 f"> **은행명:** {bank}\n"
                 f"> **계좌번호:** `{acnum}`\n"
-                f"> **예금주:** {holder}\n\n"
+                f"> **예금주:** {holder}"
+            )),
+            _sep(),
+            discord.ui.TextDisplay(content=(
                 f"> **입금금액:** {amount:,}원\n"
                 f"> **입금자명:** {depositor}\n"
                 f"> **만료시각:** {expires.strftime('%H:%M:%S')} (5분)"
             )),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content=(
                 "-# 입금자명을 정확히 입력 후 이체해주세요\n"
                 "-# 5분 내 입금이 확인되지 않으면 취소됩니다"
@@ -501,7 +745,7 @@ async def _charge_timeout(cid: str, db: str, i: discord.Interaction, gc: discord
         view = discord.ui.LayoutView()
         view.add_item(discord.ui.Container(
             discord.ui.TextDisplay(content="## 충전 취소"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content="-# 입금이 확인되지 않아 충전이 취소되었습니다\n-# 다시 충전하려면 충전 버튼을 눌러주세요"),
             accent_color=discord.Color.red(),
         ))
@@ -513,20 +757,17 @@ async def _charge_timeout(cid: str, db: str, i: discord.Interaction, gc: discord
 
 
 # ══════════════════════════════════════════════════════
-# 충전 완료 처리 (FastAPI → 봇)
+# 충전 완료 처리
 # ══════════════════════════════════════════════════════
 
 async def _complete_charge(cid: str, depositor: str, amount: int, guild_id: str, sig: str, raw: bytes) -> bool:
     if not _hmac_ok(raw, sig):
         print(f"[웹훅 보안] HMAC 실패 cid={cid}")
         return False
-
     db = _db_path_by_id(guild_id)
     if not db:
         return False
-
     gc = _get_color(guild_id, db)
-
     with sqlite3.connect(db) as con:
         row = con.execute(
             "SELECT user_id,username,depositor,amount,status FROM charge_pending WHERE charge_id=?",
@@ -539,18 +780,17 @@ async def _complete_charge(cid: str, depositor: str, amount: int, guild_id: str,
         if depositor.strip() != exp_dep.strip() or amount != exp_amt:
             print(f"[웹훅 보안] 불일치 dep={depositor}/{exp_dep} amt={amount}/{exp_amt}")
             return False
-
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         con.execute("UPDATE charge_pending SET status='completed',completed_at=? WHERE charge_id=? AND status='pending'",
                     (now, cid))
         if con.execute("SELECT changes()").fetchone()[0] == 0:
             return False
-        con.execute("""INSERT INTO users(user_id,username,points,created_at) VALUES(?,?,?,?)
+        con.execute("""INSERT INTO users(user_id,username,points,total_buy,created_at) VALUES(?,?,?,0,?)
             ON CONFLICT(user_id) DO UPDATE SET points=points+?,username=excluded.username""",
             (uid, uname, amount, now, amount))
-        con.execute("""INSERT INTO charge_history(charge_id,user_id,username,depositor,amount,status,created_at,completed_at)
-            VALUES(?,?,?,?,?,'completed',?,?)""",
-            (cid, uid, uname, depositor, amount, now, now))
+        con.execute("""INSERT INTO charge_history(guild_id,charge_id,user_id,username,depositor,amount,status,created_at,completed_at)
+            VALUES(?,?,?,?,?,?,'completed',?,?)""",
+            (guild_id, cid, uid, uname, depositor, amount, now, now))
         new_pts = con.execute("SELECT points FROM users WHERE user_id=?", (uid,)).fetchone()[0]
         con.commit()
 
@@ -560,15 +800,13 @@ async def _complete_charge(cid: str, depositor: str, amount: int, guild_id: str,
             view = discord.ui.LayoutView()
             view.add_item(discord.ui.Container(
                 discord.ui.TextDisplay(content="## 충전 완료"),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                _sep(),
                 discord.ui.TextDisplay(content=(
                     f"> **충전 금액:** {amount:,}원\n"
                     f"> **보유 잔액:** {new_pts:,}원"
                 )),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                discord.ui.TextDisplay(content=(
-                    f"-# 처리시각: {now}"
-                )),
+                _sep(),
+                discord.ui.TextDisplay(content=f"-# 처리시각: {now}"),
                 accent_color=gc,
             ))
             await orig_i.edit_original_response(view=view)
@@ -591,28 +829,23 @@ async def _issue_token(i: discord.Interaction):
         gc = _get_color(str(i.guild.id), db)
     except ValueError:
         await i.response.send_message(view=err("비정상적인 접근입니다"), ephemeral=True); return
-
     with sqlite3.connect(db) as con:
         row = con.execute("SELECT shortcut_token FROM info WHERE guild_id=?", (str(i.guild.id),)).fetchone()
     if not row:
         await i.response.send_message(view=err("등록된 서버가 아닙니다"), ephemeral=True); return
-
     existing = row[0]
     if existing:
         view = discord.ui.LayoutView()
         container = discord.ui.Container(
             discord.ui.TextDisplay(content="## IOS 자충 토큰"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content=(
-                f"> **토큰:** `{existing}`"
-            )),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
+            discord.ui.TextDisplay(content=f"> **토큰:** `{existing}`"),
+            _sep(),
             discord.ui.TextDisplay(content=(
                 "-# 이미 발급된 토큰이 있습니다\n"
                 "-# 재발급하면 기존 토큰은 무효화됩니다\n"
                 "-# 본인 외에는 절대 공유하지 마세요"
             )),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             accent_color=gc,
         )
         btn = discord.ui.Button(label="재발급", style=discord.ButtonStyle.danger,
@@ -628,11 +861,368 @@ async def _issue_token(i: discord.Interaction):
         view = discord.ui.LayoutView()
         view.add_item(discord.ui.Container(
             discord.ui.TextDisplay(content="## IOS 자충 토큰"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content=f"> **토큰:** `{tok}`"),
+            _sep(),
+            discord.ui.TextDisplay(content="-# 본인 외에는 절대 공유하지 마세요"),
             accent_color=gc,
         ))
         await i.response.send_message(view=view, ephemeral=True)
+
+
+# ══════════════════════════════════════════════════════
+# 상품 관리 (관리자용)
+# ══════════════════════════════════════════════════════
+
+async def _product_menu(i: discord.Interaction):
+    if not i.guild:
+        await i.response.send_message("서버에서만 사용 가능합니다", ephemeral=True); return
+    try:
+        db = _db_path(i.guild.name)
+        gc = _get_color(str(i.guild.id), db)
+    except ValueError:
+        await i.response.send_message(view=err("비정상적인 접근입니다"), ephemeral=True); return
+
+    with sqlite3.connect(db) as con:
+        cats = con.execute("SELECT id,name FROM categories WHERE guild_id=? ORDER BY id",
+                           (str(i.guild.id),)).fetchall()
+
+    view = discord.ui.LayoutView()
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(content="## 상품 관리"),
+        _sep(),
+        accent_color=gc,
+    )
+
+    if cats:
+        lines = "\n".join(f"> **{name}**" for _, name in cats)
+        container.add_item(discord.ui.TextDisplay(content=f"**카테고리 목록**\n{lines}"))
+        container.add_item(_sep())
+        sel_opts = [discord.SelectOption(label=name, value=str(cid)) for cid, name in cats[:25]]
+        sel = discord.ui.Select(placeholder="카테고리를 선택하세요", options=sel_opts)
+        async def _cat_sel(si: discord.Interaction):
+            if str(si.guild.id) != str(i.guild.id):
+                await si.response.send_message("권한이 없습니다", ephemeral=True); return
+            await _show_product_manage(si, db, gc, int(si.data["values"][0]))
+        sel.callback = _cat_sel
+        container.add_item(discord.ui.ActionRow(sel))
+    else:
+        container.add_item(discord.ui.TextDisplay(content="등록된 카테고리가 없습니다\n-# 아래 버튼으로 카테고리를 추가하세요"))
+        container.add_item(_sep())
+
+    btn_add_cat = discord.ui.Button(label="카테고리 추가", style=discord.ButtonStyle.secondary,
+                                    custom_id=f"prod_add_cat_{i.guild.id}")
+    container.add_item(discord.ui.ActionRow(btn_add_cat))
+    view.add_item(container)
+    await i.response.send_message(view=view, ephemeral=True)
+
+
+async def _show_product_manage(i: discord.Interaction, db: str, gc: discord.Color, cat_id: int):
+    with sqlite3.connect(db) as con:
+        cat = con.execute("SELECT name FROM categories WHERE id=? AND guild_id=?",
+                          (cat_id, str(i.guild.id))).fetchone()
+        if not cat:
+            await i.response.send_message(view=err("카테고리를 찾을 수 없습니다"), ephemeral=True); return
+        prods = con.execute(
+            "SELECT id,name,price,stock FROM products WHERE category_id=? AND guild_id=? ORDER BY id",
+            (cat_id, str(i.guild.id))).fetchall()
+
+    view = discord.ui.LayoutView()
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(content=f"## {cat[0]}"),
+        _sep(),
+        accent_color=gc,
+    )
+
+    if prods:
+        lines = "\n".join(
+            f"> `#{pid}` **{name}** ─ {price:,}원 / 재고 {stock}개"
+            for pid, name, price, stock in prods)
+        container.add_item(discord.ui.TextDisplay(content=lines))
+        container.add_item(_sep())
+        del_opts = [discord.SelectOption(label=f"#{pid} {name}", value=str(pid))
+                    for pid, name, *_ in prods[:25]]
+        del_sel = discord.ui.Select(placeholder="삭제할 제품을 선택하세요", options=del_opts)
+        async def _del_sel(si: discord.Interaction):
+            if str(si.guild.id) != str(i.guild.id):
+                await si.response.send_message("권한이 없습니다", ephemeral=True); return
+            await _delete_product(si, db, gc, int(si.data["values"][0]))
+        del_sel.callback = _del_sel
+        container.add_item(discord.ui.ActionRow(del_sel))
+    else:
+        container.add_item(discord.ui.TextDisplay(content="등록된 제품이 없습니다"))
+        container.add_item(_sep())
+
+    row_btns = [
+        discord.ui.Button(label="제품 추가", style=discord.ButtonStyle.secondary,
+                          custom_id=f"prod_add_{cat_id}_{i.guild.id}"),
+        discord.ui.Button(label="카테고리 삭제", style=discord.ButtonStyle.danger,
+                          custom_id=f"prod_delcat_{cat_id}_{i.guild.id}"),
+    ]
+    container.add_item(discord.ui.ActionRow(*row_btns))
+    view.add_item(container)
+    await i.response.send_message(view=view, ephemeral=True)
+
+
+async def _delete_product(i: discord.Interaction, db: str, gc: discord.Color, prod_id: int):
+    with sqlite3.connect(db) as con:
+        row = con.execute("SELECT name FROM products WHERE id=? AND guild_id=?",
+                          (prod_id, str(i.guild.id))).fetchone()
+        if not row:
+            await i.response.send_message(view=err("제품을 찾을 수 없습니다"), ephemeral=True); return
+        con.execute("DELETE FROM products WHERE id=? AND guild_id=?", (prod_id, str(i.guild.id)))
+        con.commit()
+    await i.response.send_message(view=SimpleLayout(
+        "## 제품 삭제 완료",
+        f"> **제품명:** {row[0]}\n-# 제품이 삭제되었습니다", gc), ephemeral=True)
+
+
+async def _delete_category(i: discord.Interaction, db: str, gc: discord.Color, cat_id: int):
+    with sqlite3.connect(db) as con:
+        cat = con.execute("SELECT name FROM categories WHERE id=? AND guild_id=?",
+                          (cat_id, str(i.guild.id))).fetchone()
+        if not cat:
+            await i.response.send_message(view=err("카테고리를 찾을 수 없습니다"), ephemeral=True); return
+        cnt = con.execute("SELECT COUNT(*) FROM products WHERE category_id=? AND guild_id=?",
+                          (cat_id, str(i.guild.id))).fetchone()[0]
+        con.execute("DELETE FROM products WHERE category_id=? AND guild_id=?", (cat_id, str(i.guild.id)))
+        con.execute("DELETE FROM categories WHERE id=? AND guild_id=?", (cat_id, str(i.guild.id)))
+        con.commit()
+    await i.response.send_message(view=SimpleLayout(
+        "## 카테고리 삭제 완료",
+        f"> **카테고리:** {cat[0]}\n> **삭제된 제품:** {cnt}개\n-# 하위 제품이 모두 삭제되었습니다",
+        gc), ephemeral=True)
+
+
+# ══════════════════════════════════════════════════════
+# 자판기 제품 버튼 ─ 카테고리 → 제품 목록만 표시
+# ══════════════════════════════════════════════════════
+
+async def _vend_products(i: discord.Interaction, db: str, gc: discord.Color):
+    """제품 버튼: 카테고리 선택 → 제품 목록만 표시 (구매 없음)"""
+    with sqlite3.connect(db) as con:
+        cats = con.execute("SELECT id,name FROM categories WHERE guild_id=? ORDER BY id",
+                           (str(i.guild.id),)).fetchall()
+    if not cats:
+        await i.response.send_message(view=err("등록된 상품이 없습니다\n-# 관리자에게 문의하세요"), ephemeral=True); return
+
+    view = discord.ui.LayoutView()
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(content="## 제품"),
+        _sep(),
+        discord.ui.TextDisplay(content="확인할 카테고리를 선택하세요"),
+        _sep(),
+        accent_color=gc,
+    )
+    sel_opts = [discord.SelectOption(label=name, value=str(cid)) for cid, name in cats[:25]]
+    sel = discord.ui.Select(placeholder="카테고리 선택", options=sel_opts)
+
+    async def _sel(si: discord.Interaction):
+        if str(si.guild.id) != str(i.guild.id):
+            await si.response.send_message("권한이 없습니다", ephemeral=True); return
+        cat_id = int(si.data["values"][0])
+        with sqlite3.connect(db) as con:
+            cat = con.execute("SELECT name FROM categories WHERE id=? AND guild_id=?",
+                              (cat_id, str(si.guild.id))).fetchone()
+            if not cat:
+                await si.response.send_message(view=err("카테고리를 찾을 수 없습니다"), ephemeral=True); return
+            prods = con.execute(
+                "SELECT name,price,stock FROM products WHERE category_id=? AND guild_id=? ORDER BY id",
+                (cat_id, str(si.guild.id))).fetchall()
+
+        view2 = discord.ui.LayoutView()
+        container2 = discord.ui.Container(
+            discord.ui.TextDisplay(content=f"## {cat[0]}"),
+            _sep(),
+            accent_color=gc,
+        )
+        if prods:
+            lines = "\n".join(
+                f"> **{name}** ─ {price:,}원 / 재고 {'품절' if stock == 0 else f'{stock}개'}"
+                for name, price, stock in prods)
+            container2.add_item(discord.ui.TextDisplay(content=lines))
+        else:
+            container2.add_item(discord.ui.TextDisplay(content="이 카테고리에 등록된 제품이 없습니다"))
+        view2.add_item(container2)
+        await si.response.send_message(view=view2, ephemeral=True)
+
+    sel.callback = _sel
+    container.add_item(discord.ui.ActionRow(sel))
+    view.add_item(container)
+    await i.response.send_message(view=view, ephemeral=True)
+
+
+# ══════════════════════════════════════════════════════
+# 자판기 구매 버튼 ─ 카테고리 → 제품 선택 → 수량 모달
+# ══════════════════════════════════════════════════════
+
+async def _vend_buy(i: discord.Interaction, db: str, gc: discord.Color):
+    """구매 버튼: 카테고리 선택"""
+    with sqlite3.connect(db) as con:
+        cats = con.execute("SELECT id,name FROM categories WHERE guild_id=? ORDER BY id",
+                           (str(i.guild.id),)).fetchall()
+    if not cats:
+        await i.response.send_message(view=err("등록된 상품이 없습니다\n-# 관리자에게 문의하세요"), ephemeral=True); return
+
+    view = discord.ui.LayoutView()
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(content="## 구매"),
+        _sep(),
+        discord.ui.TextDisplay(content="구매할 카테고리를 선택하세요"),
+        _sep(),
+        accent_color=gc,
+    )
+    sel_opts = [discord.SelectOption(label=name, value=str(cid)) for cid, name in cats[:25]]
+    sel = discord.ui.Select(placeholder="카테고리 선택", options=sel_opts)
+
+    async def _cat_sel(si: discord.Interaction):
+        if str(si.guild.id) != str(i.guild.id):
+            await si.response.send_message("권한이 없습니다", ephemeral=True); return
+        await _vend_buy_product_list(si, db, gc, int(si.data["values"][0]))
+
+    sel.callback = _cat_sel
+    container.add_item(discord.ui.ActionRow(sel))
+    view.add_item(container)
+    await i.response.send_message(view=view, ephemeral=True)
+
+
+async def _vend_buy_product_list(i: discord.Interaction, db: str, gc: discord.Color, cat_id: int):
+    """구매: 카테고리 → 제품 선택"""
+    with sqlite3.connect(db) as con:
+        cat = con.execute("SELECT name FROM categories WHERE id=? AND guild_id=?",
+                          (cat_id, str(i.guild.id))).fetchone()
+        if not cat:
+            await i.response.send_message(view=err("카테고리를 찾을 수 없습니다"), ephemeral=True); return
+        prods = con.execute(
+            "SELECT id,name,price,stock FROM products WHERE category_id=? AND guild_id=? AND stock>0 ORDER BY id",
+            (cat_id, str(i.guild.id))).fetchall()
+
+    view = discord.ui.LayoutView()
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(content=f"## {cat[0]}"),
+        _sep(),
+        accent_color=gc,
+    )
+
+    if not prods:
+        container.add_item(discord.ui.TextDisplay(content="이 카테고리의 모든 상품이 품절입니다\n-# 관리자에게 문의하세요"))
+        view.add_item(container)
+        await i.response.send_message(view=view, ephemeral=True); return
+
+    lines = "\n".join(f"> **{name}** ─ {price:,}원 / 재고 {stock}개" for _, name, price, stock in prods)
+    container.add_item(discord.ui.TextDisplay(content=lines))
+    container.add_item(_sep())
+    container.add_item(discord.ui.TextDisplay(content="-# 구매할 제품을 선택하세요"))
+
+    sel_opts = [discord.SelectOption(label=f"{name} ─ {price:,}원", value=str(pid))
+                for pid, name, price, stock in prods[:25]]
+    sel = discord.ui.Select(placeholder="제품 선택", options=sel_opts)
+
+    async def _prod_sel(si: discord.Interaction):
+        if str(si.guild.id) != str(i.guild.id):
+            await si.response.send_message("권한이 없습니다", ephemeral=True); return
+        prod_id = int(si.data["values"][0])
+        # 재고 재확인 후 모달 오픈
+        with sqlite3.connect(db) as con:
+            row = con.execute("SELECT stock FROM products WHERE id=? AND guild_id=?",
+                              (prod_id, str(si.guild.id))).fetchone()
+        if not row or row[0] <= 0:
+            await si.response.send_message(view=err("품절된 상품입니다\n-# 다른 제품을 선택해주세요"), ephemeral=True); return
+        await si.response.send_modal(BuyQtyModal(str(si.guild.id), si.guild.name, prod_id))
+
+    sel.callback = _prod_sel
+    container.add_item(discord.ui.ActionRow(sel))
+    view.add_item(container)
+    await i.response.send_message(view=view, ephemeral=True)
+
+
+# ══════════════════════════════════════════════════════
+# 자판기 정보 버튼
+# ══════════════════════════════════════════════════════
+
+async def _vend_info(i: discord.Interaction, db: str, gc: discord.Color):
+    with sqlite3.connect(db) as con:
+        user = con.execute("SELECT points, total_buy FROM users WHERE user_id=?",
+                           (str(i.user.id),)).fetchone()
+    points    = user[0] if user else 0
+    total_buy = user[1] if user else 0
+
+    # 할인율 계산 (예시: 누적 10만원 이상 3%, 50만원 이상 5%)
+    if total_buy >= 500_000:
+        discount = 5
+    elif total_buy >= 100_000:
+        discount = 3
+    else:
+        discount = 0
+
+    view = discord.ui.LayoutView()
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(content="## 내 정보"),
+        _sep(),
+        discord.ui.TextDisplay(content=(
+            f"> **유저:** {i.user.display_name}\n"
+            f"> **잔액:** {points:,}원\n"
+            f"> **누적 구매:** {total_buy:,}원\n"
+            f"> **적용 할인:** {discount}%"
+        )),
+        _sep(),
+        accent_color=gc,
+    )
+
+    sel = discord.ui.Select(placeholder="로그 조회", options=[
+        discord.SelectOption(label="최근 충전 로그", value="charge_log"),
+        discord.SelectOption(label="최근 구매 로그", value="buy_log"),
+    ])
+
+    async def _log_sel(si: discord.Interaction):
+        if str(si.user.id) != str(i.user.id):
+            await si.response.send_message("본인만 조회 가능합니다", ephemeral=True); return
+        v = si.data["values"][0]
+
+        if v == "charge_log":
+            with sqlite3.connect(db) as con:
+                rows = con.execute(
+                    "SELECT amount, status, created_at FROM charge_history WHERE user_id=? AND guild_id=? ORDER BY id DESC LIMIT 5",
+                    (str(si.user.id), str(si.guild.id))).fetchall()
+            if not rows:
+                lines = "-# 충전 내역이 없습니다"
+            else:
+                lines = "\n".join(
+                    f"> {amt:,}원 ─ {'완료' if st == 'completed' else '취소'} ─ {cat[:16]}"
+                    for amt, st, cat in rows)
+            view2 = discord.ui.LayoutView()
+            view2.add_item(discord.ui.Container(
+                discord.ui.TextDisplay(content="## 최근 충전 로그"),
+                _sep(),
+                discord.ui.TextDisplay(content=lines),
+                accent_color=gc,
+            ))
+            await si.response.send_message(view=view2, ephemeral=True)
+
+        elif v == "buy_log":
+            with sqlite3.connect(db) as con:
+                rows = con.execute(
+                    "SELECT name, price, qty, created_at FROM purchase_history WHERE user_id=? AND guild_id=? ORDER BY id DESC LIMIT 5",
+                    (str(si.user.id), str(si.guild.id))).fetchall()
+            if not rows:
+                lines = "-# 구매 내역이 없습니다"
+            else:
+                lines = "\n".join(
+                    f"> **{name}** {qty}개 ─ {price*qty:,}원 ─ {cat[:16]}"
+                    for name, price, qty, cat in rows)
+            view2 = discord.ui.LayoutView()
+            view2.add_item(discord.ui.Container(
+                discord.ui.TextDisplay(content="## 최근 구매 로그"),
+                _sep(),
+                discord.ui.TextDisplay(content=lines),
+                accent_color=gc,
+            ))
+            await si.response.send_message(view=view2, ephemeral=True)
+
+    sel.callback = _log_sel
+    container.add_item(discord.ui.ActionRow(sel))
+    view.add_item(container)
+    await i.response.send_message(view=view, ephemeral=True)
 
 
 # ══════════════════════════════════════════════════════
@@ -656,27 +1246,24 @@ async def cmd_vending(i: discord.Interaction):
         await i.response.send_message(view=err("먼저 /등록 명령어로 서버를 등록해주세요"), ephemeral=True); return
 
     title, desc, color_s, features = row
-    title    = _clean(title  or "구매하기", 100)
-    desc     = _clean(desc   or "아래 버튼을 눌러 이용해주세요", 500)
-    color_s  = _hex(color_s  or "#373842")
-    gc       = discord.Color.from_str(color_s)
-    enabled  = features.split() if features else []
+    title   = _clean(title  or "구매하기", 100)
+    desc    = _clean(desc   or "아래 버튼을 눌러 이용해주세요", 500)
+    color_s = _hex(color_s  or "#373842")
+    gc      = discord.Color.from_str(color_s)
+    enabled = features.split() if features else []
 
-    # 자판기 전송 안내
     await i.response.send_message(
-        view=SimpleLayout("## 자판기 전송", "자판기가 채널에 전송되었습니다", gc),
-        ephemeral=True)
+        view=SimpleLayout("## 자판기 전송", "자판기가 채널에 전송되었습니다", gc), ephemeral=True)
 
-    # 공개 자판기
     view = discord.ui.LayoutView()
     container = discord.ui.Container(
         discord.ui.TextDisplay(content=f"## {title}"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        _sep(),
         accent_color=gc,
     )
     if desc:
         container.add_item(discord.ui.TextDisplay(content=desc))
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        container.add_item(_sep())
 
     btns = []
     if "구매" in enabled:
@@ -714,9 +1301,9 @@ async def cmd_settings(i: discord.Interaction):
     view = discord.ui.LayoutView()
     container = discord.ui.Container(
         discord.ui.TextDisplay(content="## 설정하기"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        _sep(),
         discord.ui.TextDisplay(content="아래 드롭바를 눌러 설정할 항목을 선택하세요"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        _sep(),
         accent_color=gc,
     )
     sel = discord.ui.Select(placeholder="설정할 항목 선택해주세요", options=[
@@ -724,15 +1311,17 @@ async def cmd_settings(i: discord.Interaction):
         discord.SelectOption(label="계좌 설정",      value="bank"),
         discord.SelectOption(label="충전 설정",      value="charge"),
         discord.SelectOption(label="IOS 자충 토큰", value="token"),
+        discord.SelectOption(label="상품 관리",      value="product"),
     ])
     async def _sel(si: discord.Interaction):
         if si.guild_id != i.guild_id:
             await si.response.send_message("권한이 없습니다", ephemeral=True); return
         v = si.data["values"][0]
-        if v == "vending":  await si.response.send_modal(VendingModal())
-        elif v == "bank":   await si.response.send_modal(BankModal())
-        elif v == "charge": await si.response.send_modal(ChargeSettingModal())
-        elif v == "token":  await _issue_token(si)
+        if v == "vending":   await si.response.send_modal(VendingModal())
+        elif v == "bank":    await si.response.send_modal(BankModal())
+        elif v == "charge":  await si.response.send_modal(ChargeSettingModal())
+        elif v == "token":   await _issue_token(si)
+        elif v == "product": await _product_menu(si)
     sel.callback = _sel
     container.add_item(discord.ui.ActionRow(sel))
     view.add_item(container)
@@ -748,39 +1337,63 @@ async def on_interaction(i: discord.Interaction):
     if i.type != discord.InteractionType.component or not i.guild:
         return
     cid = i.data.get("custom_id", "")
-
     try:
         db = _db_path(i.guild.name)
         gc = _get_color(str(i.guild.id), db)
     except ValueError:
         await i.response.send_message(view=err("비정상적인 접근입니다"), ephemeral=True); return
 
-    if cid == "vend_charge":
+    # ── 자판기 버튼 ───────────────────────────────────
+    if   cid == "vend_products": await _vend_products(i, db, gc)
+    elif cid == "vend_buy":      await _vend_buy(i, db, gc)
+    elif cid == "vend_info":     await _vend_info(i, db, gc)
+
+    elif cid == "vend_charge":
         with sqlite3.connect(db) as con:
             row = con.execute("SELECT bank_name,account_number FROM info WHERE guild_id=?",
                               (str(i.guild.id),)).fetchone()
         if not row or not row[0] or not row[1]:
             await i.response.send_message(view=err("-# 계좌 정보가 설정되지 않았습니다\n-# 관리자에게 문의하세요"), ephemeral=True); return
-
         view = discord.ui.LayoutView()
         container = discord.ui.Container(
             discord.ui.TextDisplay(content="## 결제수단"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content="아래 버튼을 눌러 충전 방법을 선택하세요"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             accent_color=gc,
         )
-        btn = discord.ui.Button(label="계좌이체 (account)", style=discord.ButtonStyle.secondary, custom_id="vend_transfer")
-        container.add_item(discord.ui.ActionRow(btn))
+        container.add_item(discord.ui.ActionRow(
+            discord.ui.Button(label="계좌이체 (account)", style=discord.ButtonStyle.secondary, custom_id="vend_transfer")
+        ))
         view.add_item(container)
         await i.response.send_message(view=view, ephemeral=True)
 
     elif cid == "vend_transfer":
         await i.response.send_modal(TransferModal(str(i.guild.id), i.guild.name))
 
+    # ── 상품 관리 버튼 ─────────────────────────────────
+    elif cid.startswith("prod_add_cat_"):
+        if str(i.guild.id) != cid.replace("prod_add_cat_", ""):
+            await i.response.send_message("권한이 없습니다", ephemeral=True); return
+        await i.response.send_modal(AddCategoryModal(str(i.guild.id), i.guild.name))
+
+    elif cid.startswith("prod_add_"):
+        parts = cid.split("_")  # prod_add_{cat_id}_{guild_id}
+        cat_id, gid_check = int(parts[2]), parts[3]
+        if str(i.guild.id) != gid_check:
+            await i.response.send_message("권한이 없습니다", ephemeral=True); return
+        await i.response.send_modal(AddProductModal(str(i.guild.id), i.guild.name, cat_id))
+
+    elif cid.startswith("prod_delcat_"):
+        parts = cid.split("_")  # prod_delcat_{cat_id}_{guild_id}
+        cat_id, gid_check = int(parts[2]), parts[3]
+        if str(i.guild.id) != gid_check:
+            await i.response.send_message("권한이 없습니다", ephemeral=True); return
+        await _delete_category(i, db, gc, cat_id)
+
+    # ── 토큰 재발급 ────────────────────────────────────
     elif cid.startswith("token_reissue_"):
-        rgid = cid.replace("token_reissue_", "")
-        if str(i.guild.id) != rgid:
+        if str(i.guild.id) != cid.replace("token_reissue_", ""):
             await i.response.send_message("권한이 없습니다", ephemeral=True); return
         tok = secrets.token_hex(24)
         with sqlite3.connect(db) as con:
@@ -789,8 +1402,10 @@ async def on_interaction(i: discord.Interaction):
         view = discord.ui.LayoutView()
         view.add_item(discord.ui.Container(
             discord.ui.TextDisplay(content="## IOS 자충 토큰 재발급"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            _sep(),
             discord.ui.TextDisplay(content=f"> **새 토큰:** `{tok}`"),
+            _sep(),
+            discord.ui.TextDisplay(content="-# 기존 토큰은 즉시 무효화됩니다"),
             accent_color=gc,
         ))
         await i.response.edit_message(view=view)
@@ -835,11 +1450,11 @@ async def cmd_create_license(i: discord.Interaction, 기간: app_commands.Choice
     view = discord.ui.LayoutView()
     view.add_item(discord.ui.Container(
         discord.ui.TextDisplay(content="## 라이센스 생성 완료"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        _sep(),
         discord.ui.TextDisplay(content=f"{수량}개가 데이터베이스에 저장되었습니다"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        _sep(),
         discord.ui.File(f"attachment://{fname}"),
-        accent_color=0x373842,
+        accent_color=discord.Color.from_str("#373842"),
     ))
     await i.followup.send(view=view, file=f, ephemeral=True)
 
@@ -861,10 +1476,12 @@ async def cmd_list_license(i: discord.Interaction, 필터: app_commands.Choice[s
         else:              rows = con.execute("SELECT key,days,used,guild_name,created_at FROM licenses").fetchall()
     fl = {"all":"전체","unused":"미사용","used":"사용됨"}.get(fv,"전체")
     if not rows:
-        await i.followup.send(view=SimpleLayout(f"## 라이센스 목록 [{fl}]","조회된 라이센스가 없습니다",discord.Color.from_str("#5865F2")), ephemeral=True); return
+        await i.followup.send(view=SimpleLayout(
+            f"## 라이센스 목록 [{fl}]", "조회된 라이센스가 없습니다",
+            discord.Color.from_str("#373842")), ephemeral=True); return
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     txt = f"VOUT 라이센스 목록 [{fl}]\n조회일시: {now} / 총 {len(rows)}개\n" + "="*60 + "\n\n"
-    for idx,(key,days,used,gname,cat) in enumerate(rows,1):
+    for idx, (key, days, used, gname, cat) in enumerate(rows, 1):
         st = f"사용됨({gname})" if used else "미사용"
         txt += f"{idx:>3}. {key}  |  {days}일  |  {st}  |  {cat}\n"
     fname = f"licenses_{fv}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -872,9 +1489,9 @@ async def cmd_list_license(i: discord.Interaction, 필터: app_commands.Choice[s
     view = discord.ui.LayoutView()
     view.add_item(discord.ui.Container(
         discord.ui.TextDisplay(content=f"## 라이센스 목록 [{fl}]"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        _sep(),
         discord.ui.TextDisplay(content=f"총 {len(rows)}개의 라이센스가 조회되었습니다"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        _sep(),
         discord.ui.File(f"attachment://{fname}"),
         accent_color=discord.Color.from_str("#373842"),
     ))
@@ -924,7 +1541,7 @@ async def cmd_register(i: discord.Interaction, 라이센스: str):
 
 
 # ══════════════════════════════════════════════════════
-# FastAPI ─ SMS 웹훅
+# FastAPI
 # ══════════════════════════════════════════════════════
 
 class SmsPayload(BaseModel):
@@ -957,33 +1574,25 @@ async def webhook_sms(payload: SmsPayload, req: Request):
     if not _rate(req.client.host):
         raise HTTPException(429, "Too Many Requests")
     print(f"[웹훅] IP={req.client.host} guild={payload.guild_id} tok_len={len(payload.token)}")
-
     db = _db_path_by_id(payload.guild_id)
     if not db:
         raise HTTPException(404, "서버를 찾을 수 없습니다")
-
     stored = _get_token(payload.guild_id, db)
-    if not stored:
-        raise HTTPException(401, "단축어 토큰이 발급되지 않았습니다")
-    if not hmac.compare_digest(stored, payload.token):
+    if not stored or not hmac.compare_digest(stored, payload.token):
         raise HTTPException(401, "Unauthorized")
-
     parsed = _parse_sms(payload.sms_body)
     if not parsed:
         raise HTTPException(400, "카카오뱅크 입금 알림 형식이 아닙니다")
     depositor, amount = parsed
-
     with sqlite3.connect(db) as con:
         row = con.execute(
             "SELECT charge_id FROM charge_pending WHERE status='pending' AND depositor=? AND amount=? ORDER BY created_at LIMIT 1",
             (depositor, amount)).fetchone()
     if not row:
         raise HTTPException(404, "일치하는 충전 대기가 없습니다")
-
     cid  = row[0]
     body = f"{cid}:{depositor}:{amount}:{payload.guild_id}".encode()
     sig  = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-
     ok = await _complete_charge(cid, depositor, amount, payload.guild_id, sig, body)
     if not ok:
         raise HTTPException(400, "충전 처리 실패")
@@ -1034,10 +1643,7 @@ async def on_ready():
 async def main():
     config = uvicorn.Config(api, host=API_HOST, port=API_PORT, log_level="info")
     server = uvicorn.Server(config)
-    await asyncio.gather(
-        bot.start(TOKEN),
-        server.serve(),
-    )
+    await asyncio.gather(bot.start(TOKEN), server.serve())
 
 if __name__ == "__main__":
     asyncio.run(main())
