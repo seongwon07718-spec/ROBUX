@@ -875,6 +875,7 @@ async def _issue_token(i: discord.Interaction):
 # ══════════════════════════════════════════════════════
 
 async def _product_menu(i: discord.Interaction):
+    print(f"[_product_menu] user={i.user.id} guild={i.guild.id}")
     if not i.guild:
         await i.response.send_message("서버에서만 사용 가능합니다", ephemeral=True); return
     try:
@@ -1000,6 +1001,7 @@ async def _delete_category(i: discord.Interaction, db: str, gc: discord.Color, c
 
 async def _vend_products(i: discord.Interaction, db: str, gc: discord.Color):
     """제품 버튼: 카테고리 선택 → 제품 목록만 표시 (구매 없음)"""
+    print(f"[_vend_products] user={i.user.id} guild={i.guild.id}")
     with sqlite3.connect(db) as con:
         cats = con.execute("SELECT id,name FROM categories WHERE guild_id=? ORDER BY id",
                            (str(i.guild.id),)).fetchall()
@@ -1058,6 +1060,7 @@ async def _vend_products(i: discord.Interaction, db: str, gc: discord.Color):
 
 async def _vend_buy(i: discord.Interaction, db: str, gc: discord.Color):
     """구매 버튼: 카테고리 선택"""
+    print(f"[_vend_buy] user={i.user.id} guild={i.guild.id}")
     with sqlite3.connect(db) as con:
         cats = con.execute("SELECT id,name FROM categories WHERE guild_id=? ORDER BY id",
                            (str(i.guild.id),)).fetchall()
@@ -1141,6 +1144,7 @@ async def _vend_buy_product_list(i: discord.Interaction, db: str, gc: discord.Co
 # ══════════════════════════════════════════════════════
 
 async def _vend_info(i: discord.Interaction, db: str, gc: discord.Color):
+    print(f"[_vend_info] user={i.user.id} guild={i.guild.id}")
     with sqlite3.connect(db) as con:
         user = con.execute("SELECT points, total_buy FROM users WHERE user_id=?",
                            (str(i.user.id),)).fetchone()
@@ -1321,7 +1325,12 @@ async def cmd_settings(i: discord.Interaction):
         elif v == "bank":    await si.response.send_modal(BankModal())
         elif v == "charge":  await si.response.send_modal(ChargeSettingModal())
         elif v == "token":   await _issue_token(si)
-        elif v == "product": await _product_menu(si)
+        elif v == "product":
+            try:
+                await _product_menu(si)
+            except Exception as e:
+                print(f"[상품관리 오류] {e}")
+                import traceback; traceback.print_exc()
     sel.callback = _sel
     container.add_item(discord.ui.ActionRow(sel))
     view.add_item(container)
