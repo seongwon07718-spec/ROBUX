@@ -64,13 +64,21 @@ class ConfirmView(discord.ui.LayoutView):
     container = discord.ui.Container(
         discord.ui.TextDisplay("등록을 진행하시겠습니까?"),
         discord.ui.Separator(),
+        # 버튼들을 Container 안에 직접 배치
+        discord.ui.ActionRow(
+            discord.ui.Button(label="등록 진행", style=discord.ButtonStyle.success, custom_id="confirm"),
+            discord.ui.Button(label="등록 취소", style=discord.ButtonStyle.danger, custom_id="cancel"),
+        ),
         accent_color=0x5865F2,
     )
 
-    row: discord.ui.ActionRow = discord.ui.ActionRow()
+    async def on_interaction(self, i: discord.Interaction):
+        if i.data.get("custom_id") == "confirm":
+            await self.confirm(i)
+        elif i.data.get("custom_id") == "cancel":
+            await self.cancel(i)
 
-    @row.button(label="등록 진행", style=discord.ButtonStyle.success)
-    async def confirm(self, i: discord.Interaction, btn: discord.ui.Button):
+    async def confirm(self, i: discord.Interaction):
         ldb = LicenseDB()
         result = ldb.activate(self.key, self.guild.id)
 
@@ -81,9 +89,8 @@ class ConfirmView(discord.ui.LayoutView):
             await i.response.edit_message(view=self)
             return
 
-        # ==================== 핵심 수정 ====================
-        # GuildDB 초기화 + ServerListDB에 제대로 등록
-        gdb = GuildDB(self.guild.id)          # DB 파일 생성 및 테이블 초기화
+        # GuildDB 초기화 + ServerListDB 등록
+        gdb = GuildDB(self.guild.id)
         sldb = ServerListDB()
         sldb.upsert(
             self.guild.id, 
@@ -92,7 +99,6 @@ class ConfirmView(discord.ui.LayoutView):
             result["expires_at"], 
             self.key
         )
-        # ================================================
 
         exp = result["expires_at"][:10]
 
@@ -108,8 +114,7 @@ class ConfirmView(discord.ui.LayoutView):
             )
         await i.response.edit_message(view=V(timeout=None))
 
-    @row.button(label="등록 취소", style=discord.ButtonStyle.danger)
-    async def cancel(self, i: discord.Interaction, btn: discord.ui.Button):
+    async def cancel(self, i: discord.Interaction):
         class V(discord.ui.LayoutView):
             c = discord.ui.Container(
                 discord.ui.TextDisplay("등록이 취소되었습니다."), 
@@ -118,9 +123,11 @@ class ConfirmView(discord.ui.LayoutView):
         await i.response.edit_message(view=V(timeout=None))
 
     def _disable_all(self):
-        for item in self.walk_children():
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        for child in self.container.children:
+            if isinstance(child, discord.ui.ActionRow):
+                for item in child.children:
+                    if isinstance(item, discord.ui.Button):
+                        item.disabled = True
 
 
 class RegistrationCog(commands.Cog):
