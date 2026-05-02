@@ -70,6 +70,7 @@ class ProdDelModal(discord.ui.Modal, title="상품 삭제"):
             )
         await i.response.send_message(view=V(timeout=None), ephemeral=True)
 
+
 class RoleModal(discord.ui.Modal, title="역할 설정"):
     buyer  = discord.ui.TextInput(label="구매자 역할 ID", required=False)
     vip    = discord.ui.TextInput(label="VIP 역할 ID",    required=False)
@@ -346,29 +347,37 @@ class ChargeModeView(discord.ui.LayoutView):
     container = discord.ui.Container(
         discord.ui.TextDisplay("충전 방식을 선택하세요."),
         discord.ui.Separator(),
+        discord.ui.ActionRow(
+            discord.ui.Button(label="자동 충전", style=discord.ButtonStyle.primary, custom_id="auto"),
+            discord.ui.Button(label="수동 충전", style=discord.ButtonStyle.secondary, custom_id="manual"),
+        ),
         accent_color=0x5865F2,
     )
 
-    row: discord.ui.ActionRow = discord.ui.ActionRow()
+    async def on_interaction(self, i: discord.Interaction):
+        if i.data.get("custom_id") == "auto":
+            await self.auto_btn(i)
+        elif i.data.get("custom_id") == "manual":
+            await self.manual_btn(i)
 
-    @row.button(label="자동 충전", style=discord.ButtonStyle.primary)
-    async def auto_btn(self, i: discord.Interaction, btn: discord.ui.Button):
+    async def auto_btn(self, i: discord.Interaction):
         GuildDB(self.gid).set_cfg("charge_mode", "auto")
         self._update_buttons()
         self.container[0].content = "## 자동 충전 활성화\n카카오뱅크 자동충전이 활성화됩니다."
         await i.response.edit_message(view=self)
 
-    @row.button(label="수동 충전", style=discord.ButtonStyle.secondary)
-    async def manual_btn(self, i: discord.Interaction, btn: discord.ui.Button):
+    async def manual_btn(self, i: discord.Interaction):
         GuildDB(self.gid).set_cfg("charge_mode", "manual")
         self._update_buttons()
         self.container[0].content = "## 수동 충전 활성화\n관리자가 직접 충전을 확인합니다."
         await i.response.edit_message(view=self)
 
     def _update_buttons(self):
-        for item in self.walk_children():
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        for child in self.container.children:
+            if isinstance(child, discord.ui.ActionRow):
+                for item in child.children:
+                    if isinstance(item, discord.ui.Button):
+                        item.disabled = True
 
 
 class IOSTokenView(discord.ui.LayoutView):
@@ -379,25 +388,37 @@ class IOSTokenView(discord.ui.LayoutView):
     container = discord.ui.Container(
         discord.ui.TextDisplay("iOS 자동충전 토큰을 발급합니다.\n서버당 **1회**만 발급됩니다."),
         discord.ui.Separator(),
+        discord.ui.ActionRow(
+            discord.ui.Button(label="토큰 발급", style=discord.ButtonStyle.success, custom_id="issue")
+        ),
         accent_color=0x5865F2,
     )
 
-    row: discord.ui.ActionRow = discord.ui.ActionRow()
+    async def on_interaction(self, i: discord.Interaction):
+        if i.data.get("custom_id") == "issue":
+            await self.issue(i)
 
-    @row.button(label="토큰 발급", style=discord.ButtonStyle.success)
-    async def issue(self, i: discord.Interaction, btn: discord.ui.Button):
+    async def issue(self, i: discord.Interaction):
         gdb = GuildDB(self.gid)
         existing = gdb.get_cfg("ios_token")
         if existing:
             self.container[0].content = f"## 이미 발급된 토큰\n||`{existing}`||\n서버당 1회만 발급 가능합니다."
-            btn.disabled = True
+            for child in self.container.children:
+                if isinstance(child, discord.ui.ActionRow):
+                    for item in child.children:
+                        if isinstance(item, discord.ui.Button):
+                            item.disabled = True
             await i.response.edit_message(view=self)
             return
 
         token = gen_token()
         gdb.set_cfg("ios_token", token)
-        btn.disabled = True
         self.container[0].content = f"## iOS 토큰 발급 완료\n||`{token}`||\n이 토큰을 안전하게 보관하세요."
+        for child in self.container.children:
+            if isinstance(child, discord.ui.ActionRow):
+                for item in child.children:
+                    if isinstance(item, discord.ui.Button):
+                        item.disabled = True
         await i.response.edit_message(view=self)
 
 
@@ -405,20 +426,20 @@ class CatDeleteView(discord.ui.LayoutView):
     def __init__(self, gid: int, cats: list):
         super().__init__(timeout=60)
         self.gid = gid
-        options = [discord.SelectOption(label=c["name"], value=str(c["id"])) for c in cats[:25]]
+
         sel = discord.ui.Select(
             placeholder="삭제할 카테고리 선택", 
-            options=options, 
-            max_values=min(len(options), 5)
+            options=[discord.SelectOption(label=c["name"], value=str(c["id"])) for c in cats[:25]],
+            max_values=min(len(cats), 5)
         )
         sel.callback = self._do_delete
-        self.add_item(discord.ui.ActionRow(sel))
 
-    container = discord.ui.Container(
-        discord.ui.TextDisplay("삭제할 카테고리를 선택하세요."),
-        discord.ui.Separator(),
-        accent_color=0xFEE75C,
-    )
+        self.container = discord.ui.Container(
+            discord.ui.TextDisplay("삭제할 카테고리를 선택하세요."),
+            discord.ui.Separator(),
+            discord.ui.ActionRow(sel),
+            accent_color=0xFEE75C,
+        )
 
     async def _do_delete(self, i: discord.Interaction):
         gdb = GuildDB(self.gid)
@@ -444,9 +465,9 @@ class SettingsMainView(discord.ui.LayoutView):
         self.container = discord.ui.Container(
             discord.ui.TextDisplay("## 자판기 설정\n아래에서 원하는 메뉴를 선택하세요."),
             discord.ui.Separator(),
+            discord.ui.ActionRow(SettingsSelect(gid, bot)),
             accent_color=0x5865F2,
         )
-        self.add_item(discord.ui.ActionRow(SettingsSelect(gid, bot)))
 
 
 class SettingsSelect(discord.ui.Select):
@@ -549,12 +570,19 @@ class SettingsSelect(discord.ui.Select):
                     accent_color=0x5865F2
                 )
             await i.response.send_message(view=V(timeout=None), ephemeral=True)
-            # 상품 삭제 버튼
+
             class DelView(discord.ui.LayoutView):
-                row: discord.ui.ActionRow = discord.ui.ActionRow()
-                @row.button(label="상품 삭제", style=discord.ButtonStyle.danger)
-                async def del_btn(self2, ii: discord.Interaction, btn: discord.ui.Button):
-                    await ii.response.send_modal(ProdDelModal(gid))
+                container = discord.ui.Container(
+                    discord.ui.ActionRow(
+                        discord.ui.Button(label="상품 삭제", style=discord.ButtonStyle.danger, custom_id="del_prod")
+                    ),
+                    accent_color=0xED4245,
+                )
+
+                async def on_interaction(self, ii: discord.Interaction):
+                    if ii.data.get("custom_id") == "del_prod":
+                        await ii.response.send_modal(ProdDelModal(gid))
+
             await i.followup.send(view=DelView(timeout=60), ephemeral=True)
 
         elif v == "stock":
@@ -567,7 +595,7 @@ class SettingsSelect(discord.ui.Select):
                     )
                 await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
                 return
-            lines = [f"[{p['id']}] {p['cat_name']} > {p['name']} | 재고:{p['stock']}" for p in prods]
+            lines = [f"[{p['id']}] {p.get('cat_name','')} > {p['name']} | 재고:{p['stock']}" for p in prods]
             class V(discord.ui.LayoutView):
                 c = discord.ui.Container(
                     discord.ui.TextDisplay("## 상품 목록\n" + "\n".join(lines)), 
@@ -575,6 +603,11 @@ class SettingsSelect(discord.ui.Select):
                 )
             await i.response.send_message(view=V(timeout=None), ephemeral=True)
             await i.followup.send_modal(StockModal(gid))
+
+        elif v == "charge_mode":
+            await i.response.send_message(view=ChargeModeView(gid), ephemeral=True)
+        elif v == "ios_token":
+            await i.response.send_message(view=IOSTokenView(gid), ephemeral=True)
 
 
 class SettingsCog(commands.Cog):
