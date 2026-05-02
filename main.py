@@ -300,7 +300,7 @@ class StockModal(discord.ui.Modal, title="재고 추가"):
         await i.response.send_message(view=V(timeout=None), ephemeral=True)
 
 
-# ─── 기타 뷰들 (V2 스타일 정리) ───────────────────────────────
+# ─── 기타 뷰들 ────────────────────────────────────────────────
 class ChargeModeView(discord.ui.LayoutView):
     def __init__(self, gid: int):
         super().__init__(timeout=60)
@@ -364,6 +364,39 @@ class IOSTokenView(discord.ui.LayoutView):
         await i.response.edit_message(view=self)
 
 
+class CatDeleteView(discord.ui.LayoutView):
+    def __init__(self, gid: int, cats: list):
+        super().__init__(timeout=60)
+        self.gid = gid
+        options = [discord.SelectOption(label=c["name"], value=str(c["id"])) for c in cats[:25]]
+        sel = discord.ui.Select(
+            placeholder="삭제할 카테고리 선택", 
+            options=options, 
+            max_values=min(len(options), 5)
+        )
+        sel.callback = self._do_delete
+        self.add_item(discord.ui.ActionRow(sel))
+
+    container = discord.ui.Container(
+        discord.ui.TextDisplay("삭제할 카테고리를 선택하세요."),
+        discord.ui.Separator(),
+        accent_color=0xFEE75C,
+    )
+
+    async def _do_delete(self, i: discord.Interaction):
+        gdb = GuildDB(self.gid)
+        cats = {str(c["id"]): c["name"] for c in gdb.get_cats()}
+        deleted = [cats.get(cid_s, cid_s) for cid_s in i.data["values"]]
+        for cid_s in i.data["values"]:
+            gdb.del_cat(int(cid_s))
+        class V(discord.ui.LayoutView):
+            c = discord.ui.Container(
+                discord.ui.TextDisplay(f"## 카테고리 삭제 완료\n{', '.join(deleted)} 삭제됨"),
+                accent_color=0x57F287,
+            )
+        await i.response.edit_message(view=V(timeout=None))
+
+
 # ─── 메인 설정 ────────────────────────────────────────────────
 class SettingsMainView(discord.ui.LayoutView):
     def __init__(self, gid: int, bot):
@@ -404,18 +437,107 @@ class SettingsSelect(discord.ui.Select):
     async def callback(self, i: discord.Interaction):
         v = self.values[0]
         gid = self.gid
+        gdb = GuildDB(gid)
 
-        if v == "role":        await i.response.send_modal(RoleModal(gid))
-        elif v == "basic":     await i.response.send_modal(BasicModal(gid))
-        elif v == "bank":      await i.response.send_modal(BankModal(gid))
-        elif v == "anti":      await i.response.send_modal(AntiThirdModal(gid))
-        elif v == "log":       await i.response.send_modal(LogModal(gid, self.bot))
-        elif v == "cat_add":   await i.response.send_modal(CatAddModal(gid))
-        elif v == "charge_mode":
-            await i.response.send_message(view=ChargeModeView(gid), ephemeral=True)
-        elif v == "ios_token":
-            await i.response.send_message(view=IOSTokenView(gid), ephemeral=True)
-        # cat_list, prod_list, stock, prod_add 등은 필요시 별도 처리
+        if v == "role":
+            await i.response.send_modal(RoleModal(gid))
+        elif v == "basic":
+            await i.response.send_modal(BasicModal(gid))
+        elif v == "bank":
+            await i.response.send_modal(BankModal(gid))
+        elif v == "anti":
+            await i.response.send_modal(AntiThirdModal(gid))
+        elif v == "log":
+            await i.response.send_modal(LogModal(gid, self.bot))
+        elif v == "cat_add":
+            await i.response.send_modal(CatAddModal(gid))
+        elif v == "prod_add":
+            cats = gdb.get_cats()
+            if not cats:
+                class Ve(discord.ui.LayoutView):
+                    c = discord.ui.Container(
+                        discord.ui.TextDisplay("카테고리를 먼저 추가하세요."), 
+                        accent_color=0xED4245
+                    )
+                await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+                return
+            cat_txt = "\n".join(f"[{c['id']}] {c['name']}" for c in cats)
+            class V(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay(f"## 카테고리 목록\n{cat_txt}"), 
+                    accent_color=0x5865F2
+                )
+            await i.response.send_message(view=V(timeout=None), ephemeral=True)
+            await i.followup.send_modal(ProdAddModal(gid))
+
+        elif v == "cat_list":
+            cats = gdb.get_cats()
+            if not cats:
+                class Ve(discord.ui.LayoutView):
+                    c = discord.ui.Container(
+                        discord.ui.TextDisplay("카테고리가 없습니다."), 
+                        accent_color=0xFEE75C
+                    )
+                await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+                return
+            cat_txt = "\n".join(f"[{c['id']}] {c['name']}" for c in cats)
+            class V(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay(f"## 카테고리 목록\n{cat_txt}"), 
+                    accent_color=0x5865F2
+                )
+            await i.response.send_message(view=V(timeout=None), ephemeral=True)
+            await i.followup.send(view=CatDeleteView(gid, cats), ephemeral=True)
+
+        elif v == "prod_list":
+            cats = gdb.get_cats()
+            if not cats:
+                class Ve(discord.ui.LayoutView):
+                    c = discord.ui.Container(
+                        discord.ui.TextDisplay("카테고리가 없습니다."), 
+                        accent_color=0xFEE75C
+                    )
+                await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+                return
+            lines = []
+            for cat in cats:
+                lines.append(f"\n**{cat['name']}**")
+                for p in gdb.get_prods(cat["id"]):
+                    lines.append(f"  [{p['id']}] {p['name']} | {fmt(p['price'])} | 재고:{p['stock']}")
+            prod_txt = "\n".join(lines) if lines else "(없음)"
+
+            class V(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay(f"## 상품 목록\n{prod_txt}"), 
+                    accent_color=0x5865F2
+                )
+            await i.response.send_message(view=V(timeout=None), ephemeral=True)
+            # 상품 삭제 버튼
+            class DelView(discord.ui.LayoutView):
+                row: discord.ui.ActionRow = discord.ui.ActionRow()
+                @row.button(label="상품 삭제", style=discord.ButtonStyle.danger)
+                async def del_btn(self2, ii: discord.Interaction, btn: discord.ui.Button):
+                    await ii.response.send_modal(ProdDelModal(gid))
+            await i.followup.send(view=DelView(timeout=60), ephemeral=True)
+
+        elif v == "stock":
+            prods = gdb.all_prods()
+            if not prods:
+                class Ve(discord.ui.LayoutView):
+                    c = discord.ui.Container(
+                        discord.ui.TextDisplay("상품이 없습니다."), 
+                        accent_color=0xFEE75C
+                    )
+                await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+                return
+            lines = [f"[{p['id']}] {p['cat_name']} > {p['name']} | 재고:{p['stock']}" for p in prods]
+            class V(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay("## 상품 목록\n" + "\n".join(lines)), 
+                    accent_color=0x5865F2
+                )
+            await i.response.send_message(view=V(timeout=None), ephemeral=True)
+            await i.followup.send_modal(StockModal(gid))
 
 
 class SettingsCog(commands.Cog):
