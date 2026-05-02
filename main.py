@@ -4,7 +4,7 @@ from discord import app_commands
 from discord.ext import commands
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from utils.db import ServerListDB, GuildDB
+from utils.db import ServerListDB, GuildDB, LicenseDB
 from utils.helpers import is_bot_admin
 
 KST = timezone(timedelta(hours=9))
@@ -56,16 +56,30 @@ class ServerAdminCog(commands.Cog):
             except Exception as e:
                 lines.append(f"백업 오류: {e}")
 
+        # ==================== 핵심 삭제 로직 ====================
         sldb = ServerListDB()
         deleted = sldb.delete(gid)
+
+        # GuildDB 파일 삭제
         if db_path.exists():
-            os.remove(db_path)
+            try:
+                os.remove(db_path)
+            except Exception as e:
+                lines.append(f"DB 파일 삭제 실패: {e}")
+
+        # LicenseDB에서 guild_id 클리어 (중요!)
+        try:
+            ldb = LicenseDB()
+            ldb.c.execute("UPDATE licenses SET guild_id = NULL, status = 'unused' WHERE guild_id = ?", (str(gid),))
+            ldb.c.commit()
+        except Exception as e:
+            lines.append(f"라이센스 클리어 실패: {e}")
+        # ====================================================
 
         now_s = datetime.now(KST).strftime("%Y%m%d_%H%M%S")
         backup_content = "\n".join(lines) or "데이터 없음"
         backup_filename = f"backup_{gid}_{now_s}.txt"
 
-        # Discord File 객체 생성
         backup_file = discord.File(
             io.BytesIO(backup_content.encode("utf-8")),
             filename=backup_filename
@@ -73,22 +87,22 @@ class ServerAdminCog(commands.Cog):
 
         gname = deleted["guild_name"] if deleted else "알 수 없음"
 
-        # Component V2 사용 (File Component 포함)
         class V(discord.ui.LayoutView):
             container = discord.ui.Container(
                 discord.ui.TextDisplay(
                     f"## 서버 삭제 완료\n"
                     f"서버명 : **{gname}**\n"
                     f"ID : `{gid}`\n"
-                    f"백업 파일이 첨부되었습니다."
+                    f"백업 파일이 첨부되었습니다.\n"
+                    f"라이센스 연동도 해제되었습니다."
                 ),
-                discord.ui.File(f"attachment://{backup_filename}"),  # ← 핵심
+                discord.ui.File(f"attachment://{backup_filename}"),
                 accent_color=0x57F287,
             )
 
         await i.followup.send(
             view=V(timeout=None),
-            files=[backup_file],   # 실제 파일 업로드
+            files=[backup_file],
             ephemeral=True
         )
 
@@ -131,7 +145,7 @@ class ServerAdminCog(commands.Cog):
                     f"총 **{len(recs)}개** 조회\n"
                     f"파일이 첨부되었습니다."
                 ),
-                discord.ui.File(f"attachment://{list_filename}"),   # ← 핵심
+                discord.ui.File(f"attachment://{list_filename}"),
                 accent_color=0x5865F2,
             )
 
