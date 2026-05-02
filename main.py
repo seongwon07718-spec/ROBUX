@@ -7,77 +7,96 @@ from utils.db import LicenseDB, ServerListDB, GuildDB
 from utils.helpers import is_registered
 
 
-class LicenseModal(discord.ui.Modal, title="라이센스 등록"):
-    key = discord.ui.TextInput(label="라이센스 키", placeholder="지급 받은 라이센스 키를 입력해주세요.", min_length=15, max_length=20)
+def _already_registered(exp: str):
+    class V(discord.ui.LayoutView):
+        c = discord.ui.Container(
+            discord.ui.TextDisplay(f"## 이미 등록된 서버\n만료일 : **{exp}**"),
+            accent_color=0xFEE75C,
+        )
+    return V(timeout=None)
 
-    def __init__(self, bot): super().__init__(); self.bot = bot
+
+# ─── 라이센스 등록 모달 ───────────────────────────────────────
+class LicenseModal(discord.ui.Modal, title="라이센스 등록"):
+    key = discord.ui.TextInput(
+        label="라이센스 키", 
+        placeholder="지급 받은 라이센스 키를 입력해주세요.", 
+        min_length=15, 
+        max_length=20
+    )
+
+    def __init__(self, bot): 
+        super().__init__(); self.bot = bot
 
     async def on_submit(self, i: discord.Interaction):
         k = self.key.value.strip()
         ldb = LicenseDB()
-        row = ldb.c.execute("SELECT * FROM licenses WHERE key_plain=? AND status='unused'", (k,)).fetchone()
+        row = ldb.c.execute(
+            "SELECT * FROM licenses WHERE key_plain=? AND status='unused'", 
+            (k,)
+        ).fetchone()
+
         if not row:
             class V(discord.ui.LayoutView):
                 c = discord.ui.Container(
                     discord.ui.TextDisplay("유효하지 않은 키이거나 이미 사용된 키입니다."),
                     accent_color=0xED4245,
                 )
-            await i.response.send_message(view=V(timeout=None), ephemeral=True); return
+            await i.response.send_message(view=V(timeout=None), ephemeral=True)
+            return
 
         from utils.db import _cols
         data = dict(zip(_cols(ldb.c, "licenses"), row))
+
+        # 확인 뷰로 이동
         view = ConfirmView(self.bot, k, data["period_days"], i.guild)
-        class V(discord.ui.LayoutView):
-            container = discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"## 서비스 등록 확인\n"
-                    f"라이센스 키 : `{k}`\n"
-                    f"유효 기간 : **{data['period_days']}일**\n"
-                    f"서버 : **{i.guild.name}**\n\n"
-                    f"등록을 진행하시겠습니까?"
-                ),
-                discord.ui.ActionRow(
-                    discord.ui.Button(label="등록 진행", style=discord.ButtonStyle.success, custom_id="reg_confirm"),
-                    discord.ui.Button(label="등록 취소", style=discord.ButtonStyle.danger,  custom_id="reg_cancel"),
-                ),
-                accent_color=0x5865F2,
-            )
-        # LayoutView 내 ActionRow 버튼 콜백은 뷰 클래스로 따로 처리
         await i.response.send_message(view=view, ephemeral=True)
 
 
+# ─── 등록 확인 뷰 (V2 스타일) ────────────────────────────────
 class ConfirmView(discord.ui.LayoutView):
-    def __init__(self, bot, key, period_days, guild):
+    def __init__(self, bot, key: str, period_days: int, guild: discord.Guild):
         super().__init__(timeout=60)
-        self.bot = bot; self.key = key; self.period_days = period_days; self.guild = guild
+        self.bot = bot
+        self.key = key
+        self.period_days = period_days
+        self.guild = guild
 
     container = discord.ui.Container(
         discord.ui.TextDisplay("등록을 진행하시겠습니까?"),
+        discord.ui.Separator(),
         accent_color=0x5865F2,
     )
+
     row: discord.ui.ActionRow = discord.ui.ActionRow()
 
     @row.button(label="등록 진행", style=discord.ButtonStyle.success)
     async def confirm(self, i: discord.Interaction, btn: discord.ui.Button):
         ldb = LicenseDB()
         result = ldb.activate(self.key, self.guild.id)
-        if not result:
-            self.container.accent_color = 0xED4245
-            for item in self.walk_children():
-                if isinstance(item, discord.ui.TextDisplay):
-                    item.content = "이미 사용된 키입니다."
-            self._disable_all()
-            await i.response.edit_message(view=self); return
 
-        GuildDB(self.guild.id)
-        ServerListDB().upsert(self.guild.id, self.guild.name, "active", result["expires_at"], self.key)
+        if not result:
+            self.container[0].content = "이미 사용된 키입니다."
+            self.container.accent_color = 0xED4245
+            self._disable_all()
+            await i.response.edit_message(view=self)
+            return
+
+        GuildDB(self.guild.id)  # DB 초기화
+        ServerListDB().upsert(
+            self.guild.id, 
+            self.guild.name, 
+            "active", 
+            result["expires_at"], 
+            self.key
+        )
         exp = result["expires_at"][:10]
 
         class V(discord.ui.LayoutView):
             container = discord.ui.Container(
                 discord.ui.TextDisplay(
                     f"## 서비스 등록 완료\n"
-                    f"서버 : **{i.guild.name}**\n"
+                    f"서버 : **{self.guild.name}**\n"
                     f"만료일 : **{exp}**\n\n"
                     f"`/설정` 명령어로 자판기를 설정해주세요."
                 ),
@@ -88,12 +107,16 @@ class ConfirmView(discord.ui.LayoutView):
     @row.button(label="등록 취소", style=discord.ButtonStyle.danger)
     async def cancel(self, i: discord.Interaction, btn: discord.ui.Button):
         class V(discord.ui.LayoutView):
-            c = discord.ui.Container(discord.ui.TextDisplay("등록이 취소되었습니다."), accent_color=0xED4245)
+            c = discord.ui.Container(
+                discord.ui.TextDisplay("등록이 취소되었습니다."), 
+                accent_color=0xED4245
+            )
         await i.response.edit_message(view=V(timeout=None))
 
     def _disable_all(self):
         for item in self.walk_children():
-            if isinstance(item, discord.ui.Button): item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
 
 
 class RegistrationCog(commands.Cog):
@@ -101,7 +124,8 @@ class RegistrationCog(commands.Cog):
         self.bot = bot
         self.expire_task.start()
 
-    def cog_unload(self): self.expire_task.cancel()
+    def cog_unload(self):
+        self.expire_task.cancel()
 
     @app_commands.command(name="등록", description="자판기 서비스를 등록합니다 (라이센스 필요)")
     async def register(self, i: discord.Interaction):
@@ -109,27 +133,32 @@ class RegistrationCog(commands.Cog):
             ldb = LicenseDB()
             lic = ldb.get_by_guild(i.guild.id)
             exp = (lic["expires_at"] or "")[:10] if lic else "알 수 없음"
+            await i.response.send_message(
+                view=_already_registered(exp), 
+                ephemeral=True
+            )
+            return
 
-            class V(discord.ui.LayoutView):
-                c = discord.ui.Container(
-                    discord.ui.TextDisplay(f"## 이미 등록된 서버\n만료일 : **{exp}**"),
-                    accent_color=0xFEE75C,
-                )
-            await i.response.send_message(view=V(timeout=None), ephemeral=True); return
         await i.response.send_modal(LicenseModal(self.bot))
 
     @tasks.loop(minutes=10)
     async def expire_task(self):
-        ldb = LicenseDB(); sldb = ServerListDB()
+        ldb = LicenseDB()
+        sldb = ServerListDB()
         for gid_str in ldb.expire_check():
             try:
-                gid = int(gid_str); sldb.set_expired(gid)
+                gid = int(gid_str)
+                sldb.set_expired(gid)
                 db_path = Path(f"SERVER/{gid}.db")
-                if db_path.exists(): os.remove(db_path)
-            except Exception: pass
+                if db_path.exists():
+                    os.remove(db_path)
+            except Exception:
+                pass
 
     @expire_task.before_loop
-    async def _before(self): await self.bot.wait_until_ready()
+    async def _before(self):
+        await self.bot.wait_until_ready()
 
 
-async def setup(bot): await bot.add_cog(RegistrationCog(bot))
+async def setup(bot): 
+    await bot.add_cog(RegistrationCog(bot))
