@@ -62,7 +62,6 @@ class HistSelect(discord.ui.Select):
                 if recs else "없음"
             )
 
-        # TextDisplay 내용 업데이트
         self.view.container[0].content = txt
         await i.response.edit_message(view=self.view)
 
@@ -82,9 +81,10 @@ class UserInfoView(discord.ui.LayoutView):
                 f"할인율 : **{user_data['discount_rate']}%**"
             ),
             discord.ui.Separator(),
+            # Select를 Container 안에 ActionRow로 배치
+            discord.ui.ActionRow(HistSelect(gid, target.id)),
             accent_color=0x5865F2,
         )
-        self.add_item(discord.ui.ActionRow(HistSelect(gid, target.id)))
 
 
 class UserAdminCog(commands.Cog):
