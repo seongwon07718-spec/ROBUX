@@ -32,7 +32,7 @@ def _no_admin():
     return V(timeout=None)
 
 
-# ─── 모달들 (기존 로직 유지) ─────────────────────────────────────
+# ─── 모달들 ───────────────────────────────────────────────────
 class RoleModal(discord.ui.Modal, title="역할 설정"):
     buyer  = discord.ui.TextInput(label="구매자 역할 ID", required=False)
     vip    = discord.ui.TextInput(label="VIP 역할 ID",    required=False)
@@ -121,12 +121,188 @@ class BankModal(discord.ui.Modal, title="충전 계좌 설정"):
         await i.response.send_message(view=V(timeout=None), ephemeral=True)
 
 
-# (AntiThirdModal, LogModal, CatAddModal, ProdAddModal, StockModal 등은 기존 로직 유지 - 필요시 말씀해주세요)
+class AntiThirdModal(discord.ui.Modal, title="3자 방지 코드 설정"):
+    code = discord.ui.TextInput(label="4자리 영숫자", min_length=4, max_length=4)
+
+    def __init__(self, gid): 
+        super().__init__(); self.gid = gid
+
+    async def on_submit(self, i: discord.Interaction):
+        v = self.code.value.strip().upper()
+        if not v.isalnum():
+            class Ve(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay("영숫자 4자리만 입력 가능합니다."), 
+                    accent_color=0xED4245
+                )
+            await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+            return
+        GuildDB(self.gid).set_cfg("anti_third_code", v)
+        class V(discord.ui.LayoutView):
+            c = discord.ui.Container(
+                discord.ui.TextDisplay(f"## 3자 방지 설정 완료\n코드 : `{v}`"), 
+                accent_color=0x57F287
+            )
+        await i.response.send_message(view=V(timeout=None), ephemeral=True)
 
 
-# ─── 충전 방식 선택 ───────────────────────────────────────────
+class LogModal(discord.ui.Modal, title="로그 채널 설정 (채널 ID)"):
+    charge_ch   = discord.ui.TextInput(label="충전 로그 채널 ID",   required=False)
+    purchase_ch = discord.ui.TextInput(label="구매 로그 채널 ID",   required=False)
+    review_ch   = discord.ui.TextInput(label="후기 로그 채널 ID",   required=False)
+    stock_ch    = discord.ui.TextInput(label="입고 로그 채널 ID",   required=False)
+    admin_ch    = discord.ui.TextInput(label="관리자 로그 채널 ID", required=False)
+
+    def __init__(self, gid, bot): 
+        super().__init__(); self.gid = gid; self.bot = bot
+
+    async def on_submit(self, i: discord.Interaction):
+        await i.response.defer(ephemeral=True)
+        gdb = GuildDB(self.gid)
+        results = []
+        pairs = [
+            ("charge_log", self.charge_ch),
+            ("purchase_log", self.purchase_ch),
+            ("review_log", self.review_ch),
+            ("stock_log", self.stock_ch),
+            ("admin_log", self.admin_ch)
+        ]
+        for log_type, field in pairs:
+            if not field.value.strip(): 
+                continue
+            try:
+                ch = self.bot.get_channel(int(field.value.strip()))
+                if ch and isinstance(ch, discord.TextChannel):
+                    url = await make_webhook(ch, f"자판기_{log_type}")
+                    if url:
+                        gdb.set_wh(log_type, url)
+                        results.append(f"#{ch.name} 설정 완료")
+                    else:
+                        results.append(f"#{ch.name} 웹훅 생성 실패")
+                else:
+                    results.append(f"채널 {field.value.strip()} 찾을 수 없음")
+            except Exception as e:
+                results.append(f"오류: {e}")
+        
+        txt = "\n".join(results) if results else "변경 없음"
+        class V(discord.ui.LayoutView):
+            c = discord.ui.Container(
+                discord.ui.TextDisplay(f"## 로그 설정 완료\n{txt}"), 
+                accent_color=0x57F287
+            )
+        await i.followup.send(view=V(timeout=None), ephemeral=True)
+
+
+class CatAddModal(discord.ui.Modal, title="카테고리 추가"):
+    name = discord.ui.TextInput(label="카테고리 이름", max_length=30)
+
+    def __init__(self, gid): 
+        super().__init__(); self.gid = gid
+
+    async def on_submit(self, i: discord.Interaction):
+        ok = GuildDB(self.gid).add_cat(self.name.value.strip())
+        txt = f"## 카테고리 추가 완료\n`{self.name.value.strip()}` 추가됨" if ok else f"## 중복 카테고리\n`{self.name.value.strip()}`는 이미 존재합니다."
+        class V(discord.ui.LayoutView):
+            c = discord.ui.Container(
+                discord.ui.TextDisplay(txt), 
+                accent_color=0x57F287 if ok else 0xED4245
+            )
+        await i.response.send_message(view=V(timeout=None), ephemeral=True)
+
+
+class ProdAddModal(discord.ui.Modal, title="상품 추가"):
+    cat_id = discord.ui.TextInput(label="카테고리 ID", placeholder="아래 목록 참조")
+    name   = discord.ui.TextInput(label="상품 이름", max_length=50)
+    price  = discord.ui.TextInput(label="가격 (원)")
+
+    def __init__(self, gid): 
+        super().__init__(); self.gid = gid
+
+    async def on_submit(self, i: discord.Interaction):
+        gdb = GuildDB(self.gid)
+        try: 
+            cid = int(self.cat_id.value)
+            price = int(self.price.value.replace(",",""))
+        except ValueError:
+            class Ve(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay("ID와 가격은 숫자여야 합니다."), 
+                    accent_color=0xED4245
+                )
+            await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+            return
+
+        cats = {c["id"]: c["name"] for c in gdb.get_cats()}
+        if cid not in cats:
+            class Ve(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay("카테고리를 찾을 수 없습니다."), 
+                    accent_color=0xED4245
+                )
+            await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+            return
+
+        pid = gdb.add_prod(cid, self.name.value.strip(), price)
+        class V(discord.ui.LayoutView):
+            c = discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"## 상품 추가 완료\n[{pid}] {self.name.value.strip()} | {fmt(price)}\n카테고리: {cats[cid]}"
+                ),
+                accent_color=0x57F287,
+            )
+        await i.response.send_message(view=V(timeout=None), ephemeral=True)
+
+
+class StockModal(discord.ui.Modal, title="재고 추가"):
+    pid   = discord.ui.TextInput(label="상품 ID")
+    items = discord.ui.TextInput(label="재고 내용 (줄바꿈 구분)", style=discord.TextStyle.paragraph, max_length=4000)
+
+    def __init__(self, gid): 
+        super().__init__(); self.gid = gid
+
+    async def on_submit(self, i: discord.Interaction):
+        gdb = GuildDB(self.gid)
+        try: 
+            pid = int(self.pid.value.strip())
+        except ValueError:
+            class Ve(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay("상품 ID는 숫자여야 합니다."), 
+                    accent_color=0xED4245
+                )
+            await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+            return
+
+        p = gdb.get_prod(pid)
+        if not p:
+            class Ve(discord.ui.LayoutView):
+                c = discord.ui.Container(
+                    discord.ui.TextDisplay("상품을 찾을 수 없습니다."), 
+                    accent_color=0xED4245
+                )
+            await i.response.send_message(view=Ve(timeout=None), ephemeral=True)
+            return
+
+        added = gdb.add_stock(pid, self.items.value)
+        total = gdb.stock_cnt(pid)
+
+        import asyncio
+        asyncio.create_task(log(self.gid, "stock_log",
+            f"재고 입고 | 상품: {p['name']} | 추가: {added}개 | 총: {total}개"))
+
+        class V(discord.ui.LayoutView):
+            c = discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"## 재고 추가 완료\n상품: **{p['name']}**\n추가: **{added}개** | 총: **{total}개**"
+                ),
+                accent_color=0x57F287,
+            )
+        await i.response.send_message(view=V(timeout=None), ephemeral=True)
+
+
+# ─── 기타 뷰들 (V2 스타일 정리) ───────────────────────────────
 class ChargeModeView(discord.ui.LayoutView):
-    def __init__(self, gid: int, current: str):
+    def __init__(self, gid: int):
         super().__init__(timeout=60)
         self.gid = gid
 
@@ -141,24 +317,23 @@ class ChargeModeView(discord.ui.LayoutView):
     @row.button(label="자동 충전", style=discord.ButtonStyle.primary)
     async def auto_btn(self, i: discord.Interaction, btn: discord.ui.Button):
         GuildDB(self.gid).set_cfg("charge_mode", "auto")
-        self._update_buttons(btn)
+        self._update_buttons()
         self.container[0].content = "## 자동 충전 활성화\n카카오뱅크 자동충전이 활성화됩니다."
         await i.response.edit_message(view=self)
 
     @row.button(label="수동 충전", style=discord.ButtonStyle.secondary)
     async def manual_btn(self, i: discord.Interaction, btn: discord.ui.Button):
         GuildDB(self.gid).set_cfg("charge_mode", "manual")
-        self._update_buttons(btn)
+        self._update_buttons()
         self.container[0].content = "## 수동 충전 활성화\n관리자가 직접 충전을 확인합니다."
         await i.response.edit_message(view=self)
 
-    def _update_buttons(self, clicked_btn):
+    def _update_buttons(self):
         for item in self.walk_children():
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
 
 
-# ─── iOS 토큰 발급 ────────────────────────────────────────────
 class IOSTokenView(discord.ui.LayoutView):
     def __init__(self, gid: int):
         super().__init__(timeout=60)
@@ -189,7 +364,7 @@ class IOSTokenView(discord.ui.LayoutView):
         await i.response.edit_message(view=self)
 
 
-# ─── 메인 설정 뷰 ─────────────────────────────────────────────
+# ─── 메인 설정 ────────────────────────────────────────────────
 class SettingsMainView(discord.ui.LayoutView):
     def __init__(self, gid: int, bot):
         super().__init__(timeout=180)
@@ -201,7 +376,6 @@ class SettingsMainView(discord.ui.LayoutView):
             discord.ui.Separator(),
             accent_color=0x5865F2,
         )
-
         self.add_item(discord.ui.ActionRow(SettingsSelect(gid, bot)))
 
 
@@ -238,11 +412,10 @@ class SettingsSelect(discord.ui.Select):
         elif v == "log":       await i.response.send_modal(LogModal(gid, self.bot))
         elif v == "cat_add":   await i.response.send_modal(CatAddModal(gid))
         elif v == "charge_mode":
-            current = GuildDB(gid).get_cfg("charge_mode", "manual")
-            await i.response.send_message(view=ChargeModeView(gid, current), ephemeral=True)
+            await i.response.send_message(view=ChargeModeView(gid), ephemeral=True)
         elif v == "ios_token":
             await i.response.send_message(view=IOSTokenView(gid), ephemeral=True)
-        # ... (cat_list, prod_list, stock, prod_add 등은 기존 로직 유지)
+        # cat_list, prod_list, stock, prod_add 등은 필요시 별도 처리
 
 
 class SettingsCog(commands.Cog):
