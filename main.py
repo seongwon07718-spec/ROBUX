@@ -1,41 +1,23 @@
-# ─── 메인 자판기 뷰 ───────────────────────────────────────────
-class VendingMainView(discord.ui.LayoutView):
-    def __init__(self, gid, bot, title="구매하기", desc="아래 버튼을 눌러 이용해주세요", color=0x5865F2):
-        super().__init__(timeout=None)
-        self.gid = gid
-        self.bot = bot
-
-        # 1. 버튼 변수 선언 및 콜백 연결
-        btn_buy = discord.ui.Button(label="구매", style=discord.ButtonStyle.secondary, custom_id=f"v_buy_{gid}")
-        btn_browse = discord.ui.Button(label="제품", style=discord.ButtonStyle.secondary, custom_id=f"v_browse_{gid}")
-        btn_charge = discord.ui.Button(label="충전", style=discord.ButtonStyle.secondary, custom_id=f"v_charge_{gid}")
-        btn_info = discord.ui.Button(label="정보", style=discord.ButtonStyle.secondary, custom_id=f"v_info_{gid}")
-
-        btn_buy.callback = self.on_interaction
-        btn_browse.callback = self.on_interaction
-        btn_charge.callback = self.on_interaction
-        btn_info.callback = self.on_interaction
-
-        # 2. 컨테이너에 변수 삽입[span_0](start_span)[span_0](end_span)
-        self.container = discord.ui.Container(
-            discord.ui.TextDisplay(f"## {title}\n{desc}"),
-            discord.ui.Separator(),
-            discord.ui.ActionRow(btn_buy, btn_browse, btn_charge, btn_info),
-            accent_color=color,
-        )
-        self.add_item(self.container)[span_1](start_span)[span_1](end_span)
-
-# ─── 정보 확인 뷰 (InfoView) ───────────────────────────────────
-class InfoView(discord.ui.LayoutView):
-    def __init__(self, gid, bot):
-        super().__init__(timeout=60)
-        
-        btn_back = discord.ui.Button(label="돌아가기", style=discord.ButtonStyle.secondary, custom_id=f"v_back_{gid}")
-        btn_back.callback = self.on_interaction # 콜백 연결
-
-        self.container = discord.ui.Container(
-            discord.ui.TextDisplay("## 정보 확인\n원하시는 정보를 확인하세요."),
-            discord.ui.ActionRow(btn_back),
-            accent_color=0x5865F2,
-        )
-        self.add_item(self.container)[span_2](start_span)[span_2](end_span)
+## Vout Service 이용약관
+```본 약관은 Vout에서 제공하는 서비스 ( 자판기, 복구봇, 티켓봇 등 ) 이용 시 적용됩니다. 서비스를 이용할 시 본 약관에 동의한 것으로 간주합니다.```
+- **제1조 ( 핵 판매 및 불법 프로그램 )**
+-# 1. 게임 핵, 치트 등 정상적인 서비스 운영을 방해하는 모든 불법 프로그램 ( 이하 “핵” ) 의 판매를 엄격히 금지합니다.
+-# 2. 핵 판매 적발 시, 서비스는 사전 고지 없이 즉시 라이센스를 회수하고 서비스를 차단합니다.
+-# 3. 위반자는 Vout의 모든 서비스 이용이 영구적으로 제한되며, 어떠한 구제 조치도 없습니다.
+- **제2조 ( 환불 관련 규정 )**
+-# 1. 디지털 상품 및 세팅형 특성상, 결제 및 인계가 완료된 이후에는 어떠한 사유로도 환불 및 교환이 절대 불가능합니다.
+-# 2. 단순 변심은 물론, ( 제1조 ) 위반으로 인한 차단 시에도 환불은 일체 진행되지 않으니 신중한 구매 부탁드립니다.
+- **제3조 ( 정보 수집 및 데이터 베이스 )**
+-# 1. 서버 관련 데이터, 자판기 이용 내역 ( 로그 ), 라이센스 키 등을 수집합니다.
+-# 2. 서비스 제공, 불법 사용 방지, 품질 개선과 라이센스 중복 방지를 위해서만 사용됩니다.
+-# 3. 라이센스 기간이 지나거나, 유저 요청 시 지체 없이 파기하되, 관련 법령에 따라 보관이 필요한 경우에만 예외로 합니다.
+- **제4조 ( 서비스 이용자의 의무 )**
+-# 1. 서비스 이용자는 법령과 약관을 준수해야 합니다.
+-# 2. 라이센스를 제3자에게 공유, 판매, 양도하는 행위는 금지되면 적발 시 라이센스 회수됩니다.
+-# 3. 디스코드 가이드라인을 위반하여 발생하는 봇 차단 등에 대해 서비스는 책임지지 않습니다.
+- **제5조 ( 면책 조항 )**
+-# 1. 천재지변, 호스팅 업체의 장애, 디스코드 API 업데이트 등 서비스가 통제할 수 없는 외부 요인으로 인한 장애는 책임지지 않습니다.
+-# 2. 자판기를 통해 발생하는 판매자와 구매자 간의 거래 분쟁 ( 사기 등 )에 대해 Vout은 개입하지 않으며 법적 책임을 지지 않습니다.
+- **제6조 ( 기타 )**
+-# 1. 본 약관은 별도 공지 없이 변경될 수 있으며, 변경 시 공지사항 채널을 통해 안내합니다.
+-# 2. 약관에 명시되지 않은 사항은 일반적인 상관례를 따릅니다.
